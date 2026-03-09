@@ -86,14 +86,86 @@ $schemaManager->updateAuditSchema();
 
 ### Console Commands
 
-When using auditor-bundle with Symfony, two console commands are available:
+Two console commands are available.
+
+#### audit:schema:update
+
+Creates new audit tables and updates existing ones to match the current schema.
 
 ```bash
-# Update audit schema (create/update audit tables)
-php bin/console audit:schema:update
+# Preview the SQL that would be executed
+php bin/console audit:schema:update --dump-sql
 
-# Clean old audit log entries
-php bin/console audit:clean
+# Execute the changes
+php bin/console audit:schema:update --force
+
+# Both: show SQL and execute
+php bin/console audit:schema:update --dump-sql --force
+```
+
+#### audit:clean
+
+Removes audit entries older than a specified retention period (`P12M` by default).
+
+```bash
+# Keep last 6 months (dry run)
+php bin/console audit:clean P6M --dry-run
+
+# Execute, skip confirmation (for cron jobs)
+php bin/console audit:clean P12M --no-confirm
+
+# Delete before a specific date
+php bin/console audit:clean --date=2024-01-01 --no-confirm
+
+# Exclude specific entities
+php bin/console audit:clean -x App\\Entity\\User
+
+# Include only specific entities
+php bin/console audit:clean -i App\\Entity\\Log
+```
+
+> [!NOTE]
+> Both commands use Symfony's Lock component to prevent concurrent execution.
+
+#### Registering Commands (Standalone)
+
+When not using auditor-bundle, register the commands manually:
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
+use Symfony\Component\Console\Application;
+
+$application = new Application();
+
+$updateCommand = new UpdateSchemaCommand();
+$updateCommand->setAuditor($auditor);
+$application->add($updateCommand);
+
+$cleanCommand = new CleanAuditLogsCommand();
+$cleanCommand->setAuditor($auditor);
+$application->add($cleanCommand);
+
+$application->run();
+```
+
+### Programmatic Schema Update
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
+
+$schemaManager = new SchemaManager($provider);
+
+// Get SQL without executing
+$sqls = $schemaManager->getUpdateAuditSchemaSql();
+
+// Execute all pending changes
+$schemaManager->updateAuditSchema();
+
+// Execute with a progress callback
+$schemaManager->updateAuditSchema(null, function (array $progress) {
+    echo sprintf('Updated: %s', $progress['table'] ?? '');
+});
 ```
 
 ## 📛 Table Naming
