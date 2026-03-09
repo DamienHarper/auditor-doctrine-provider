@@ -1,4 +1,4 @@
-name: auditor-doctrine-provider CI
+name: auditor-doctrine-provider 1.x CI
 
 on:
   schedule:
