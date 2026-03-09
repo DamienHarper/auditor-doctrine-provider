@@ -1,0 +1,12 @@
+vendor/
+tools/php-cs-fixer/vendor/
+tools/phpstan/vendor/
+tools/rector/vendor/
+composer.lock
+tools/php-cs-fixer/composer.lock
+tools/phpstan/composer.lock
+tools/rector/composer.lock
+*.sqlite
+.phpunit.cache/
+tests/coverage/
+.php-cs-fixer.cache
