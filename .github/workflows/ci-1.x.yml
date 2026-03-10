@@ -134,12 +134,15 @@ jobs:
         env:
           XDEBUG_MODE: coverage
           DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: vendor/bin/phpunit -c phpunit.xml --coverage-clover=coverage.xml
+        run: |
+          RAW_CODECOV_REPORT="php-${{ matrix.php }}-sf-${{ matrix.symfony }}-${{ matrix.db }}-coverage"
+          echo "CODECOV_REPORT=$(echo $RAW_CODECOV_REPORT | sed 's/\.\*//')" >> $GITHUB_ENV
+          vendor/bin/phpunit -c phpunit.xml --coverage-clover=coverage.xml
 
       - name: Upload coverage file
         uses: actions/upload-artifact@v7
         with:
-          name: php-${{ matrix.php }}-sf-${{ matrix.symfony }}-${{ matrix.db }}-coverage
+          name: ${{ env.CODECOV_REPORT }}
           path: coverage.xml
 
   upload_coverage:
