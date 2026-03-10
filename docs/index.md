@@ -52,34 +52,34 @@ flowchart TD
             direction TB
 
             subgraph AUDITING["AuditingService(s)"]
-                CONN_A["EntityManager A\n(source data)"]
+                CONN_A["EntityManager A<br/>(source data)"]
             end
 
             subgraph STORAGE["StorageService(s)"]
-                CONN_X["EntityManager X\n(audit storage)"]
+                CONN_X["EntityManager X<br/>(audit storage)"]
             end
 
             AUDITING --> TP
             STORAGE --> TP
 
-            TP["TransactionProcessor\nTrack inserts, updates, deletes, relations\nBuild payload (diffs, blame, extra_data)"]
+            TP["TransactionProcessor<br/>Track inserts, updates, deletes, relations<br/>Build payload (diffs, blame, extra_data)"]
         end
 
         subgraph EVENTS["EventDispatcher"]
             direction TB
             TP --> LE
 
-            LE["LifecycleEvent\npayload (diffs, blame, extra_data)\nentity (the audited object)"]
+            LE["LifecycleEvent<br/>payload (diffs, blame, extra_data)<br/>entity (the audited object)"]
 
             LE --> LISTENER
 
-            LISTENER["Your Listener(s) — optional\nEnrich extra_data from entity state"]:::optional
+            LISTENER["Your Listener(s) — optional<br/>Enrich extra_data from entity state"]:::optional
         end
     end
 
     LISTENER --> DB
 
-    DB[("Audit Tables\nusers_audit, posts_audit, ...\nColumns: type, diffs, extra_data, blame, ...")]
+    DB[("Audit Tables<br/>users_audit, posts_audit, ...<br/>Columns: type, diffs, extra_data, blame, ...")]
 
     classDef optional stroke-dasharray: 5 5
 ```
@@ -123,7 +123,6 @@ flowchart TD
 
 - **[auditor](https://github.com/DamienHarper/auditor)** — The core audit-log library
 - **[auditor-bundle](https://github.com/DamienHarper/auditor-bundle)** — Symfony bundle integrating DoctrineProvider
-- **[auditor-eloquent-provider](https://github.com/DamienHarper/auditor-eloquent-provider)** — Eloquent ORM provider
 
 ## License
 

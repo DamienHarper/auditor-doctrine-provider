@@ -10,9 +10,9 @@ Setting up auditor-doctrine-provider involves four main steps:
 
 ```mermaid
 flowchart LR
-    A["1️⃣ Configure\nAuditor"] --> B["2️⃣ Configure\nDoctrineProvider"]
-    B --> C["3️⃣ Mark Entities\nas Auditable"]
-    C --> D["4️⃣ Flush &\nQuery"]
+    A["1️⃣ Configure<br/>Auditor"] --> B["2️⃣ Configure<br/>DoctrineProvider"]
+    B --> C["3️⃣ Mark Entities<br/>as Auditable"]
+    C --> D["4️⃣ Flush &<br/>Query"]
     D --> E["🎉 Done!"]
 ```
 
