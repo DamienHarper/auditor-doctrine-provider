@@ -1,12 +1,23 @@
+.idea/
 vendor/
-tools/php-cs-fixer/vendor/
-tools/phpstan/vendor/
-tools/rector/vendor/
-composer.lock
-tools/php-cs-fixer/composer.lock
-tools/phpstan/composer.lock
-tools/rector/composer.lock
-*.sqlite
-.phpunit.cache/
 tests/coverage/
+docs/changelogs/
+.DS_Store
+.php_cs.cache
 .php-cs-fixer.cache
+.phpunit.result.cache
+.phpunit.cache/
+composer.lock
+*.sqlite
+symfony.lock
+
+###> phpbench/phpbench ###
+.phpbench/
+benchmark-report.html
+benchmark-summary.txt
+###< phpbench/phpbench ###
+
+###> phpunit/phpunit ###
+/phpunit.xml
+/.phpunit.cache/
+###< phpunit/phpunit ###
