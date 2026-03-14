@@ -124,6 +124,38 @@ $em = $storageService->getEntityManager();
 
 ---
 
+## ♻️ Long-Running Processes (Symfony Messenger Workers)
+
+When running auditor inside **Symfony Messenger workers**, the EntityManager is reset between messages by Symfony's `services_resetter`. Without proper handling, only the first message is audited correctly — subsequent messages silently fail because:
+
+- The `DoctrineSubscriber` would hold a stale EntityManager reference.
+- The `DoctrineProvider` would reuse cached `PreparedStatement` objects bound to a closed connection.
+
+`DoctrineProvider` implements `Symfony\Contracts\Service\ResetInterface`. Its `reset()` method clears the prepared statement cache and resets all subscriber transaction caches, ensuring clean state between messages.
+
+### Wiring `kernel.reset` in Symfony
+
+For Symfony to call `reset()` automatically between messages, tag `DoctrineProvider` with `kernel.reset`:
+
+**With `autoconfigure: true` (recommended)**
+
+If your service definition uses `autoconfigure: true`, Symfony detects `ResetInterface` and registers the tag automatically — no additional config needed.
+
+**Manual tag**
+
+```yaml
+# config/services.yaml
+services:
+    DH\Auditor\Provider\Doctrine\DoctrineProvider:
+        tags:
+            - { name: kernel.reset, method: reset }
+```
+
+> [!NOTE]
+> If you use `damienharper/auditor-bundle`, check the bundle's documentation for its service configuration — the tag may already be applied.
+
+---
+
 ## Next Steps
 
 - 🗄️ [Multi-Database Setup](multi-database.md)
