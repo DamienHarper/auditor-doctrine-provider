@@ -94,9 +94,9 @@ final class TransactionHydrator implements TransactionHydratorInterface
                 // Skip inverse-side (mappedBy) OneToMany collections — Doctrine's UoW does not
                 // reliably schedule them when the FK is changed through the owning-side ManyToOne
                 // field. When multiple entities are flushed in a single call, some or all associate
-                // entries may be silently dropped. Association changes for these inverse-side
-                // collections are handled in hydrateInverseSideAssociations() by scanning the
-                // owning-side entity changeset instead, which Doctrine always tracks reliably.
+                // entries may be silently dropped. Association changes for these collections are
+                // always covered by hydrateInverseSideAssociations(), which scans the owning-side
+                // entity changeset instead and is reliable in all cases.
                 // ManyToMany inverse collections are kept: their join-table changes are driven by
                 // the owning side and Doctrine does schedule them reliably.
                 // @see https://github.com/DamienHarper/auditor/issues/310
@@ -145,7 +145,17 @@ final class TransactionHydrator implements TransactionHydratorInterface
             $owner = $collection->getOwner();
 
             if (null !== $owner && $this->provider->isAudited($owner)) {
-                $mapping = $collection->getMapping()->toArray();
+                $collectionMapping = $collection->getMapping();
+
+                // Same rationale as hydrateWithScheduledCollectionUpdates(): skip inverse-side
+                // OneToMany collections — their dissociate entries are covered by
+                // hydrateInverseSideAssociations() via the owning-side entity changeset.
+                // @see https://github.com/DamienHarper/auditor/issues/310
+                if (!$collectionMapping->isOwningSide() && !$collectionMapping->isManyToMany()) {
+                    continue;
+                }
+
+                $mapping = $collectionMapping->toArray();
 
                 /** @var object $entity */
                 foreach ($collection->toArray() as $entity) {
@@ -160,16 +170,21 @@ final class TransactionHydrator implements TransactionHydratorInterface
     }
 
     /**
-     * Derives associate/dissociate audit entries from the owning side's entity changeset for
-     * bidirectional ManyToOne associations.
+     * Derives associate/dissociate audit entries for bidirectional single-valued associations
+     * by scanning the owning side's entity changeset.
      *
-     * Doctrine's UoW schedules inverse-side (OneToMany/mappedBy) collections for collection
-     * updates unreliably: when multiple entities are flushed together and all set the same
-     * ManyToOne target, the collection update may be scheduled only once and getInsertDiff()
-     * may return an incomplete result. This method supplements collection-based detection by
-     * scanning every inserted/updated entity's changeset for owning-side single-valued
-     * association changes (ManyToOne, OneToOne owning) that have a declared inversedBy, and
-     * emits the corresponding associate/dissociate on the inverse-side owner.
+     * For bidirectional ManyToOne associations this is the primary audit path: the collection
+     * path (hydrateWithScheduledCollectionUpdates/Deletions) unconditionally skips inverse-side
+     * OneToMany collections because Doctrine's UoW schedules them unreliably — when multiple
+     * entities are flushed together and all set the same ManyToOne target, the collection update
+     * may be scheduled only once and getInsertDiff() may return an incomplete result.
+     *
+     * For bidirectional OneToOne owning-side associations this is the only path: single-valued
+     * associations never appear in the scheduled collection queues.
+     *
+     * This method scans every inserted/updated entity's changeset for owning-side single-valued
+     * association changes (ManyToOne, OneToOne owning) that declare an inversedBy, and emits
+     * the corresponding associate/dissociate on the inverse-side owner.
      *
      * @see https://github.com/DamienHarper/auditor/issues/310
      */
@@ -197,8 +212,9 @@ final class TransactionHydrator implements TransactionHydratorInterface
 
                 $assocMapping = $meta->getAssociationMapping($fieldName);
 
-                // Only handle owning-side associations that declare an inverse side.
-                // isOwningSide() acts as a PHPStan assertion: $assocMapping is OwningSideMapping.
+                // Only owning-side associations that declare an inverse side are relevant here.
+                // After this check PHPStan narrows $assocMapping to OwningSideMapping, which
+                // carries the inversedBy property accessed below.
                 if (!$assocMapping->isOwningSide()) {
                     continue;
                 }
@@ -206,7 +222,7 @@ final class TransactionHydrator implements TransactionHydratorInterface
                 $inversedBy = $assocMapping->inversedBy;
 
                 if (null === $inversedBy || '' === $inversedBy) {
-                    continue; // Unidirectional association: no inverse collection to audit.
+                    continue; // Unidirectional association (no inversedBy declared): nothing to audit on the inverse side.
                 }
 
                 $targetMeta = $entityManager->getClassMetadata($assocMapping->targetEntity);

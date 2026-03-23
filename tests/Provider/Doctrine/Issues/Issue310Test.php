@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Issues;
 
+use DH\Auditor\Model\Entry;
 use DH\Auditor\Model\TransactionType;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
@@ -50,10 +51,11 @@ final class Issue310Test extends TestCase
         // The inverse collection (author.posts) is NOT explicitly updated.
         for ($i = 1; $i <= 3; ++$i) {
             $post = new Post();
-            $post->setTitle("Post {$i}")->setBody('Body')->setCreatedAt(new \DateTimeImmutable());
+            $post->setTitle('Post '.$i)->setBody('Body')->setCreatedAt(new \DateTimeImmutable());
             $post->setAuthor($author); // owning side only
             $em->persist($post);
         }
+
         $em->flush(); // single flush for all 3 posts
 
         $authorEntries = $reader->createQuery(Author::class, ['type' => TransactionType::ASSOCIATE])->execute();
@@ -66,8 +68,37 @@ final class Issue310Test extends TestCase
     }
 
     /**
-     * When a ManyToOne field is re-assigned (old → new target), both a DISSOCIATE entry on
-     * the old target and an ASSOCIATE entry on the new target must appear in the audit trail.
+     * A single entity flushed with a ManyToOne field set must also produce exactly one
+     * ASSOCIATE entry on the inverse side's audit table (basic single-entity case).
+     */
+    public function testAssociateEntryIsRecordedForSingleEntityFlush(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+        $reader = new Reader($this->provider);
+
+        $author = new Author();
+        $author->setFullname('John Doe')->setEmail('john@example.com');
+        $em->persist($author);
+        $em->flush();
+
+        $post = new Post();
+        $post->setTitle('Post 1')->setBody('Body')->setCreatedAt(new \DateTimeImmutable());
+        $post->setAuthor($author);
+        $em->persist($post);
+        $em->flush();
+
+        $authorEntries = $reader->createQuery(Author::class, ['type' => TransactionType::ASSOCIATE])->execute();
+
+        $this->assertCount(
+            1,
+            $authorEntries,
+            'author_audit must contain exactly one ASSOCIATE entry when a single post is flushed.'
+        );
+    }
+
+    /**
+     * When a ManyToOne field is re-assigned (old → new target), the old target must receive a
+     * DISSOCIATE entry and the new target must receive an ASSOCIATE entry — verified per author.
      */
     public function testDissociateAndAssociateAreRecordedOnReassignment(): void
     {
@@ -92,26 +123,73 @@ final class Issue310Test extends TestCase
         $post->setAuthor($authorB);
         $em->flush();
 
-        $authorAEntries = $reader->createQuery(Author::class)->execute();
-
-        $types = array_map(static fn ($e): string => $e->type, $authorAEntries);
+        // Author A: must have one ASSOCIATE (initial assignment) and one DISSOCIATE (re-assignment away).
+        $typesA = array_map(
+            static fn (Entry $e): string => $e->type,
+            $reader->createQuery(Author::class, ['object_id' => $authorA->getId()])->execute(),
+        );
 
         $this->assertContains(
             TransactionType::ASSOCIATE,
-            $types,
-            'author_audit must contain an ASSOCIATE entry when the post is first assigned.'
+            $typesA,
+            'author_A_audit must contain an ASSOCIATE entry when the post is first assigned.'
         );
-        $this->assertContains(
-            TransactionType::DISSOCIATE,
-            $types,
-            'author_audit must contain a DISSOCIATE entry when the post is re-assigned away.'
+        $this->assertCount(
+            1,
+            array_filter($typesA, static fn (string $t): bool => TransactionType::DISSOCIATE === $t),
+            'author_A_audit must contain exactly one DISSOCIATE entry when the post is re-assigned away.'
         );
 
-        // The re-assignment to author B must also generate an ASSOCIATE entry.
-        $this->assertSame(
-            2,
-            \count(array_filter($types, static fn (string $t): bool => TransactionType::ASSOCIATE === $t)),
-            'author_audit must contain 2 ASSOCIATE entries total (one for A, one for B).'
+        // Author B: must have one ASSOCIATE (re-assignment to B) and no DISSOCIATE.
+        $typesB = array_map(
+            static fn (Entry $e): string => $e->type,
+            $reader->createQuery(Author::class, ['object_id' => $authorB->getId()])->execute(),
+        );
+
+        $this->assertContains(
+            TransactionType::ASSOCIATE,
+            $typesB,
+            'author_B_audit must contain an ASSOCIATE entry when the post is re-assigned to it.'
+        );
+        $this->assertCount(
+            0,
+            array_filter($typesB, static fn (string $t): bool => TransactionType::DISSOCIATE === $t),
+            'author_B_audit must not contain any DISSOCIATE entry.'
+        );
+    }
+
+    /**
+     * When the inverse-side entity (Author) is not audited, hydrateInverseSideAssociations()
+     * must skip it silently — no exception, no stray audit entry.
+     */
+    public function testNoAssociateEntryIsWrittenWhenInverseSideEntityIsNotAudited(): void
+    {
+        // Author is registered so its audit table exists, but disabled so isAudited() returns
+        // false — exercising the guard in hydrateInverseSideAssociations().
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => false],
+            Post::class => ['enabled' => true],
+        ]);
+
+        $em = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+        $reader = new Reader($this->provider);
+
+        $author = new Author();
+        $author->setFullname('John Doe')->setEmail('john@example.com');
+        $em->persist($author);
+
+        $post = new Post();
+        $post->setTitle('Post 1')->setBody('Body')->setCreatedAt(new \DateTimeImmutable());
+        $post->setAuthor($author);
+        $em->persist($post);
+        $em->flush();
+
+        $authorEntries = $reader->createQuery(Author::class, ['type' => TransactionType::ASSOCIATE])->execute();
+
+        $this->assertCount(
+            0,
+            $authorEntries,
+            'No ASSOCIATE entry must be written to author_audit when Author is not audited.'
         );
     }
 
