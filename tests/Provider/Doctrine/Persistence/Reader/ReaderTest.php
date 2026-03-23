@@ -105,8 +105,8 @@ final class ReaderTest extends TestCase
             'Inserted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#2: [email: chuck.norris@gmail.com, fullname: Chuck Norris]',
             'Inserted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1: [email: john.doe@gmail.com, fullname: John]',
             'Updated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1: [fullname: John => John Doe]',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#3 (Luke Skywalker) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#4 (Fourth post)',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#2 (Chuck Norris) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#3 (Third post)',
+            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1 (John Doe) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#1 (First post)',
+            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1 (John Doe) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#2 (Second post)',
             'Deleted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#3',
         ];
 
@@ -125,9 +125,6 @@ final class ReaderTest extends TestCase
             'Updated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#3: [coauthor: null => Luke Skywalker]',
             'Updated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#2: [author: null => John Doe]',
             'Updated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#1: [author: null => John Doe, coauthor: null => Chuck Norris]',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#3 (Third post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#2 (DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#2)',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#3 (Third post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#3 (DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#3)',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#1 (First post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#1 (DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment#1)',
             'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#4 (Fourth post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag#2 (house)',
             'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#4 (Fourth post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag#4 (jungle)',
             'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#4 (Fourth post) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag#5 (gabber)',
@@ -228,7 +225,7 @@ final class ReaderTest extends TestCase
         $query->addFilter(new SimpleFilter('object_id', 2));
 
         $audits = $query->execute();
-        $this->assertCount(4, $audits);
+        $this->assertCount(5, $audits);
     }
 
     public function testGetAuditsByBlameId(): void
@@ -291,8 +288,8 @@ final class ReaderTest extends TestCase
             'Inserted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#2: [email: chuck.norris@gmail.com, fullname: Chuck Norris]',
             'Inserted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1: [email: john.doe@gmail.com, fullname: John]',
             'Updated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1: [fullname: John => John Doe]',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#3 (Luke Skywalker) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#4 (Fourth post)',
-            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#2 (Chuck Norris) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#3 (Third post)',
+            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1 (John Doe) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#1 (First post)',
+            'Associated DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#1 (John Doe) to DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post#2 (Second post)',
             'Deleted DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author#3',
         ];
 
@@ -348,11 +345,11 @@ final class ReaderTest extends TestCase
 
         /** @var Entry[] $audits */
         $audits = $reader->createQuery(Author::class, ['object_id' => 1])->execute();
-        $this->assertCount(2, $audits, 'result count is ok.');
+        $this->assertCount(4, $audits, 'result count is ok.');
 
         /** @var Entry[] $audits */
         $audits = $reader->createQuery(Post::class, ['object_id' => 1])->execute();
-        $this->assertCount(5, $audits, 'result count is ok.');
+        $this->assertCount(4, $audits, 'result count is ok.');
 
         /** @var Entry[] $audits */
         $audits = $reader->createQuery(Comment::class, ['object_id' => 1])->execute();
@@ -507,7 +504,7 @@ final class ReaderTest extends TestCase
         $audits = $reader->getAuditsByTransactionHash($hash);
 
         $this->assertCount(2, $audits, 'Reader::getAllAuditsByTransactionHash() is ok.');
-        $this->assertCount(1, $audits[Author::class], 'Reader::getAllAuditsByTransactionHash() is ok.');
+        $this->assertCount(3, $audits[Author::class], 'Reader::getAllAuditsByTransactionHash() is ok.');
         $this->assertCount(2, $audits[Post::class], 'Reader::getAllAuditsByTransactionHash() is ok.');
     }
 
