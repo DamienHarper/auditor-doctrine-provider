@@ -213,8 +213,6 @@ Attaches a **human-readable label resolver** to a scalar property so that audit 
 
 ```php
 use DH\Auditor\Attribute\DiffLabel;
-// or, via the provider shim (deprecated):
-use DH\Auditor\Provider\Doctrine\Auditing\Attribute\DiffLabel;
 ```
 
 ### Usage
