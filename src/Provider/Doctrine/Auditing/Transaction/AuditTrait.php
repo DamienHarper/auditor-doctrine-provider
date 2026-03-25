@@ -230,6 +230,7 @@ trait AuditTrait
                                 $o = ['value' => $o, 'label' => $oLabel];
                             }
                         }
+
                         if (null !== $n) {
                             $nLabel = $resolver($n);
                             if (null !== $nLabel) {
