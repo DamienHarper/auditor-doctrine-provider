@@ -27,6 +27,7 @@ use Doctrine\ORM\Events;
 use Doctrine\ORM\Tools\ToolEvents;
 use Gedmo\SoftDeleteable\SoftDeleteableListener;
 use Psr\Cache\CacheItemPoolInterface;
+use Psr\Container\ContainerInterface;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
@@ -60,6 +61,8 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     /** @var DoctrineSubscriber[] */
     private array $subscribers = [];
 
+    private ?ContainerInterface $diffLabelResolverLocator = null;
+
     public function __construct(ConfigurationInterface $configuration)
     {
         $this->configuration = $configuration;
@@ -72,6 +75,16 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     public function getTransactionManager(): TransactionManager
     {
         return $this->transactionManager;
+    }
+
+    public function setDiffLabelResolverLocator(ContainerInterface $locator): void
+    {
+        $this->diffLabelResolverLocator = $locator;
+    }
+
+    public function getDiffLabelResolverLocator(): ?ContainerInterface
+    {
+        return $this->diffLabelResolverLocator;
     }
 
     #[\Override]

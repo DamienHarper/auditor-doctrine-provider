@@ -11,6 +11,7 @@ Auditor uses PHP 8 attributes to configure Doctrine entity auditing. These attri
 | `#[Auditable]`  | Class    | Marks an entity for auditing              |
 | `#[Ignore]`     | Property | Excludes a property from auditing         |
 | `#[Security]`   | Class    | Defines who can view entity audits        |
+| `#[DiffLabel]`  | Property | Attaches a human-readable label resolver to a field |
 
 ## 📝 #[Auditable]
 
@@ -204,6 +205,86 @@ $configuration->setRoleChecker(function (string $entity, string $scope) use ($pr
 });
 ```
 
+## 🏷️ #[DiffLabel]
+
+Without `#[DiffLabel]`, a change from category 1 to category 2 stores:
+
+```json
+{"categoryId": {"old": 1, "new": 2}}
+```
+
+With `#[DiffLabel]`, the same change stores:
+
+```json
+{"categoryId": {"old": {"value": 1, "label": "Books"}, "new": {"value": 2, "label": "Electronics"}}}
+```
+
+Labels are resolved at **write-time** and stored in the JSON — they remain accurate even if the referenced record is later renamed or deleted.
+
+### Namespace
+
+```php
+use DH\Auditor\Attribute\DiffLabel;
+```
+
+### Usage
+
+```php
+<?php
+
+use DH\Auditor\Attribute\Auditable;
+use DH\Auditor\Attribute\DiffLabel;
+use Doctrine\DBAL\Types\Types;
+use Doctrine\ORM\Mapping as ORM;
+
+#[ORM\Entity]
+#[Auditable]
+class Product
+{
+    #[ORM\Column(type: Types::INTEGER)]
+    #[DiffLabel(resolver: CategoryResolver::class)]
+    private int $categoryId;
+}
+```
+
+The resolver must implement `DiffLabelResolverInterface`. Return `null` to fall back to storing the plain scalar:
+
+```php
+use DH\Auditor\Contract\DiffLabelResolverInterface;
+
+final class CategoryResolver implements DiffLabelResolverInterface
+{
+    private const array LABELS = [1 => 'Books', 2 => 'Electronics', 3 => 'Clothing'];
+
+    public function __invoke(mixed $value): ?string
+    {
+        return self::LABELS[$value] ?? null;
+    }
+}
+```
+
+### Parameters
+
+| Parameter  | Type     | Required | Description                          |
+|------------|----------|----------|--------------------------------------|
+| `resolver` | `string` | Yes      | FQCN of the `DiffLabelResolverInterface` implementation |
+
+### Wiring resolvers (standalone)
+
+Resolvers are looked up at flush-time via a PSR-11 `ContainerInterface`. Inject it on the provider before flushing:
+
+```php
+use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+
+$provider = new DoctrineProvider($configuration);
+
+$provider->setDiffLabelResolverLocator(new SimpleServiceLocator([
+    CategoryResolver::class => fn () => new CategoryResolver(),
+]));
+```
+
+Any PSR-11 container works. When using the Symfony bundle, the locator is wired automatically — see the [Diff Label Resolvers guide](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md).
+
 ## 📄 Complete Example
 
 ```php
@@ -288,3 +369,4 @@ $configuration = new Configuration([
 
 - ⚙️ [Configuration Reference](configuration.md)
 - 🔍 [Querying Audits](../../querying/index.md)
+- 🏷️ [Diff Label Resolvers](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md) — Full wiring guide (Symfony bundle)
