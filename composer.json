@@ -10,9 +10,11 @@
       "email": "damien.harper@gmail.com"
     }
   ],
+  "minimum-stability": "dev",
+  "prefer-stable": true,
   "require": {
     "php": ">=8.4",
-    "damienharper/auditor": "^4.0",
+    "damienharper/auditor": "^5.0@dev",
     "doctrine/dbal": "^4.0",
     "doctrine/orm": "^3.2",
     "symfony/cache": "^8.0",
@@ -29,7 +31,8 @@
   },
   "autoload-dev": {
     "psr-4": {
-      "DH\\Auditor\\Tests\\": "tests"
+      "DH\\Auditor\\Tests\\": "tests",
+      "DH\\Auditor\\Provider\\Doctrine\\Benchmarks\\": "benchmarks"
     }
   },
   "require-dev": {
@@ -55,6 +58,11 @@
       "@cs-fix",
       "@phpstan"
     ],
+    "bench": "vendor/bin/phpbench run benchmarks/AuditBench.php --report=aggregate",
+    "bench:baseline": "vendor/bin/phpbench run benchmarks/AuditBench.php --report=aggregate --tag=before --store",
+    "bench:compare": "vendor/bin/phpbench run benchmarks/AuditBench.php --report=aggregate --ref=before --progress=plain",
+    "bench:html": "vendor/bin/phpbench run benchmarks/AuditBench.php --report=aggregate --ref=before --output=html_file",
+    "profile": "php benchmarks/profile.php",
     "update-tools": "composer update --working-dir=tools/php-cs-fixer ; composer update --working-dir=tools/phpstan ; composer update --working-dir=tools/rector"
   },
   "config": {

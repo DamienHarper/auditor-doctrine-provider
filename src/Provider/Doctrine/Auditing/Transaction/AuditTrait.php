@@ -7,6 +7,7 @@ namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 use DH\Auditor\Exception\MappingException;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
+use DH\Auditor\Provider\Doctrine\Transaction\NeedsConversionToAuditableType;
 use DH\Auditor\User\UserInterface;
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
@@ -81,6 +82,10 @@ trait AuditTrait
 
         if ($value instanceof \UnitEnum && property_exists($value, 'value')) {
             $value = $value->value;
+        }
+
+        if ($type instanceof NeedsConversionToAuditableType) {
+            return $type->convertToAuditableValue($value, $platform);
         }
 
         switch ($this->getTypeName($type)) {

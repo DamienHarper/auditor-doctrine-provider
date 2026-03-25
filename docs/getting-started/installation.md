@@ -4,7 +4,7 @@
 
 ## 📋 Requirements
 
-### Version 1.x (Current)
+### Version 2.x (Current)
 
 | Requirement               | Version  |
 |---------------------------|----------|
@@ -15,6 +15,12 @@
 | symfony/lock              | >= 8.0   |
 | symfony/event-dispatcher  | >= 8.0   |
 | damienharper/auditor      | >= 4.0   |
+
+### Previous Versions
+
+| Version | PHP    | damienharper/auditor |
+|---------|--------|----------------------|
+| 1.x     | >= 8.4 | >= 4.0               |
 
 ## 📦 Install via Composer
 
