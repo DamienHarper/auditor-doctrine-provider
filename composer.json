@@ -14,7 +14,7 @@
   "prefer-stable": true,
   "require": {
     "php": ">=8.4",
-    "damienharper/auditor": "5.x-dev",
+    "damienharper/auditor": "^5.0@dev",
     "doctrine/dbal": "^4.0",
     "doctrine/orm": "^3.2",
     "symfony/cache": "^8.0",
