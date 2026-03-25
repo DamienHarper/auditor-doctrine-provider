@@ -11,6 +11,7 @@ Auditor uses PHP 8 attributes to configure Doctrine entity auditing. These attri
 | `#[Auditable]`  | Class    | Marks an entity for auditing              |
 | `#[Ignore]`     | Property | Excludes a property from auditing         |
 | `#[Security]`   | Class    | Defines who can view entity audits        |
+| `#[DiffLabel]`  | Property | Attaches a human-readable label resolver to a field |
 
 ## 📝 #[Auditable]
 
@@ -204,6 +205,75 @@ $configuration->setRoleChecker(function (string $entity, string $scope) use ($pr
 });
 ```
 
+## 🏷️ #[DiffLabel]
+
+Attaches a **human-readable label resolver** to a scalar property so that audit diffs store `{"value": 1, "label": "Electronics"}` instead of just `1`. Labels are resolved at write-time and stored in the JSON — they remain accurate even if the referenced record is later renamed or deleted.
+
+### Namespace
+
+```php
+use DH\Auditor\Attribute\DiffLabel;
+// or, via the provider shim (deprecated):
+use DH\Auditor\Provider\Doctrine\Auditing\Attribute\DiffLabel;
+```
+
+### Usage
+
+```php
+<?php
+
+use DH\Auditor\Attribute\Auditable;
+use DH\Auditor\Attribute\DiffLabel;
+use App\Audit\Resolver\CategoryResolver;
+use Doctrine\DBAL\Types\Types;
+use Doctrine\ORM\Mapping as ORM;
+
+#[ORM\Entity]
+#[Auditable]
+class Product
+{
+    #[ORM\Column(type: Types::INTEGER)]
+    #[DiffLabel(resolver: CategoryResolver::class)]
+    private int $categoryId;
+}
+```
+
+The resolver class must implement `DiffLabelResolverInterface`:
+
+```php
+use DH\Auditor\Contract\DiffLabelResolverInterface;
+
+final class CategoryResolver implements DiffLabelResolverInterface
+{
+    public function __invoke(mixed $value): ?string
+    {
+        // Return null to fall back to storing the plain scalar
+        return $this->repository->find($value)?->getName();
+    }
+}
+```
+
+### Parameters
+
+| Parameter  | Type     | Required | Description                          |
+|------------|----------|----------|--------------------------------------|
+| `resolver` | `string` | Yes      | FQCN of the `DiffLabelResolverInterface` implementation |
+
+### Result in the audit diff
+
+```json
+{
+  "categoryId": {
+    "old": {"value": 1, "label": "Books"},
+    "new": {"value": 2, "label": "Electronics"}
+  }
+}
+```
+
+> [!NOTE]
+> Resolver registration (ServiceLocator injection) is handled by the bundle when using Symfony.
+> See the [Diff Label Resolvers](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md) guide in `auditor-bundle` for full wiring instructions.
+
 ## 📄 Complete Example
 
 ```php
@@ -288,3 +358,4 @@ $configuration = new Configuration([
 
 - ⚙️ [Configuration Reference](configuration.md)
 - 🔍 [Querying Audits](../../querying/index.md)
+- 🏷️ [Diff Label Resolvers](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md) — Full wiring guide (Symfony bundle)
