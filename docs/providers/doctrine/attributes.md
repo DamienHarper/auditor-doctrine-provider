@@ -207,7 +207,19 @@ $configuration->setRoleChecker(function (string $entity, string $scope) use ($pr
 
 ## 🏷️ #[DiffLabel]
 
-Attaches a **human-readable label resolver** to a scalar property so that audit diffs store `{"value": 1, "label": "Electronics"}` instead of just `1`. Labels are resolved at write-time and stored in the JSON — they remain accurate even if the referenced record is later renamed or deleted.
+Without `#[DiffLabel]`, a change from category 1 to category 2 stores:
+
+```json
+{"categoryId": {"old": 1, "new": 2}}
+```
+
+With `#[DiffLabel]`, the same change stores:
+
+```json
+{"categoryId": {"old": {"value": 1, "label": "Books"}, "new": {"value": 2, "label": "Electronics"}}}
+```
+
+Labels are resolved at **write-time** and stored in the JSON — they remain accurate even if the referenced record is later renamed or deleted.
 
 ### Namespace
 
@@ -222,7 +234,6 @@ use DH\Auditor\Attribute\DiffLabel;
 
 use DH\Auditor\Attribute\Auditable;
 use DH\Auditor\Attribute\DiffLabel;
-use App\Audit\Resolver\CategoryResolver;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -236,17 +247,18 @@ class Product
 }
 ```
 
-The resolver class must implement `DiffLabelResolverInterface`:
+The resolver must implement `DiffLabelResolverInterface`. Return `null` to fall back to storing the plain scalar:
 
 ```php
 use DH\Auditor\Contract\DiffLabelResolverInterface;
 
 final class CategoryResolver implements DiffLabelResolverInterface
 {
+    private const array LABELS = [1 => 'Books', 2 => 'Electronics', 3 => 'Clothing'];
+
     public function __invoke(mixed $value): ?string
     {
-        // Return null to fall back to storing the plain scalar
-        return $this->repository->find($value)?->getName();
+        return self::LABELS[$value] ?? null;
     }
 }
 ```
@@ -257,20 +269,21 @@ final class CategoryResolver implements DiffLabelResolverInterface
 |------------|----------|----------|--------------------------------------|
 | `resolver` | `string` | Yes      | FQCN of the `DiffLabelResolverInterface` implementation |
 
-### Result in the audit diff
+### Wiring resolvers (standalone)
 
-```json
-{
-  "categoryId": {
-    "old": {"value": 1, "label": "Books"},
-    "new": {"value": 2, "label": "Electronics"}
-  }
-}
+Resolvers are looked up at flush-time via a PSR-11 `ContainerInterface`. Inject it on the provider before flushing:
+
+```php
+use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+
+$provider = new DoctrineProvider($configuration);
+
+$provider->setDiffLabelResolverLocator(new SimpleServiceLocator([
+    CategoryResolver::class => fn () => new CategoryResolver(),
+]));
 ```
 
-> [!NOTE]
-> Resolver registration (ServiceLocator injection) is handled by the bundle when using Symfony.
-> See the [Diff Label Resolvers](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md) guide in `auditor-bundle` for full wiring instructions.
+Any PSR-11 container works. When using the Symfony bundle, the locator is wired automatically — see the [Diff Label Resolvers guide](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md).
 
 ## 📄 Complete Example
 
