@@ -66,9 +66,11 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'email' => [
+                'old' => null,
                 'new' => 'john.doe@gmail.com',
             ],
             'fullname' => [
+                'old' => null,
                 'new' => 'John Doe',
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
@@ -113,12 +115,12 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'email' => [
-                'new' => 'dark.vador@gmail.com',
                 'old' => 'john.doe@gmail.com',
+                'new' => 'dark.vador@gmail.com',
             ],
             'fullname' => [
-                'new' => 'Dark Vador',
                 'old' => 'John Doe',
+                'new' => 'Dark Vador',
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }
@@ -152,12 +154,13 @@ final class TransactionProcessorTest extends TestCase
         $this->assertContainsEquals($entry->userId, ['1', '2'], 'audit entry blame_id is ok.');
         $this->assertContainsEquals($entry->username, ['dark.vador', 'anakin.skywalker'], 'audit entry blame_user is ok.');
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
+        $this->assertSame([], $entry->getDiffs(), 'audit entry diffs is empty for non-snapshot remove.');
         $this->assertSame([
             'class' => Author::class,
             'id' => 1,
             'label' => 'John Doe',  // Author::class.'#1',
             'table' => $entityManager->getClassMetadata(Author::class)->getTableName(),
-        ], $entry->getDiffs(), 'audit entry diffs is ok.');
+        ], $entry->getDiffSource(), 'audit entry diff source is ok.');
     }
 
     public function testRemoveWithSoftDelete(): void
@@ -191,12 +194,13 @@ final class TransactionProcessorTest extends TestCase
         $this->assertContainsEquals($entry->userId, ['1', '2'], 'audit entry blame_id is ok.');
         $this->assertContainsEquals($entry->username, ['dark.vador', 'anakin.skywalker'], 'audit entry blame_user is ok.');
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
+        $this->assertSame([], $entry->getDiffs(), 'audit entry diffs is empty for non-snapshot remove.');
         $this->assertSame([
             'class' => Post::class,
             'id' => 1,
             'label' => 'First post',
             'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
-        ], $entry->getDiffs(), 'audit entry diffs is ok.');
+        ], $entry->getDiffSource(), 'audit entry diff source is ok.');
 
         $post = new Post();
         $post
@@ -478,6 +482,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -485,7 +490,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => (string) $post,
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',
@@ -503,6 +507,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -510,7 +515,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => (string) $post,
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',
@@ -629,6 +633,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -636,7 +641,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => 'First post',
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',

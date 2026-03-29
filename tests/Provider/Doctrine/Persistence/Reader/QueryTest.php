@@ -38,26 +38,26 @@ final class QueryTest extends TestCase
     public function testAddSimpleFilter(): void
     {
         $query = new Query('author_audit', $this->createConnection(), 'UTC');
-        $filter1 = new SimpleFilter(Query::TRANSACTION_HASH, '123abc');
+        $filter1 = new SimpleFilter(Query::TRANSACTION_ID, '123abc');
         $query->addFilter($filter1);
 
         $filters = $query->getFilters();
-        $this->assertCount(1, $filters[Query::TRANSACTION_HASH], 'Filter is added.');
-        $this->assertSame([$filter1], $filters[Query::TRANSACTION_HASH], 'Filter is added.');
+        $this->assertCount(1, $filters[Query::TRANSACTION_ID], 'Filter is added.');
+        $this->assertSame([$filter1], $filters[Query::TRANSACTION_ID], 'Filter is added.');
 
-        $filter2 = new SimpleFilter(Query::TRANSACTION_HASH, '456def');
+        $filter2 = new SimpleFilter(Query::TRANSACTION_ID, '456def');
         $query->addFilter($filter2);
 
         $filters = $query->getFilters();
-        $this->assertCount(2, $filters[Query::TRANSACTION_HASH], 'Filter is added.');
-        $this->assertSame([$filter1, $filter2], $filters[Query::TRANSACTION_HASH], 'Second filter is added.');
+        $this->assertCount(2, $filters[Query::TRANSACTION_ID], 'Filter is added.');
+        $this->assertSame([$filter1, $filter2], $filters[Query::TRANSACTION_ID], 'Second filter is added.');
 
-        $filter3 = new SimpleFilter(Query::TRANSACTION_HASH, ['789ghi', '012jkl']);
+        $filter3 = new SimpleFilter(Query::TRANSACTION_ID, ['789ghi', '012jkl']);
         $query->addFilter($filter3);
 
         $filters = $query->getFilters();
-        $this->assertCount(3, $filters[Query::TRANSACTION_HASH], 'Filter is added.');
-        $this->assertSame([$filter1, $filter2, $filter3], $filters[Query::TRANSACTION_HASH], 'Second filter is added.');
+        $this->assertCount(3, $filters[Query::TRANSACTION_ID], 'Filter is added.');
+        $this->assertSame([$filter1, $filter2, $filter3], $filters[Query::TRANSACTION_ID], 'Second filter is added.');
     }
 
     #[Depends('testAddSimpleFilter')]
@@ -140,20 +140,20 @@ final class QueryTest extends TestCase
     public function testAddOrderBy(): void
     {
         $query = new Query('author_audit', $this->createConnection(), 'UTC');
-        $query->addOrderBy(Query::TRANSACTION_HASH, 'ASC');
+        $query->addOrderBy(Query::TRANSACTION_ID, 'ASC');
 
         $orderBy = $query->getOrderBy();
-        $this->assertSame('ASC', $orderBy[Query::TRANSACTION_HASH], 'ORDER BY is added.');
+        $this->assertSame('ASC', $orderBy[Query::TRANSACTION_ID], 'ORDER BY is added.');
 
-        $query->addOrderBy(Query::TRANSACTION_HASH, 'DESC');
+        $query->addOrderBy(Query::TRANSACTION_ID, 'DESC');
         $orderBy = $query->getOrderBy();
-        $this->assertSame('DESC', $orderBy[Query::TRANSACTION_HASH], 'ORDER BY is overwritten.');
+        $this->assertSame('DESC', $orderBy[Query::TRANSACTION_ID], 'ORDER BY is overwritten.');
 
         $query->addOrderBy(Query::OBJECT_ID, 'ASC');
         $orderBy = $query->getOrderBy();
 
         $expected = [
-            Query::TRANSACTION_HASH => 'DESC',
+            Query::TRANSACTION_ID => 'DESC',
             Query::OBJECT_ID => 'ASC',
         ];
 
@@ -167,7 +167,7 @@ final class QueryTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
 
-        $query->addOrderBy(Query::TRANSACTION_HASH, 'unknown');
+        $query->addOrderBy(Query::TRANSACTION_ID, 'unknown');
     }
 
     public function testNoLimitNoOffsetByDefault(): void
@@ -235,31 +235,31 @@ final class QueryTest extends TestCase
         $reflectedMethod = $this->reflectMethod($query, 'buildQueryBuilder');
 
         // test SQL query with 1 filter
-        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_hash = :transaction_hash';
+        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_id = :transaction_id';
         $expectedParameters = [
-            'transaction_hash' => '123abc',
+            'transaction_id' => '123abc',
         ];
-        $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, '123abc'));
+        $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, '123abc'));
         $queryBuilder = $reflectedMethod->invokeArgs($query, []);
         $this->assertSame($expectedQuery, $queryBuilder->getSQL(), 'SQL query is OK with 1 filter.');
         $this->assertSame($expectedParameters, $queryBuilder->getParameters(), 'Parameters OK with 1 filter.');
 
         // test SQL query with 2 filters
-        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_hash IN (:transaction_hash)';
+        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_id IN (:transaction_id)';
         $expectedParameters = [
-            'transaction_hash' => ['123abc', '456def'],
+            'transaction_id' => ['123abc', '456def'],
         ];
-        $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, '456def'));
+        $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, '456def'));
         $queryBuilder = $reflectedMethod->invokeArgs($query, []);
         $this->assertSame($expectedQuery, $queryBuilder->getSQL(), 'SQL query is OK with 2 filters.');
         $this->assertSame($expectedParameters, $queryBuilder->getParameters(), 'Parameters OK with 2 filters.');
 
         // test SQL query with 3 filters
-        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_hash IN (:transaction_hash)';
+        $expectedQuery = 'SELECT * FROM author_audit at WHERE transaction_id IN (:transaction_id)';
         $expectedParameters = [
-            'transaction_hash' => ['123abc', '456def', '789ghj', '012jkl'],
+            'transaction_id' => ['123abc', '456def', '789ghj', '012jkl'],
         ];
-        $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, ['789ghj', '012jkl']));
+        $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, ['789ghj', '012jkl']));
         $queryBuilder = $reflectedMethod->invokeArgs($query, []);
         $this->assertSame($expectedQuery, $queryBuilder->getSQL(), 'SQL query is OK with 3 filters.');
         $this->assertSame($expectedParameters, $queryBuilder->getParameters(), 'Parameters OK with 3 filters.');
@@ -396,11 +396,11 @@ final class QueryTest extends TestCase
     public function testResetQueryPartFilters(): void
     {
         $query = new Query('author_audit', $this->createConnection(), 'UTC');
-        $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, '123abc'));
+        $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, '123abc'));
         $query->addFilter(new SimpleFilter(Query::OBJECT_ID, '456'));
 
         $filters = $query->getFilters();
-        $this->assertCount(1, $filters[Query::TRANSACTION_HASH], 'Filter is added.');
+        $this->assertCount(1, $filters[Query::TRANSACTION_ID], 'Filter is added.');
         $this->assertCount(1, $filters[Query::OBJECT_ID], 'Filter is added.');
 
         $query->resetQueryPart('filters');
