@@ -39,17 +39,15 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
      * @var array<string, string>
      */
     private const array FIELDS = [
+        'schema_version' => '?',
         'type' => '?',
         'object_id' => '?',
         'discriminator' => '?',
-        'transaction_hash' => '?',
+        'transaction_id' => '?',
         'diffs' => '?',
         'extra_data' => '?',
         'blame_id' => '?',
-        'blame_user' => '?',
-        'blame_user_fqdn' => '?',
-        'blame_user_firewall' => '?',
-        'ip' => '?',
+        'blame' => '?',
         'created_at' => '?',
     ];
 

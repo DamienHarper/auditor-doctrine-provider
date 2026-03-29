@@ -189,11 +189,17 @@ final readonly class SchemaManager
                 if ('primary' === $struct['type']) {
                     DoctrineHelper::setPrimaryKey($auditTable, $columnName);
                 } elseif (isset($struct['name'])) {
+                    // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                    // from the array key (which is the column name for non-composite entries).
+                    $columns = $struct['columns'] ?? [$columnName];
                     $auditTable->addIndex(
-                        [$columnName],
+                        $columns,
                         $struct['name'],
                         [],
-                        PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                        // Length limiting only applies to single string columns, not composites
+                        1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
+                            ? ['lengths' => [191]]
+                            : []
                     );
                 } else {
                     throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
@@ -371,11 +377,17 @@ final readonly class SchemaManager
                     $table->dropIndex($options['name']);
                 }
 
+                // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                // from the array key (which is the column name for non-composite entries).
+                $columns = $options['columns'] ?? [$columnName];
                 $table->addIndex(
-                    [$columnName],
+                    $columns,
                     $options['name'],
                     [],
-                    PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                    // Length limiting only applies to single string columns, not composites
+                    1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
+                        ? ['lengths' => [191]]
+                        : []
                 );
             }
         }
