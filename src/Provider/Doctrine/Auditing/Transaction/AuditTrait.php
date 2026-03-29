@@ -145,36 +145,19 @@ trait AuditTrait
     }
 
     /**
-     * Computes a usable diff formatted as follow:
+     * Computes a unified diff envelope:
      * [
-     *   // field1 value has changed
-     *   'field1' => [
-     *      'old' => $oldValue, // value before change
-     *      'new' => $newValue  // value after change
-     *   ],
-     *   // field2 value has been added
-     *   'field2' => [
-     *     'new' => $newValue
-     *   ],
-     *   ...
-     *   // jsonField1 has changed
-     *   'jsonField1' => [
-     *     // field1 value has changed
-     *     'field1' => [
-     *       'old' => $oldValue,
-     *       'new' => $newValue
+     *   'source'  => ['id' => ..., 'class' => ..., 'label' => ..., 'table' => ...],
+     *   'changes' => [
+     *     'field1' => ['old' => $oldValue, 'new' => $newValue],
+     *     'field2' => ['old' => null,       'new' => $newValue],  // INSERT: old is always null
+     *     'jsonField' => [
+     *       'nested' => ['old' => $old, 'new' => $new],           // deep diff for JSON columns
      *     ],
-     *     // field2 value has been added
-     *     'field2' => [
-     *       'new' => $newValue
-     *     ],
-     *     // field3 value has been removed
-     *     'field3' => [
-     *       'old' => $oldValue
-     *     ],
-     *     ...
      *   ],
      * ]
+     *
+     * Both 'old' and 'new' keys are always present for every changed field.
      *
      * @throws MappingException
      * @throws Exception
@@ -185,9 +168,8 @@ trait AuditTrait
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         $platform = $entityManager->getConnection()->getDatabasePlatform();
-        $diff = [
-            '@source' => $this->summarize($entityManager, $entity, [], $meta),
-        ];
+        $source = $this->summarize($entityManager, $entity, [], $meta);
+        $changes = [];
 
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
@@ -196,6 +178,7 @@ trait AuditTrait
         $diffLabelResolvers = $configuration->getEntities()[$meta->name]['diff_label_resolvers'] ?? [];
         $resolverLocator = $this->provider->getDiffLabelResolverLocator();
         $jsonTypes = DoctrineHelper::jsonTypes();
+
         foreach ($changeset as $fieldName => [$old, $new]) {
             $o = null;
             $n = null;
@@ -257,21 +240,69 @@ trait AuditTrait
                      * @var ?array $o
                      * @var ?array $n
                      */
-                    $diff[$fieldName] = $this->deepDiff($o, $n);
+                    $changes[$fieldName] = $this->deepDiff($o, $n);
                 } else {
-                    if (null !== $o) {
-                        $diff[$fieldName]['old'] = $o;
-                    }
-
-                    if (null !== $n) {
-                        $diff[$fieldName]['new'] = $n;
-                    }
+                    // Always include both old and new, even when null (e.g. INSERT has old=null)
+                    $changes[$fieldName] = ['old' => $o, 'new' => $n];
                 }
             }
         }
 
-        // Remove empty changes
-        return array_filter($diff, static fn (?array $changes): bool => [] !== $changes);
+        return [
+            'source' => $source,
+            'changes' => $changes,
+        ];
+    }
+
+    /**
+     * Captures the full state of an entity before removal.
+     *
+     * Returns a unified diff envelope where every audited field appears in 'changes'
+     * with old: <current value> and new: null. This allows reconstructing what was
+     * deleted from the audit log alone.
+     *
+     * Only called when Configuration::isFullSnapshotOnRemoveEnabled() is true.
+     * Skipped for ignored columns and embedded classes.
+     *
+     * @throws MappingException
+     * @throws Exception
+     * @throws ConversionException
+     * @throws ORMMappingException
+     */
+    private function snapshot(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): array
+    {
+        $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $source = $this->summarize($entityManager, $entity, [], $meta);
+        $changes = [];
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        $globalIgnoredColumns = $configuration->getIgnoredColumns();
+        $entityIgnoredColumns = $configuration->getEntities()[$meta->name]['ignored_columns'] ?? [];
+
+        foreach ($meta->fieldMappings as $fieldName => $fieldMapping) {
+            if (
+                \in_array($fieldName, $globalIgnoredColumns, true)
+                || \in_array($fieldName, $entityIgnoredColumns, true)
+                || isset($meta->embeddedClasses[$fieldName])
+            ) {
+                continue;
+            }
+
+            $type = $this->getType($meta, $fieldName);
+            if (null === $type) {
+                continue;
+            }
+
+            $value = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
+            $changes[$fieldName] = ['old' => $this->value($platform, $type, $value), 'new' => null];
+        }
+
+        return [
+            'source' => $source,
+            'changes' => $changes,
+        ];
     }
 
     /**

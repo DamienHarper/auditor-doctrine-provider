@@ -27,7 +27,12 @@ final class Query implements QueryInterface
 
     public const string CREATED_AT = 'created_at';
 
-    public const string TRANSACTION_HASH = 'transaction_hash';
+    public const string TRANSACTION_ID = 'transaction_id';
+
+    /**
+     * @deprecated Use TRANSACTION_ID instead
+     */
+    public const string TRANSACTION_HASH = 'transaction_id';
 
     public const string OBJECT_ID = 'object_id';
 

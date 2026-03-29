@@ -66,8 +66,10 @@ final readonly class Reader implements ReaderInterface
             $query->addFilter(new SimpleFilter(Query::USER_ID, $blame_id));
         }
 
-        if (null !== $config['transaction_hash']) {
-            $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, $config['transaction_hash']));
+        // Support both the new 'transaction_id' key and the deprecated 'transaction_hash' alias
+        $transactionId = $config['transaction_id'] ?? $config['transaction_hash'];
+        if (null !== $transactionId) {
+            $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, $transactionId));
         }
 
         if (null !== $config['page'] && null !== $config['page_size']) {
@@ -89,10 +91,10 @@ final readonly class Reader implements ReaderInterface
     }
 
     /**
-     * Returns an array of all audited entries/operations for a given transaction hash
+     * Returns an array of all audited entries/operations for a given transaction ID
      * indexed by entity FQCN.
      */
-    public function getAuditsByTransactionHash(string $transactionHash): array
+    public function getAuditsByTransactionId(string $transactionId): array
     {
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
@@ -101,7 +103,7 @@ final readonly class Reader implements ReaderInterface
         $entities = $configuration->getEntities();
         foreach (array_keys($entities) as $entity) {
             try {
-                $audits = $this->createQuery($entity, ['transaction_hash' => $transactionHash, 'page_size' => null])->execute();
+                $audits = $this->createQuery($entity, ['transaction_id' => $transactionId, 'page_size' => null])->execute();
                 if ([] !== $audits) {
                     $results[$entity] = $audits;
                 }
@@ -111,6 +113,14 @@ final readonly class Reader implements ReaderInterface
         }
 
         return $results;
+    }
+
+    /**
+     * @deprecated Use getAuditsByTransactionId() instead
+     */
+    public function getAuditsByTransactionHash(string $transactionHash): array
+    {
+        return $this->getAuditsByTransactionId($transactionHash);
     }
 
     /**
@@ -175,7 +185,8 @@ final readonly class Reader implements ReaderInterface
                 'object_id' => null,
                 'blame_id' => null,
                 'user_id' => null,
-                'transaction_hash' => null,
+                'transaction_id' => null,
+                'transaction_hash' => null,     // @deprecated use transaction_id
                 'page' => 1,
                 'page_size' => self::PAGE_SIZE,
                 'strict' => true,
@@ -184,6 +195,7 @@ final readonly class Reader implements ReaderInterface
             ->setAllowedTypes('object_id', ['null', 'int', 'string', 'array'])
             ->setAllowedTypes('blame_id', ['null', 'int', 'string', 'array'])
             ->setAllowedTypes('user_id', ['null', 'int', 'string', 'array'])
+            ->setAllowedTypes('transaction_id', ['null', 'string', 'array'])
             ->setAllowedTypes('transaction_hash', ['null', 'string', 'array'])
             ->setAllowedTypes('page', ['null', 'int'])
             ->setAllowedTypes('page_size', ['null', 'int'])
