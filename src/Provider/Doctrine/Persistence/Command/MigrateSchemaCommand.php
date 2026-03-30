@@ -126,8 +126,10 @@ final class MigrateSchemaCommand extends Command
         if ($dumpSql) {
             $io->text('The following SQL statements will be executed:');
             $io->newLine();
-            foreach ($allDdlSqls as $sql) {
-                $io->text(\sprintf('    %s;', $sql));
+            foreach ($allDdlSqls as $tableSqls) {
+                foreach ($tableSqls as $sql) {
+                    $io->text(\sprintf('    %s;', $sql));
+                }
             }
             if ($convertDiffs) {
                 $io->text('    [+ UPDATE queries to convert diffs (executed in PHP batches)]');
@@ -270,9 +272,10 @@ final class MigrateSchemaCommand extends Command
             // 2. Mark all existing rows as schema_version = 1
             $sqls[] = \sprintf('UPDATE %s SET schema_version = 1', $tableName);
 
-            // 3. Migrate blame fields to the new blame JSON column
-            //    Only set blame where at least one legacy field is non-null
-            $sqls[] = $this->buildBlameMigrationSql($tableName, $connection);
+            // 3. Migrate blame fields to the new blame JSON column (only if old columns exist)
+            if ($table->hasColumn('blame_user')) {
+                $sqls[] = $this->buildBlameMigrationSql($tableName, $connection);
+            }
 
             // 4. Drop old indexes for transaction_hash and add new ones
             $hash = md5($tableName);
