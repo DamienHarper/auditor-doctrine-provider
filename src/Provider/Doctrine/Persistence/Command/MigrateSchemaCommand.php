@@ -95,6 +95,7 @@ final class MigrateSchemaCommand extends Command
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
 
         $provider->getConfiguration();
+
         $schemaManager = new SchemaManager($provider);
 
         $tables = $this->collectLegacyTables($provider, $schemaManager);

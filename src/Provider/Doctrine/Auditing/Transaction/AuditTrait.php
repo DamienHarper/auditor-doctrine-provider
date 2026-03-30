@@ -285,12 +285,15 @@ trait AuditTrait
             if (\in_array($fieldName, $globalIgnoredColumns, true)) {
                 continue;
             }
+
             if (\in_array($fieldName, $entityIgnoredColumns, true)) {
                 continue;
             }
+
             if (isset($meta->embeddedClasses[$fieldName])) {
                 continue;
             }
+
             $type = $this->getType($meta, $fieldName);
             if (null === $type) {
                 continue;
