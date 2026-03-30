@@ -280,11 +280,16 @@ final class MigrateSchemaCommand extends Command
                 $sqls[] = $this->buildBlameMigrationSql($tableName, $connection);
             }
 
-            // 4. Drop old indexes for transaction_hash and add new ones
+            // 4. Drop old transaction_hash index (platform-agnostic via schema comparator)
             $hash = md5($tableName);
             $oldTxIdx = 'transaction_hash_'.$hash.'_idx';
             if ($table->hasIndex($oldTxIdx)) {
-                $sqls[] = \sprintf('DROP INDEX %s ON %s', $oldTxIdx, $tableName);
+                $fromSchema = clone $schema;
+                $table->dropIndex($oldTxIdx);
+                $diff = $dbSchemaManager->createComparator()->compareSchemas($fromSchema, $schema);
+                foreach ($platform->getAlterSchemaSQL($diff) as $sql) {
+                    $sqls[] = $sql;
+                }
             }
 
             // New indexes (transaction_id single + composites) are added via audit:schema:update.
