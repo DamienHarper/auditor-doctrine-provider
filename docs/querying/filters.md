@@ -46,14 +46,17 @@ $query->addFilter(new SimpleFilter(Query::OBJECT_ID, '100'));
 
 ### Supported Columns
 
-| Constant                  | Column             |
-|---------------------------|--------------------|
-| `Query::ID`               | `id`               |
-| `Query::TYPE`             | `type`             |
-| `Query::OBJECT_ID`        | `object_id`        |
-| `Query::DISCRIMINATOR`    | `discriminator`    |
-| `Query::TRANSACTION_HASH` | `transaction_hash` |
-| `Query::USER_ID`          | `blame_id`         |
+| Constant                    | Column           |
+|-----------------------------|------------------|
+| `Query::ID`                 | `id`             |
+| `Query::TYPE`               | `type`           |
+| `Query::OBJECT_ID`          | `object_id`      |
+| `Query::DISCRIMINATOR`      | `discriminator`  |
+| `Query::TRANSACTION_ID`     | `transaction_id` |
+| `Query::USER_ID`            | `blame_id`       |
+
+> [!NOTE]
+> `Query::TRANSACTION_HASH` is a deprecated alias for `Query::TRANSACTION_ID`.
 
 ## 📅 DateRangeFilter
 
