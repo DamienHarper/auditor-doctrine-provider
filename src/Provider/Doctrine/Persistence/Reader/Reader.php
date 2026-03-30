@@ -115,9 +115,7 @@ final readonly class Reader implements ReaderInterface
         return $results;
     }
 
-    /**
-     * @deprecated Use getAuditsByTransactionId() instead
-     */
+    #[\Deprecated(message: 'Use getAuditsByTransactionId() instead')]
     public function getAuditsByTransactionHash(string $transactionHash): array
     {
         return $this->getAuditsByTransactionId($transactionHash);

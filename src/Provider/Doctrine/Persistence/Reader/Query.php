@@ -29,9 +29,7 @@ final class Query implements QueryInterface
 
     public const string TRANSACTION_ID = 'transaction_id';
 
-    /**
-     * @deprecated Use TRANSACTION_ID instead
-     */
+    #[\Deprecated(message: 'Use TRANSACTION_ID instead')]
     public const string TRANSACTION_HASH = 'transaction_id';
 
     public const string OBJECT_ID = 'object_id';

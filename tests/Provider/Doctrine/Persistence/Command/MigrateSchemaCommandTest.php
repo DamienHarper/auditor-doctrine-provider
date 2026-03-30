@@ -133,7 +133,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         foreach ($schema->getTables() as $table) {
             $name = $table->getName();
-            if (!str_ends_with($name, '_audit')) {
+            if (!str_ends_with((string) $name, '_audit')) {
                 continue;
             }
 

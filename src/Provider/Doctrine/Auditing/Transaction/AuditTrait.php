@@ -281,15 +281,16 @@ trait AuditTrait
         $globalIgnoredColumns = $configuration->getIgnoredColumns();
         $entityIgnoredColumns = $configuration->getEntities()[$meta->name]['ignored_columns'] ?? [];
 
-        foreach ($meta->fieldMappings as $fieldName => $fieldMapping) {
-            if (
-                \in_array($fieldName, $globalIgnoredColumns, true)
-                || \in_array($fieldName, $entityIgnoredColumns, true)
-                || isset($meta->embeddedClasses[$fieldName])
-            ) {
+        foreach (array_keys($meta->fieldMappings) as $fieldName) {
+            if (\in_array($fieldName, $globalIgnoredColumns, true)) {
                 continue;
             }
-
+            if (\in_array($fieldName, $entityIgnoredColumns, true)) {
+                continue;
+            }
+            if (isset($meta->embeddedClasses[$fieldName])) {
+                continue;
+            }
             $type = $this->getType($meta, $fieldName);
             if (null === $type) {
                 continue;

@@ -94,8 +94,7 @@ final class MigrateSchemaCommand extends Command
         /** @var DoctrineProvider $provider */
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
 
-        /** @var Configuration $configuration */
-        $configuration = $provider->getConfiguration();
+        $provider->getConfiguration();
         $schemaManager = new SchemaManager($provider);
 
         $tables = $this->collectLegacyTables($provider, $schemaManager);
@@ -108,13 +107,14 @@ final class MigrateSchemaCommand extends Command
         }
 
         $io->text(\sprintf('Found <info>%d</info> audit table(s) to migrate:', \count($tables)));
-        foreach ($tables as $tableName => $_connection) {
+        foreach (array_keys($tables) as $tableName) {
             $io->text(\sprintf('  - %s', $tableName));
         }
+
         $io->newLine();
 
         // Generate DDL statements per table
-        $allDdlSqls = $this->generateDdlStatements($tables, $configuration);
+        $allDdlSqls = $this->generateDdlStatements($tables);
 
         if ([] === $allDdlSqls && !$convertDiffs) {
             $io->success('Schema is already up to date. Nothing to migrate.');
@@ -131,9 +131,11 @@ final class MigrateSchemaCommand extends Command
                     $io->text(\sprintf('    %s;', $sql));
                 }
             }
+
             if ($convertDiffs) {
                 $io->text('    [+ UPDATE queries to convert diffs (executed in PHP batches)]');
             }
+
             $io->newLine();
         }
 
@@ -235,7 +237,7 @@ final class MigrateSchemaCommand extends Command
      *
      * @return array<string, list<string>>
      */
-    private function generateDdlStatements(array $tables, Configuration $configuration): array
+    private function generateDdlStatements(array $tables): array
     {
         $allSqls = [];
 
