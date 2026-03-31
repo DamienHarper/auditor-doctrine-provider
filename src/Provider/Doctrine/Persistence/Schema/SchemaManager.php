@@ -30,6 +30,41 @@ final readonly class SchemaManager
 {
     public function __construct(private DoctrineProvider $provider) {}
 
+    /**
+     * Returns the names of audit tables that still carry the legacy v1 schema (transaction_hash
+     * column present). Used by UpdateSchemaCommand to refuse execution until migration is done.
+     *
+     * @return list<string>
+     */
+    public function collectLegacyAuditTables(): array
+    {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+
+        /** @var StorageService[] $storageServices */
+        $storageServices = $this->provider->getStorageServices();
+
+        $legacy = [];
+
+        foreach ($storageServices as $storageService) {
+            $connection = $storageService->getEntityManager()->getConnection();
+            $schema = $connection->createSchemaManager()->introspectSchema();
+
+            foreach (array_keys($configuration->getEntities()) as $entity) {
+                $auditTableName = $this->resolveAuditTableName($entity, $configuration);
+                if (null === $auditTableName || !$schema->hasTable($auditTableName)) {
+                    continue;
+                }
+
+                if ($schema->getTable($auditTableName)->hasColumn('transaction_hash')) {
+                    $legacy[] = $auditTableName;
+                }
+            }
+        }
+
+        return array_values(array_unique($legacy));
+    }
+
     public function updateAuditSchema(?array $sqls = null, ?callable $callback = null): void
     {
         if (null === $sqls) {

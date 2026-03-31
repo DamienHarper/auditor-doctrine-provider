@@ -62,6 +62,25 @@ final class UpdateSchemaCommand extends Command
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
         $updateManager = new SchemaManager($provider);
 
+        // Refuse to run if any audit table still has the legacy v1 schema (transaction_hash column
+        // present). Running audit:schema:update on a v1 table would silently drop transaction_hash,
+        // blame_user and related columns, destroying data that audit:schema:migrate can convert.
+        $legacyTables = $updateManager->collectLegacyAuditTables();
+        if ([] !== $legacyTables) {
+            $io->error([
+                \sprintf('%d audit table(s) are still on the legacy v1 schema:', \count($legacyTables)),
+                ...array_map(static fn (string $t): string => '  - '.$t, $legacyTables),
+                '',
+                'Running audit:schema:update on v1 tables would silently drop transaction_hash and',
+                'related columns, destroying data that can be preserved.',
+                '',
+                'Run audit:schema:migrate first, then re-run audit:schema:update.',
+            ]);
+            $this->release();
+
+            return Command::FAILURE;
+        }
+
         $sqls = $updateManager->getUpdateAuditSchemaSql();
 
         $count = 0;
