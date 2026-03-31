@@ -56,7 +56,8 @@ $query->addFilter(new SimpleFilter(Query::OBJECT_ID, '100'));
 | `Query::USER_ID`            | `blame_id`       |
 
 > [!NOTE]
-> `Query::TRANSACTION_HASH` is a deprecated alias for `Query::TRANSACTION_ID`.
+> `Query::TRANSACTION_HASH` is kept for backward compatibility and maps to `transaction_id`
+> (same as `Query::TRANSACTION_ID`). Use `Query::TRANSACTION_ID` in new code.
 
 ## 📅 DateRangeFilter
 
