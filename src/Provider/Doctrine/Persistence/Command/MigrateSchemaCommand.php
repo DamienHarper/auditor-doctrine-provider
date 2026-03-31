@@ -409,9 +409,9 @@ final class MigrateSchemaCommand extends Command
      * Destructive: drop legacy columns (transaction_hash, blame_user, …).
      *
      * @param array<string, Connection> $tables
-     * @param bool $dropTransactionHash Whether to include transaction_hash in the destructive phase.
-     *                                  Pass false when --convert-diffs runs without --convert-transaction-hash
-     *                                  so that transaction_hash is preserved for a subsequent conversion run.
+     * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase.
+     *                                                       Pass false when --convert-diffs runs without --convert-transaction-hash
+     *                                                       so that transaction_hash is preserved for a subsequent conversion run.
      *
      * @return array<string, array{additive: list<string>, destructive: list<string>}>
      */

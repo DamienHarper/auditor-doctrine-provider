@@ -12,12 +12,6 @@
   ],
   "minimum-stability": "dev",
   "prefer-stable": true,
-  "repositories": [
-    {
-      "type": "path",
-      "url": "../auditor"
-    }
-  ],
   "require": {
     "php": ">=8.4",
     "damienharper/auditor": "^5.0@dev",
