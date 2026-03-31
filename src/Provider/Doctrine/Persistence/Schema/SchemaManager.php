@@ -55,6 +55,7 @@ final readonly class SchemaManager
                 if (null === $auditTableName) {
                     continue;
                 }
+
                 if (!$schema->hasTable($auditTableName)) {
                     continue;
                 }
@@ -411,13 +412,20 @@ final readonly class SchemaManager
                 $table->dropPrimaryKey();
                 DoctrineHelper::setPrimaryKey($table, $columnName);
             } else {
-                if ($table->hasIndex($options['name'])) {
-                    $table->dropIndex($options['name']);
-                }
-
                 // Composite indexes carry an explicit 'columns' list; single-column indexes derive
                 // from the array key (which is the column name for non-composite entries).
                 $columns = $options['columns'] ?? [$columnName];
+
+                // Skip drop+recreate when the index already exists with the same columns — avoids
+                // generating DROP INDEX SQL (MySQL requires ON <table> which DBAL omits on ALTER).
+                if ($table->hasIndex($options['name'])) {
+                    if ($table->getIndex($options['name'])->getIndexedColumns() === $columns) {
+                        continue;
+                    }
+
+                    $table->dropIndex($options['name']);
+                }
+
                 $table->addIndex(
                     $columns,
                     $options['name'],
