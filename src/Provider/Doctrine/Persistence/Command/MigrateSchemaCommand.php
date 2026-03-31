@@ -392,6 +392,7 @@ final class MigrateSchemaCommand extends Command
                 if ($table->hasColumn('transaction_hash')) {
                     continue;
                 }
+
                 if (!$table->hasColumn('schema_version')) {
                     continue;
                 }
@@ -511,7 +512,7 @@ final class MigrateSchemaCommand extends Command
         $platform = $connection->getDatabasePlatform();
         $jsonBuild = match (true) {
             $platform instanceof MySQLPlatform, $platform instanceof MariaDBPlatform => "JSON_OBJECT('username', blame_user, 'user_fqdn', blame_user_fqdn, 'user_firewall', blame_user_firewall, 'ip', ip)",
-            $platform instanceof PostgreSQLPlatform => "json_build_object('username', blame_user, 'user_fqdn', blame_user_fqdn, 'user_firewall', blame_user_firewall, 'ip', ip)::text",
+            $platform instanceof PostgreSQLPlatform => "json_build_object('username', blame_user, 'user_fqdn', blame_user_fqdn, 'user_firewall', blame_user_firewall, 'ip', ip)::jsonb",
             $platform instanceof SQLitePlatform => "json_object('username', blame_user, 'user_fqdn', blame_user_fqdn, 'user_firewall', blame_user_firewall, 'ip', ip)",
             default => "json_object('username', blame_user, 'user_fqdn', blame_user_fqdn, 'user_firewall', blame_user_firewall, 'ip', ip)",
         };

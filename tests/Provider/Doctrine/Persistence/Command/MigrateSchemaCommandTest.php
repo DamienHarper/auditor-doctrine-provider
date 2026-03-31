@@ -10,6 +10,8 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
+use Doctrine\DBAL\Platforms\MariaDBPlatform;
+use Doctrine\DBAL\Platforms\MySQLPlatform;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -139,9 +141,15 @@ final class MigrateSchemaCommandTest extends TestCase
 
             if ($table->hasColumn('schema_version') && !$table->hasColumn('transaction_hash')) {
                 // Drop all indexes first (required by SQLite before dropping indexed columns)
+                $platform = $connection->getDatabasePlatform();
                 foreach ($table->getIndexes() as $index) {
                     if (!$index->isPrimary()) {
-                        $connection->executeStatement(\sprintf('DROP INDEX IF EXISTS %s', $index->getName()));
+                        // MySQL/MariaDB require ON <table>; no IF EXISTS support for DROP INDEX
+                        if ($platform instanceof MySQLPlatform || $platform instanceof MariaDBPlatform) {
+                            $connection->executeStatement(\sprintf('DROP INDEX %s ON %s', $index->getName(), $name));
+                        } else {
+                            $connection->executeStatement(\sprintf('DROP INDEX IF EXISTS %s', $index->getName()));
+                        }
                     }
                 }
 
