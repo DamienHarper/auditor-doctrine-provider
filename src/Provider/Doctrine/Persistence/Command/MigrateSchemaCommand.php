@@ -108,20 +108,44 @@ final class MigrateSchemaCommand extends Command
         $schemaManager = new SchemaManager($provider);
         $tables = $this->collectLegacyTables($provider, $schemaManager);
 
-        if ([] === $tables) {
+        // When --convert-diffs is requested but DDL is already complete (transaction_hash already
+        // dropped), find tables that still have schema_version=1 rows so diffs can be converted
+        // independently of the hash conversion step.
+        $diffsOnlyTables = [];
+        if ($convertDiffs && [] === $tables) {
+            $diffsOnlyTables = $this->collectDiffsConversionTables($provider, $schemaManager);
+        }
+
+        if ([] === $tables && [] === $diffsOnlyTables) {
             $io->success('All audit tables are already at schema version 2. Nothing to migrate.');
             $this->release();
 
             return Command::SUCCESS;
         }
 
-        $io->text(\sprintf('Found <info>%d</info> audit table(s) to migrate:', \count($tables)));
-        foreach (array_keys($tables) as $tableName) {
-            $io->text(\sprintf('  - %s', $tableName));
+        if ([] !== $tables) {
+            $io->text(\sprintf('Found <info>%d</info> audit table(s) to migrate:', \count($tables)));
+            foreach (array_keys($tables) as $tableName) {
+                $io->text(\sprintf('  - %s', $tableName));
+            }
+            $io->newLine();
+        } elseif ([] !== $diffsOnlyTables) {
+            $io->text(\sprintf('Found <info>%d</info> table(s) with unconverted diffs (schema_version=1):', \count($diffsOnlyTables)));
+            foreach (array_keys($diffsOnlyTables) as $tableName) {
+                $io->text(\sprintf('  - %s', $tableName));
+            }
+            $io->newLine();
         }
-        $io->newLine();
 
-        $allDdlSqls = $this->generateDdlStatements($tables);
+        // Drop transaction_hash only when --convert-transaction-hash is used OR when no conversion
+        // flag is given (explicit data-loss acceptance). When --convert-diffs runs alone, preserve
+        // transaction_hash so --convert-transaction-hash can still be run afterwards.
+        $dropTransactionHash = $convertTransactionHash || !$convertDiffs;
+
+        $allDdlSqls = $this->generateDdlStatements($tables, $dropTransactionHash);
+
+        // Tables to use for diffs conversion: DDL tables + diffs-only tables (already migrated DDL).
+        $allDiffsTables = array_merge($tables, $diffsOnlyTables);
 
         $hasAdditive = [] !== array_filter(array_column($allDdlSqls, 'additive'));
         $hasDestructive = [] !== array_filter(array_column($allDdlSqls, 'destructive'));
@@ -163,8 +187,9 @@ final class MigrateSchemaCommand extends Command
         if (!$force) {
             if (!$dumpSql) {
                 $commandName = (string) $this->getName();
+                $totalTableCount = \count($tables) + \count($diffsOnlyTables);
                 $io->caution([
-                    \sprintf('Found <info>%d</info> audit table(s) requiring schema migration.', \count($tables)),
+                    \sprintf('Found <info>%d</info> audit table(s) requiring migration.', $totalTableCount),
                     '',
                     'Please run with one or more of the following options:',
                     '',
@@ -201,11 +226,11 @@ final class MigrateSchemaCommand extends Command
             $this->convertTransactionHashAcrossTables($tables, $limit, $io);
         }
 
-        // Per-table diffs conversion
+        // Per-table diffs conversion (includes tables whose DDL was already applied in a previous run)
         if ($convertDiffs) {
             $io->newLine();
             $io->text('<comment>Converting legacy diffs...</comment>');
-            $this->convertDiffsAcrossTables($tables, $limit, $io);
+            $this->convertDiffsAcrossTables($allDiffsTables, $limit, $io);
         }
 
         // Phase 2: destructive DDL — drop legacy columns
@@ -240,10 +265,16 @@ final class MigrateSchemaCommand extends Command
                 $io->note('Diffs conversion complete. All migrated rows now have schema_version = 2.');
             }
 
-            if (!$convertTransactionHash) {
+            // Only warn about transaction_hash data loss when DDL tables were actually processed
+            // (i.e., transaction_hash was present and dropped in this run).
+            if ([] !== $tables && !$convertTransactionHash && $dropTransactionHash) {
                 $io->note(
                     'Legacy transaction_hash values have been dropped without conversion. '
                     .'To preserve transactional grouping, use --convert-transaction-hash before dropping legacy columns.',
+                );
+            } elseif ([] !== $tables && !$convertTransactionHash && !$dropTransactionHash) {
+                $io->note(
+                    'transaction_hash has been preserved. Run with --convert-transaction-hash to convert it to transaction_id (ULID).',
                 );
             }
         }
@@ -296,6 +327,58 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
+     * Returns audit tables that have schema_version=1 rows but whose DDL migration is already
+     * complete (transaction_hash has already been dropped). Used to allow --convert-diffs to run
+     * after --convert-transaction-hash has been applied in a previous invocation.
+     *
+     * @return array<string, Connection> keyed by table name
+     */
+    private function collectDiffsConversionTables(DoctrineProvider $provider, SchemaManager $schemaManager): array
+    {
+        /** @var StorageService[] $storageServices */
+        $storageServices = $provider->getStorageServices();
+        $tables = [];
+
+        /** @var Configuration $configuration */
+        $configuration = $provider->getConfiguration();
+
+        foreach ($storageServices as $storageService) {
+            $connection = $storageService->getEntityManager()->getConnection();
+            $dbSchemaManager = $connection->createSchemaManager();
+            $schema = $dbSchemaManager->introspectSchema();
+
+            foreach (array_keys($configuration->getEntities()) as $entity) {
+                $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
+                if (null === $auditTableName) {
+                    continue;
+                }
+
+                if (!$schema->hasTable($auditTableName)) {
+                    continue;
+                }
+
+                $table = $schema->getTable($auditTableName);
+
+                // Only consider tables whose DDL is fully applied (no legacy transaction_hash column)
+                // but that still carry unconverted rows (schema_version=1).
+                if ($table->hasColumn('transaction_hash') || !$table->hasColumn('schema_version')) {
+                    continue;
+                }
+
+                $count = $connection->fetchOne(
+                    \sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $auditTableName),
+                );
+
+                if (is_numeric($count) && (int) $count > 0) {
+                    $tables[$auditTableName] = $connection;
+                }
+            }
+        }
+
+        return $tables;
+    }
+
+    /**
      * Generates additive and destructive DDL SQL statements per legacy audit table.
      *
      * Additive: add new columns (idempotent — skips already-present columns),
@@ -303,10 +386,13 @@ final class MigrateSchemaCommand extends Command
      * Destructive: drop legacy columns (transaction_hash, blame_user, …).
      *
      * @param array<string, Connection> $tables
+     * @param bool $dropTransactionHash Whether to include transaction_hash in the destructive phase.
+     *                                  Pass false when --convert-diffs runs without --convert-transaction-hash
+     *                                  so that transaction_hash is preserved for a subsequent conversion run.
      *
      * @return array<string, array{additive: list<string>, destructive: list<string>}>
      */
-    private function generateDdlStatements(array $tables): array
+    private function generateDdlStatements(array $tables, bool $dropTransactionHash = true): array
     {
         $allSqls = [];
 
@@ -365,6 +451,11 @@ final class MigrateSchemaCommand extends Command
 
             // 4. Drop legacy columns (destructive — executed after conversions, and only when --limit is not set)
             foreach (self::LEGACY_COLUMNS as $colName) {
+                // Skip transaction_hash if it should be preserved for a subsequent conversion run.
+                if ('transaction_hash' === $colName && !$dropTransactionHash) {
+                    continue;
+                }
+
                 if ($table->hasColumn($colName)) {
                     $fromSchema = clone $schema;
                     $table->dropColumn($colName);
