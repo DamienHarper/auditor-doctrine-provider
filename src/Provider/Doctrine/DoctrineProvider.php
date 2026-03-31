@@ -21,6 +21,7 @@ use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Provider\ProviderInterface;
 use DH\Auditor\Provider\Service\AuditingServiceInterface;
 use DH\Auditor\Tests\Provider\Doctrine\DoctrineProviderTest;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Statement;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Events;
@@ -39,17 +40,15 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
      * @var array<string, string>
      */
     private const array FIELDS = [
+        'schema_version' => '?',
         'type' => '?',
         'object_id' => '?',
         'discriminator' => '?',
-        'transaction_hash' => '?',
+        'transaction_id' => '?',
         'diffs' => '?',
         'extra_data' => '?',
         'blame_id' => '?',
-        'blame_user' => '?',
-        'blame_user_fqdn' => '?',
-        'blame_user_firewall' => '?',
-        'ip' => '?',
+        'blame' => '?',
         'created_at' => '?',
     ];
 
@@ -181,19 +180,33 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $entity = $payload['entity'];
         unset($payload['table'], $payload['entity']);
 
-        $keys = array_keys(self::FIELDS);
-        $query = \sprintf(
-            'INSERT INTO %s (%s) VALUES (%s)',
-            $auditTable,
-            implode(', ', $keys),
-            implode(', ', array_values(self::FIELDS))
-        );
-
         /** @var StorageService $storageService */
         $storageService = $this->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
-        $statement = $this->preparedStatements[$cacheKey] ??= $connection->prepare($query);
+
+        $keys = array_keys(self::FIELDS);
+
+        if (!isset($this->preparedStatements[$cacheKey])) {
+            // PostgreSQL requires an explicit ::jsonb cast for jsonb columns in prepared statements
+            // (the driver otherwise infers the placeholder type as text, causing a type mismatch).
+            $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
+            $placeholders = array_map(
+                static fn (string $col): string => \in_array($col, ['diffs', 'extra_data', 'blame'], true)
+                    ? '?'.$jsonCast
+                    : '?',
+                $keys
+            );
+            $query = \sprintf(
+                'INSERT INTO %s (%s) VALUES (%s)',
+                $auditTable,
+                implode(', ', $keys),
+                implode(', ', $placeholders)
+            );
+            $this->preparedStatements[$cacheKey] = $connection->prepare($query);
+        }
+
+        $statement = $this->preparedStatements[$cacheKey];
 
         foreach ($payload as $key => $value) {
             $statement->bindValue(array_search($key, $keys, true) + 1, $value);

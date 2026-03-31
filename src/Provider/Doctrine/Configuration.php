@@ -37,6 +37,8 @@ final class Configuration implements ConfigurationInterface
 
     private readonly bool $utf8Convert;
 
+    private readonly bool $fullSnapshotOnRemove;
+
     private bool $initialized = false;
 
     /**
@@ -66,6 +68,7 @@ final class Configuration implements ConfigurationInterface
         $this->isViewerEnabled = self::isViewerEnabledInConfig($config['viewer']);
         $this->viewerPageSize = self::getViewerPageSizeFromConfig($config['viewer']);
         $this->utf8Convert = $config['utf8_convert'];
+        $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
         $this->storageMapper = $config['storage_mapper'];
     }
 
@@ -159,6 +162,21 @@ final class Configuration implements ConfigurationInterface
     public function isUtf8ConvertEnabled(): bool
     {
         return $this->utf8Convert;
+    }
+
+    /**
+     * Whether to capture the full field snapshot of a removed entity.
+     *
+     * When enabled, the audit entry for a REMOVE operation stores the complete state of the
+     * entity before deletion (all audited fields with old: <value>, new: null). This allows
+     * reconstructing what was deleted from the audit log alone.
+     *
+     * Disabled by default because iterating all field mappings via reflection has a measurable
+     * cost on entities with many fields. Enable only when audit trail completeness is required.
+     */
+    public function isFullSnapshotOnRemoveEnabled(): bool
+    {
+        return $this->fullSnapshotOnRemove;
     }
 
     /**
@@ -334,6 +352,7 @@ final class Configuration implements ConfigurationInterface
                 'viewer' => true,
                 'storage_mapper' => null,
                 'utf8_convert' => false,
+                'full_snapshot_on_remove' => false,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -344,6 +363,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('viewer', ['bool', 'array'])
             ->setAllowedTypes('storage_mapper', ['null', 'string', 'callable'])
             ->setAllowedTypes('utf8_convert', 'bool')
+            ->setAllowedTypes('full_snapshot_on_remove', 'bool')
         ;
     }
 }

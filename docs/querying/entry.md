@@ -16,93 +16,125 @@ use DH\Auditor\Model\Entry;
 
 `Entry` exposes its data through **virtual properties** (not getter methods). Access them directly:
 
-| Property           | Type                   | Description                                                      |
-|--------------------|------------------------|------------------------------------------------------------------|
-| `$id`              | `int`                  | Auto-increment primary key of the audit entry                    |
-| `$type`            | `string`               | Action type: `insert`, `update`, `remove`, `associate`, `dissociate` |
-| `$objectId`        | `string`               | Primary key of the audited entity                                |
-| `$discriminator`   | `string\|null`         | Entity class (used in inheritance hierarchies)                   |
-| `$transactionHash` | `string\|null`         | Hash grouping changes from the same flush batch                  |
-| `$diffs`           | `array\|null`          | Already-decoded change data (do **not** call `json_decode()`)    |
-| `$extraData`       | `array\|null`          | Already-decoded extra data (do **not** call `json_decode()`)     |
-| `$userId`          | `string\|null`         | Identifier of the user who made the change (`blame_id`)          |
-| `$username`        | `string\|null`         | Display name of the user (`blame_user`)                          |
-| `$userFqdn`        | `string\|null`         | Class name of the user object (`blame_user_fqdn`)                |
-| `$userFirewall`    | `string\|null`         | Context/firewall name (`blame_user_firewall`)                    |
-| `$ip`              | `string\|null`         | Client IP address                                                |
-| `$createdAt`       | `\DateTimeImmutable`   | Timestamp of when the audit entry was created                    |
+| Property         | Type                   | Description                                                          |
+|------------------|------------------------|----------------------------------------------------------------------|
+| `$id`            | `int`                  | Auto-increment primary key of the audit entry                        |
+| `$schemaVersion` | `int`                  | Diffs format version: `1` (legacy) or `2` (current). Defaults to `1`.|
+| `$type`          | `string`               | Action type: `insert`, `update`, `remove`, `associate`, `dissociate` |
+| `$objectId`      | `string`               | Primary key of the audited entity                                    |
+| `$discriminator` | `string\|null`         | Entity class (used in inheritance hierarchies)                       |
+| `$transactionId` | `string\|null`         | ULID grouping changes from the same flush batch                      |
+| `$extraData`     | `array\|null`          | Already-decoded extra data (do **not** call `json_decode()`)         |
+| `$userId`        | `int\|string\|null`    | Identifier of the user who made the change (`blame_id`)              |
+| `$blame`         | `array\|null`          | Decoded blame context: `username`, `user_fqdn`, `user_firewall`, `ip`|
+| `$username`      | `string\|null`         | Convenience shortcut for `$blame['username']`                        |
+| `$userFqdn`      | `string\|null`         | Convenience shortcut for `$blame['user_fqdn']`                       |
+| `$userFirewall`  | `string\|null`         | Convenience shortcut for `$blame['user_firewall']`                   |
+| `$ip`            | `string\|null`         | Convenience shortcut for `$blame['ip']`                              |
+| `$createdAt`     | `\DateTimeImmutable`   | Timestamp of when the audit entry was created                        |
 
 > [!IMPORTANT]
 > - `$entry->type` is a plain `string` (e.g. `'insert'`, `'update'`), not an enum.
-> - `$entry->extraData` and `$entry->diffs` are **already decoded** — they return `?array`. Never call `json_decode()` on them.
+> - `$entry->extraData` is **already decoded** — it returns `?array`. Never call `json_decode()` on it.
 
 ## 🔍 Reading Diffs
 
-```php
-<?php
+Use `getDiffs()` to access the field-level change data:
 
+```php
 $audits = $reader->createQuery(Post::class, ['object_id' => 42])->execute();
 
 foreach ($audits as $entry) {
-    if ('insert' === $entry->type) {
-        // Insert diffs: field => ['new' => value]
-        foreach ($entry->diffs ?? [] as $field => $change) {
-            if (str_starts_with($field, '@')) {
-                continue;
-            }
-            echo "  Set $field to: " . $change['new'] . "\n";
-        }
-    }
-
-    if ('update' === $entry->type) {
-        // Update diffs: field => ['old' => value, 'new' => value]
-        foreach ($entry->diffs ?? [] as $field => $change) {
-            $old = $change['old'] ?? '(null)';
-            $new = $change['new'] ?? '(null)';
-            echo "  $field: $old → $new\n";
-        }
-    }
-
-    if ('remove' === $entry->type) {
-        // Remove diffs: summary of the deleted entity
-        echo "  Deleted: " . ($entry->diffs['label'] ?? '-') . " (id=" . ($entry->diffs['id'] ?? '-') . ")\n";
+    // getDiffs() returns the 'changes' sub-array for schema v2 entries
+    // and the raw diff array for legacy schema v1 entries
+    foreach ($entry->getDiffs() as $field => $change) {
+        $old = $change['old'] ?? '(null)';
+        $new = $change['new'] ?? '(null)';
+        echo "  $field: $old → $new\n";
     }
 }
 ```
 
-### Diff Structure by Action Type
+### Diff Structure (schema version 2)
 
-**`insert`**
+All entry types use the same unified envelope. `getDiffs()` returns the `changes` sub-array directly.
+
+**`insert`** — `old` is always `null`:
 ```json
 {
-  "@source": { "id": 42, "class": "App\\Entity\\Post", "label": "Hello World", "table": "posts" },
-  "title":   { "new": "Hello World" },
-  "content": { "new": "My first post." }
+    "title":   { "old": null, "new": "Hello World" },
+    "content": { "old": null, "new": "My first post." }
 }
 ```
 
-**`update`**
+**`update`**:
 ```json
 {
-  "title": { "old": "Hello World", "new": "Hello auditor!" }
+    "title": { "old": "Hello World", "new": "Hello auditor!" }
 }
 ```
 
-**`remove`**
+**`remove`** — `new` is always `null`; full snapshot stored in `old`:
 ```json
 {
-  "id":    42,
-  "class": "App\\Entity\\Post",
-  "label": "Hello auditor!",
-  "table": "posts"
+    "title":   { "old": "Hello auditor!", "new": null },
+    "content": { "old": "My first post.", "new": null }
 }
 ```
 
-**`associate` / `dissociate`**
+**`associate` / `dissociate`** — no `changes` key; `getDiffs()` returns the full envelope:
 ```json
 {
-  "source": { "id": 1, "class": "App\\Entity\\Post", "label": "Post #1", "table": "posts", "field": "tags" },
-  "target": { "id": 5, "class": "App\\Entity\\Tag", "table": "post_tag" }
+    "source":         { "id": "1", "class": "App\\Entity\\Post", "label": "Post #1", "table": "posts", "field": "tags" },
+    "target":         { "id": "5", "class": "App\\Entity\\Tag",  "label": "php",     "table": "tag",   "field": "posts" },
+    "is_owning_side": true,
+    "join_table":     "post__tag"
+}
+```
+
+### Source and Target Metadata
+
+For schema v2 entries, use `getDiffSource()` and `getDiffTarget()`:
+
+```php
+// getDiffSource(): entity metadata at the time of the operation (all types)
+$source = $entry->getDiffSource();
+// ['class' => 'App\Entity\Post', 'id' => '42', 'label' => 'Hello World', 'table' => 'posts']
+
+// getDiffTarget(): second entity in associate/dissociate entries
+$target = $entry->getDiffTarget();
+// ['class' => 'App\Entity\Tag', 'field' => 'posts', 'id' => '5', 'label' => 'php', 'table' => 'tag']
+```
+
+Both return `null` for legacy schema v1 entries.
+
+### Legacy Diff Structure (schema version 1)
+
+`getDiffs()` returns the raw decoded array as-is (minus the internal `@source` key):
+
+**`insert`**:
+```json
+{
+    "@source": { "id": 42, "class": "App\\Entity\\Post", "label": "Hello World", "table": "posts" },
+    "title":   { "new": "Hello World" },
+    "content": { "new": "My first post." }
+}
+```
+
+**`update`**:
+```json
+{
+    "title": { "old": "Hello World", "new": "Hello auditor!" }
+}
+```
+
+**`remove`**:
+```json
+{
+    "id":    42,
+    "class": "App\\Entity\\Post",
+    "label": "Hello auditor!",
+    "table": "posts"
 }
 ```
 
@@ -145,9 +177,12 @@ $entries = $reader->createQuery(App\Entity\Post::class, [
 ])->execute();
 
 foreach ($entries as $entry) {
+    $source = $entry->getDiffSource();
+
     printf(
-        "[%s] Post #%s — by %s (%s) from %s at %s\n",
+        "[%s] %s #%s — by %s (%s) from %s at %s\n",
         $entry->type,
+        $source['class'] ?? $entity,
         $entry->objectId,
         $entry->username ?? 'anonymous',
         $entry->userId ?? '-',
@@ -155,13 +190,11 @@ foreach ($entries as $entry) {
         $entry->createdAt->format('Y-m-d H:i:s')
     );
 
-    foreach ($entry->diffs ?? [] as $field => $change) {
-        if (str_starts_with($field, '@')) {
+    foreach ($entry->getDiffs() as $field => $change) {
+        if (!isset($change['old'], $change['new'])) {
             continue;
         }
-        $old = $change['old'] ?? null;
-        $new = $change['new'] ?? null;
-        printf("  %s: %s → %s\n", $field, $old ?? '(null)', $new ?? '(null)');
+        printf("  %s: %s → %s\n", $field, $change['old'] ?? '(null)', $change['new'] ?? '(null)');
     }
 }
 ```

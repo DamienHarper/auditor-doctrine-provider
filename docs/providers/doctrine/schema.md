@@ -13,52 +13,81 @@ The schema can be managed in two ways:
 1. **Automatically** — via Doctrine's `postGenerateSchemaTable` event (integrates with `doctrine:schema:update` / Migrations)
 2. **Manually** — by calling `SchemaManager::updateAuditSchema()` directly
 
-## 🏗️ Audit Table Structure
+## 🏗️ Audit Table Structure (schema version 2)
 
-Each audit table has the following structure:
+Each audit table created by the current provider has the following structure:
 
 ```sql
 CREATE TABLE posts_audit (
-    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    type                VARCHAR(10)   NOT NULL,
-    object_id           VARCHAR(255)  NOT NULL,
-    discriminator       VARCHAR(255)  NULL,
-    transaction_hash    VARCHAR(40)   NULL,
-    diffs               JSON          NULL,
-    extra_data          JSON          NULL,
-    blame_id            VARCHAR(255)  NULL,
-    blame_user          VARCHAR(255)  NULL,
-    blame_user_fqdn     VARCHAR(255)  NULL,
-    blame_user_firewall VARCHAR(100)  NULL,
-    ip                  VARCHAR(45)   NULL,
-    created_at          DATETIME      NOT NULL,
+    id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    schema_version   TINYINT UNSIGNED NOT NULL DEFAULT 2,
+    type             VARCHAR(10)  NOT NULL,
+    object_id        VARCHAR(255) NOT NULL,
+    discriminator    VARCHAR(255) NULL,
+    transaction_id   CHAR(26)     NULL,
+    diffs            JSON         NULL,
+    extra_data       JSON         NULL,
+    blame_id         VARCHAR(255) NULL,
+    blame            JSON         NULL,
+    created_at       DATETIME     NOT NULL,
 
-    INDEX type_idx              (type),
-    INDEX object_id_idx         (object_id),
-    INDEX discriminator_idx     (discriminator),
-    INDEX transaction_hash_idx  (transaction_hash),
-    INDEX blame_id_idx          (blame_id),
-    INDEX created_at_idx        (created_at)
+    INDEX type_idx            (type),
+    INDEX object_id_type_idx  (object_id, type),
+    INDEX discriminator_idx   (discriminator),
+    INDEX transaction_id_idx  (transaction_id),
+    INDEX blame_id_created_at_idx (blame_id, created_at),
+    INDEX created_at_idx      (created_at)
 );
 ```
 
 ### Column Details
 
-| Column                | Type          | Description                                                     |
-|-----------------------|---------------|-----------------------------------------------------------------|
-| `id`                  | BIGINT (PK)   | Auto-increment primary key                                      |
-| `type`                | VARCHAR(10)   | Action: insert, update, remove, associate, dissociate           |
-| `object_id`           | VARCHAR(255)  | The primary key of the audited entity                           |
-| `discriminator`       | VARCHAR(255)  | Entity class (used in inheritance hierarchies)                  |
-| `transaction_hash`    | VARCHAR(40)   | Groups changes from the same flush batch                        |
-| `diffs`               | JSON          | JSON-encoded change data                                        |
-| `extra_data`          | JSON          | Custom extra data (populated via `LifecycleEvent` listener)     |
-| `blame_id`            | VARCHAR(255)  | User identifier who made the change                             |
-| `blame_user`          | VARCHAR(255)  | Username/display name                                           |
-| `blame_user_fqdn`     | VARCHAR(255)  | Full class name of the user object                              |
-| `blame_user_firewall` | VARCHAR(100)  | Context/firewall name                                           |
-| `ip`                  | VARCHAR(45)   | Client IP address (IPv4 or IPv6)                                |
-| `created_at`          | DATETIME      | When the audit entry was created                                |
+| Column           | Type                | Description                                                       |
+|------------------|---------------------|-------------------------------------------------------------------|
+| `id`             | BIGINT (PK)         | Auto-increment primary key                                        |
+| `schema_version` | TINYINT             | Diffs format version: `1` (legacy) or `2` (current)              |
+| `type`           | VARCHAR(10)         | Action: insert, update, remove, associate, dissociate             |
+| `object_id`      | VARCHAR(255)        | The primary key of the audited entity                             |
+| `discriminator`  | VARCHAR(255)        | Entity class (used in inheritance hierarchies)                    |
+| `transaction_id` | CHAR(26)            | ULID grouping changes from the same flush batch                   |
+| `diffs`          | JSON                | JSON-encoded change data (see format below)                       |
+| `extra_data`     | JSON                | Custom extra data (populated via `LifecycleEvent` listener)       |
+| `blame_id`       | VARCHAR(255)        | User identifier who made the change                               |
+| `blame`          | JSON                | Blame context: `username`, `user_fqdn`, `user_firewall`, `ip`     |
+| `created_at`     | DATETIME            | When the audit entry was created                                  |
+
+### Diffs Format (schema version 2)
+
+All entry types share a unified JSON envelope:
+
+```json
+{
+    "source":  { "id": "42", "class": "App\\Entity\\Post", "label": "Hello World", "table": "posts" },
+    "changes": {
+        "title":   { "old": "Hello World", "new": "Hello auditor!" },
+        "content": { "old": null,           "new": "My first post." }
+    }
+}
+```
+
+- `source` — always present: entity id, FQCN, label, and table at the time of the operation
+- `changes` — field-level diff with explicit `old`/`new` for every operation:
+  - **INSERT**: `old` is always `null`
+  - **UPDATE**: both `old` and `new` reflect the changed values
+  - **REMOVE**: `new` is always `null`; `old` holds the full entity snapshot
+- **ASSOCIATE / DISSOCIATE** — use a different structure (no `changes` key):
+  ```json
+  {
+      "source":       { "id": "1", "class": "App\\Entity\\Post", "label": "Post #1", "table": "posts", "field": "tags" },
+      "target":       { "id": "5", "class": "App\\Entity\\Tag",  "label": "php",     "table": "tag",   "field": "posts" },
+      "is_owning_side": true,
+      "join_table":   "post__tag"
+  }
+  ```
+
+### Legacy Diffs Format (schema version 1)
+
+Entries written by earlier versions of the provider carry `schema_version = 1`. The `Entry` model reads them transparently — see [Entry Reference](../../querying/entry.md).
 
 ## 🛠️ Using SchemaManager
 
@@ -86,7 +115,7 @@ $schemaManager->updateAuditSchema();
 
 ### Console Commands
 
-Two console commands are available.
+Three console commands are available.
 
 #### audit:schema:update
 
@@ -102,6 +131,30 @@ php bin/console audit:schema:update --force
 # Both: show SQL and execute
 php bin/console audit:schema:update --dump-sql --force
 ```
+
+#### audit:schema:migrate
+
+Migrates existing audit tables from schema version 1 to schema version 2.
+
+```bash
+# Preview the SQL that would be executed (dry-run)
+php bin/console audit:schema:migrate --dump-sql
+
+# Execute the migration
+php bin/console audit:schema:migrate --force
+
+# Also convert existing v1 diffs JSON to the v2 unified format
+php bin/console audit:schema:migrate --force --convert-diffs
+```
+
+> [!NOTE]
+> Use `audit:schema:migrate` when upgrading an existing installation. New installations created
+> with `audit:schema:update` already use schema version 2.
+
+> [!NOTE]
+> `--convert-diffs` rewrites existing diffs rows in PHP (batches of 500). This can take a while
+> on large tables. Without this flag, legacy rows remain readable via `Entry::getDiffs()` since
+> the `Entry` model handles both schema versions transparently.
 
 #### audit:clean
 
@@ -133,6 +186,7 @@ When not using auditor-bundle, register the commands manually:
 
 ```php
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
 use Symfony\Component\Console\Application;
 
@@ -141,6 +195,10 @@ $application = new Application();
 $updateCommand = new UpdateSchemaCommand();
 $updateCommand->setAuditor($auditor);
 $application->add($updateCommand);
+
+$migrateCommand = new MigrateSchemaCommand();
+$migrateCommand->setAuditor($auditor);
+$application->add($migrateCommand);
 
 $cleanCommand = new CleanAuditLogsCommand();
 $cleanCommand->setAuditor($auditor);
@@ -226,7 +284,7 @@ When you add `#[Auditable]` to a new entity and add it to the configuration:
 
 ### MySQL / MariaDB
 
-- Native `JSON` column type is used for `diffs` and `extra_data`
+- Native `JSON` column type is used for `diffs`, `extra_data`, and `blame`
 - InnoDB engine is recommended for transactional integrity
 
 ### PostgreSQL
@@ -241,8 +299,8 @@ When you add `#[Auditable]` to a new entity and add it to the configuration:
 
 ## ⚡ Performance Considerations
 
-1. **Indexed columns** — All common query columns (`type`, `object_id`, `transaction_hash`, `blame_id`, `created_at`) are indexed at creation time
-2. **JSON storage** — Native JSON types (MySQL, PostgreSQL) provide best query performance on `diffs`
+1. **Composite indexes** — `(object_id, type)` and `(blame_id, created_at)` cover the most frequent Reader query patterns
+2. **JSON storage** — Native JSON types (MySQL, PostgreSQL) provide best query performance on `diffs` and `blame`
 3. **Archiving** — Implement a periodic cleanup strategy for high-volume applications using `audit:clean`
 4. **Separate database** — Consider storing audits in a dedicated database to avoid impacting application performance
 

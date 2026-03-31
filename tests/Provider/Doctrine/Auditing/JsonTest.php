@@ -65,6 +65,7 @@ final class JsonTest extends TestCase
             ],
             'label' => [
                 'new' => 'label',
+                'old' => null,
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }

@@ -11,15 +11,23 @@ abstract class SchemaHelper
     /**
      * Return columns of audit tables.
      *
-     * @return array{id: array{type: string, options: array{autoincrement: true, unsigned: true}}, type: array{type: string, options: array{notnull: true, length: int}}, object_id: array{type: string, options: array{notnull: true}}, discriminator: array{type: string, options: array{default: null, notnull: false}}, transaction_hash: array{type: string, options: array{notnull: false, length: int}}, diffs: array{type: string, options: array{default: null, notnull: false}}, extra_data: array{type: string, options: array{default: null, notnull: false}}, blame_id: array{type: string, options: array{default: null, notnull: false}}, blame_user: array{type: string, options: array{default: null, notnull: false, length: int}}, blame_user_fqdn: array{type: string, options: array{default: null, notnull: false, length: int}}, blame_user_firewall: array{type: string, options: array{default: null, notnull: false, length: int}}, ip: array{type: string, options: array{default: null, notnull: false, length: int}}, created_at: array{type: string, options: array{notnull: true}}}
+     * @return array<string, array{type: string, options: array<string, mixed>}>
      */
     public static function getAuditTableColumns(array $defaultTableOptions = []): array
     {
         return [
             'id' => [
-                'type' => Types::INTEGER,
+                'type' => Types::BIGINT,
                 'options' => [
                     'autoincrement' => true,
+                    'unsigned' => true,
+                ],
+            ],
+            'schema_version' => [
+                'type' => Types::SMALLINT,
+                'options' => [
+                    'notnull' => true,
+                    'default' => 2,
                     'unsigned' => true,
                 ],
             ],
@@ -27,7 +35,7 @@ abstract class SchemaHelper
                 'type' => Types::STRING,
                 'options' => [
                     'notnull' => true,
-                    'length' => 10,
+                    'length' => 11,
                     'platformOptions' => $defaultTableOptions,
                 ],
             ],
@@ -48,11 +56,12 @@ abstract class SchemaHelper
                     'platformOptions' => $defaultTableOptions,
                 ],
             ],
-            'transaction_hash' => [
+            'transaction_id' => [
                 'type' => Types::STRING,
                 'options' => [
                     'notnull' => false,
-                    'length' => 40,
+                    'length' => 26,
+                    'fixed' => true,
                     'platformOptions' => $defaultTableOptions,
                 ],
             ],
@@ -79,40 +88,11 @@ abstract class SchemaHelper
                     'platformOptions' => $defaultTableOptions,
                 ],
             ],
-            'blame_user' => [
-                'type' => Types::STRING,
+            'blame' => [
+                'type' => DoctrineHelper::jsonStringType(),
                 'options' => [
                     'default' => null,
                     'notnull' => false,
-                    'length' => 255,
-                    'platformOptions' => $defaultTableOptions,
-                ],
-            ],
-            'blame_user_fqdn' => [
-                'type' => Types::STRING,
-                'options' => [
-                    'default' => null,
-                    'notnull' => false,
-                    'length' => 255,
-                    'platformOptions' => $defaultTableOptions,
-                ],
-            ],
-            'blame_user_firewall' => [
-                'type' => Types::STRING,
-                'options' => [
-                    'default' => null,
-                    'notnull' => false,
-                    'length' => 100,
-                    'platformOptions' => $defaultTableOptions,
-                ],
-            ],
-            'ip' => [
-                'type' => Types::STRING,
-                'options' => [
-                    'default' => null,
-                    'notnull' => false,
-                    'length' => 45,
-                    'platformOptions' => $defaultTableOptions,
                 ],
             ],
             'created_at' => [
@@ -127,37 +107,53 @@ abstract class SchemaHelper
     /**
      * Return indices of an audit table.
      *
-     * @return array{id: array{type: string}, type: array{type: string, name: string}, object_id: array{type: string, name: string}, discriminator: array{type: string, name: string}, transaction_hash: array{type: string, name: string}, blame_id: array{type: string, name: string}, created_at: array{type: string, name: string}}
+     * Single-column entries: keyed by the column name.
+     * Composite entries: keyed by a '__composite_*' synthetic key with an explicit 'columns' list.
+     *
+     * @return array<string, array{type: string, name: string, columns?: list<string>}|array{type: string}>
      */
     public static function getAuditTableIndices(string $tablename): array
     {
+        $hash = md5($tablename);
+
         return [
             'id' => [
                 'type' => 'primary',
             ],
             'type' => [
                 'type' => 'index',
-                'name' => 'type_'.md5($tablename).'_idx',
+                'name' => 'type_'.$hash.'_idx',
             ],
             'object_id' => [
                 'type' => 'index',
-                'name' => 'object_id_'.md5($tablename).'_idx',
+                'name' => 'object_id_'.$hash.'_idx',
             ],
             'discriminator' => [
                 'type' => 'index',
-                'name' => 'discriminator_'.md5($tablename).'_idx',
+                'name' => 'discriminator_'.$hash.'_idx',
             ],
-            'transaction_hash' => [
+            'transaction_id' => [
                 'type' => 'index',
-                'name' => 'transaction_hash_'.md5($tablename).'_idx',
+                'name' => 'transaction_id_'.$hash.'_idx',
             ],
             'blame_id' => [
                 'type' => 'index',
-                'name' => 'blame_id_'.md5($tablename).'_idx',
+                'name' => 'blame_id_'.$hash.'_idx',
             ],
             'created_at' => [
                 'type' => 'index',
-                'name' => 'created_at_'.md5($tablename).'_idx',
+                'name' => 'created_at_'.$hash.'_idx',
+            ],
+            // Composite indexes
+            '__composite_object_id_type' => [
+                'type' => 'index',
+                'columns' => ['object_id', 'type'],
+                'name' => 'object_id_type_'.$hash.'_idx',
+            ],
+            '__composite_blame_id_created_at' => [
+                'type' => 'index',
+                'columns' => ['blame_id', 'created_at'],
+                'name' => 'blame_id_created_at_'.$hash.'_idx',
             ],
         ];
     }

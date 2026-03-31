@@ -91,7 +91,7 @@ final class ReaderTest extends TestCase
         $this->assertIsInt($audits[0]->id);
         $this->assertIsString($audits[0]->objectId);
         $this->assertNull($audits[0]->discriminator);
-        $this->assertIsString($audits[0]->transactionHash);
+        $this->assertIsString($audits[0]->transactionId);
         $this->assertIsArray($audits[0]->getDiffs());
         $this->assertIsString($audits[0]->userId);
         $this->assertIsString($audits[0]->username);
@@ -450,10 +450,10 @@ final class ReaderTest extends TestCase
 
         /** @var Entry[] $audits */
         $audits = $reader->createQuery(Post::class)->execute();
-        $hash = $audits[0]->transactionHash;
+        $hash = $audits[0]->transactionId;
 
         /** @var Entry[] $audits */
-        $audits = $reader->createQuery(Post::class, ['transaction_hash' => $hash])->execute();
+        $audits = $reader->createQuery(Post::class, ['transaction_id' => $hash])->execute();
         $this->assertCount(2, $audits, 'result count is ok.');
     }
 
@@ -494,14 +494,14 @@ final class ReaderTest extends TestCase
 
         /** @var Entry[] $audits */
         $audits = $reader->createQuery(Post::class)->execute();
-        $hash = $audits[0]->transactionHash;
+        $hash = $audits[0]->transactionId;
 
         $author->removePost($post2);
         $storageService->getEntityManager()->remove($post2);
         $storageService->getEntityManager()->flush();
 
         $reader = $this->createReader();
-        $audits = $reader->getAuditsByTransactionHash($hash);
+        $audits = $reader->getAuditsByTransactionId($hash);
 
         $this->assertCount(2, $audits, 'Reader::getAllAuditsByTransactionHash() is ok.');
         $this->assertCount(3, $audits[Author::class], 'Reader::getAllAuditsByTransactionHash() is ok.');

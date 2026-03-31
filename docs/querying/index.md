@@ -58,7 +58,7 @@ $query = $reader->createQuery(App\Entity\Post::class, [
 | `type`             | `string\|array`         | `null`  | Filter by action type(s)                  |
 | `blame_id`         | `int\|string\|array`    | `null`  | Filter by user ID(s) who made changes     |
 | `user_id`          | `int\|string\|array`    | `null`  | Alias for `blame_id`                      |
-| `transaction_hash` | `string\|array`         | `null`  | Filter by transaction hash(es)            |
+| `transaction_id`   | `string\|array`         | `null`  | Filter by transaction ID(s) (ULID)        |
 | `page`             | `int\|null`             | `1`     | Page number (1-based)                     |
 | `page_size`        | `int\|null`             | `50`    | Number of entries per page                |
 
@@ -147,10 +147,10 @@ $query = $reader->createQuery(Post::class, ['type' => ['insert', 'update']]);
 $query = $reader->createQuery(Post::class, ['blame_id' => 'user-123']);
 ```
 
-### Filter by Transaction Hash
+### Filter by Transaction ID
 
 ```php
-$query = $reader->createQuery(Post::class, ['transaction_hash' => 'abc123...']);
+$query = $reader->createQuery(Post::class, ['transaction_id' => '01HXYZ1234567890ABCDEFGHIJ']);
 ```
 
 ### Advanced Filtering
@@ -186,14 +186,13 @@ foreach ($entries as $entry) {
     $entry->id;               // int - audit entry ID
     $entry->type;             // string - 'insert', 'update', 'remove', 'associate', 'dissociate'
     $entry->objectId;         // string - entity primary key
-    $entry->transactionHash;  // string|null
-    $entry->diffs;            // array|null - already decoded from JSON
+    $entry->transactionId;    // string|null - ULID
     $entry->extraData;        // array|null - already decoded from JSON
-    $entry->userId;           // string|null - blame_id
-    $entry->username;         // string|null - blame_user
-    $entry->userFqdn;         // string|null - blame_user_fqdn
-    $entry->userFirewall;     // string|null - blame_user_firewall
-    $entry->ip;               // string|null
+    $entry->userId;           // int|string|null - blame_id
+    $entry->username;         // string|null - from blame JSON
+    $entry->userFqdn;         // string|null - from blame JSON
+    $entry->userFirewall;     // string|null - from blame JSON
+    $entry->ip;               // string|null - from blame JSON
     $entry->createdAt;        // \DateTimeImmutable
 }
 ```

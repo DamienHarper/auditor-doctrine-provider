@@ -1,0 +1,34 @@
+name: auditor-doctrine-provider-tester
+services:
+  php-cli:
+    image: auditor-doctrine-provider:${PHP_VERSION}
+    build:
+      context: .
+      target: auditor-doctrine-provider
+      args:
+        PHP_VERSION: ${PHP_VERSION}
+    environment:
+      PHP_CS_FIXER_IGNORE_ENV: 1
+      SYMFONY_REQUIRE: ^${SYMFONY_VERSION}
+      DATABASE_URL: ${DATABASE_URL:-}
+      XDEBUG_MODE: ${XDEBUG_MODE:-coverage}
+    volumes:
+      - ../..:/app
+      - vendor_php${PHP_VERSION}_sf${SYMFONY_VERSION}:/app/vendor
+      - phpcsfixer_php${PHP_VERSION}:/app/tools/php-cs-fixer/vendor
+      - phpstan_php${PHP_VERSION}:/app/tools/phpstan/vendor
+      - rector_php${PHP_VERSION}:/app/tools/rector/vendor
+      - phpstan_cache:/tmp/phpstan
+      - composer_root:/root/.composer
+
+volumes:
+  composer_root:
+  vendor_php8.5_sf8.0:
+  vendor_php8.4_sf8.0:
+  phpcsfixer_php8.5:
+  phpcsfixer_php8.4:
+  phpstan_php8.5:
+  phpstan_php8.4:
+  rector_php8.5:
+  rector_php8.4:
+  phpstan_cache:

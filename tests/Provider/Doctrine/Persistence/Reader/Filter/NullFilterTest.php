@@ -30,7 +30,7 @@ final class NullFilterTest extends TestCase
 
     public function testGetNameWorksForAllSupportedFields(): void
     {
-        $fields = [Query::USER_ID, Query::OBJECT_ID, Query::TYPE, Query::TRANSACTION_HASH, Query::ID];
+        $fields = [Query::USER_ID, Query::OBJECT_ID, Query::TYPE, Query::TRANSACTION_ID, Query::ID];
 
         foreach ($fields as $field) {
             $filter = new NullFilter($field);

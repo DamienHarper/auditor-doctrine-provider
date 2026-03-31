@@ -16,6 +16,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Schema\SchemaManagerTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Schema\Comparator;
+use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
@@ -29,6 +30,45 @@ use Doctrine\Persistence\Mapping\Driver\MappingDriver;
 final readonly class SchemaManager
 {
     public function __construct(private DoctrineProvider $provider) {}
+
+    /**
+     * Returns the names of audit tables that still carry the legacy v1 schema (transaction_hash
+     * column present). Used by UpdateSchemaCommand to refuse execution until migration is done.
+     *
+     * @return list<string>
+     */
+    public function collectLegacyAuditTables(): array
+    {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+
+        /** @var StorageService[] $storageServices */
+        $storageServices = $this->provider->getStorageServices();
+
+        $legacy = [];
+
+        foreach ($storageServices as $storageService) {
+            $connection = $storageService->getEntityManager()->getConnection();
+            $schema = $connection->createSchemaManager()->introspectSchema();
+
+            foreach (array_keys($configuration->getEntities()) as $entity) {
+                $auditTableName = $this->resolveAuditTableName($entity, $configuration);
+                if (null === $auditTableName) {
+                    continue;
+                }
+
+                if (!$schema->hasTable($auditTableName)) {
+                    continue;
+                }
+
+                if ($schema->getTable($auditTableName)->hasColumn('transaction_hash')) {
+                    $legacy[] = $auditTableName;
+                }
+            }
+        }
+
+        return array_values(array_unique($legacy));
+    }
 
     public function updateAuditSchema(?array $sqls = null, ?callable $callback = null): void
     {
@@ -189,11 +229,17 @@ final readonly class SchemaManager
                 if ('primary' === $struct['type']) {
                     DoctrineHelper::setPrimaryKey($auditTable, $columnName);
                 } elseif (isset($struct['name'])) {
+                    // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                    // from the array key (which is the column name for non-composite entries).
+                    $columns = $struct['columns'] ?? [$columnName];
                     $auditTable->addIndex(
-                        [$columnName],
+                        $columns,
                         $struct['name'],
                         [],
-                        PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                        // Length limiting only applies to single string columns, not composites
+                        1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
+                            ? ['lengths' => [191]]
+                            : []
                     );
                 } else {
                     throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
@@ -367,15 +413,32 @@ final readonly class SchemaManager
                 $table->dropPrimaryKey();
                 DoctrineHelper::setPrimaryKey($table, $columnName);
             } else {
+                // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                // from the array key (which is the column name for non-composite entries).
+                $columns = $options['columns'] ?? [$columnName];
+
+                // Skip drop+recreate when the index already exists with the same columns — avoids
+                // generating DROP INDEX SQL (MySQL requires ON <table> which DBAL omits on ALTER).
                 if ($table->hasIndex($options['name'])) {
+                    $existingColumns = array_map(
+                        static fn (IndexedColumn $col): string => $col->getColumnName()->toString(),
+                        $table->getIndex($options['name'])->getIndexedColumns(),
+                    );
+                    if ($existingColumns === $columns) {
+                        continue;
+                    }
+
                     $table->dropIndex($options['name']);
                 }
 
                 $table->addIndex(
-                    [$columnName],
+                    $columns,
                     $options['name'],
                     [],
-                    PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                    // Length limiting only applies to single string columns, not composites
+                    1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
+                        ? ['lengths' => [191]]
+                        : []
                 );
             }
         }

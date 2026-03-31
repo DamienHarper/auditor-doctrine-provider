@@ -51,7 +51,7 @@ final class TransactionProcessorTest extends TestCase
                 'fullname' => [null, 'John Doe'],
                 'email' => [null, 'john.doe@gmail.com'],
             ],
-            'what-a-nice-transaction-hash',
+            '01ABCDEFGHJKMNPQRSTVWXYZ00',
             $blame,
         ]);
 
@@ -67,9 +67,11 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame([
             'email' => [
                 'new' => 'john.doe@gmail.com',
+                'old' => null,
             ],
             'fullname' => [
                 'new' => 'John Doe',
+                'old' => null,
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }
@@ -98,7 +100,7 @@ final class TransactionProcessorTest extends TestCase
                 'fullname' => ['John Doe', 'Dark Vador'],
                 'email' => ['john.doe@gmail.com', 'dark.vador@gmail.com'],
             ],
-            'what-a-nice-transaction-hash',
+            '01ABCDEFGHJKMNPQRSTVWXYZ00',
             $blame,
         ]);
 
@@ -141,7 +143,7 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, 1, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::remove() creates an audit entry.');
@@ -152,12 +154,13 @@ final class TransactionProcessorTest extends TestCase
         $this->assertContainsEquals($entry->userId, ['1', '2'], 'audit entry blame_id is ok.');
         $this->assertContainsEquals($entry->username, ['dark.vador', 'anakin.skywalker'], 'audit entry blame_user is ok.');
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
+        $this->assertSame([], $entry->getDiffs(), 'audit entry diffs is empty for non-snapshot remove.');
         $this->assertSame([
             'class' => Author::class,
             'id' => 1,
             'label' => 'John Doe',  // Author::class.'#1',
             'table' => $entityManager->getClassMetadata(Author::class)->getTableName(),
-        ], $entry->getDiffs(), 'audit entry diffs is ok.');
+        ], $entry->getDiffSource(), 'audit entry diff source is ok.');
     }
 
     public function testRemoveWithSoftDelete(): void
@@ -179,7 +182,7 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, 1, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         // 1 "remove" audit entry added => count is 1
         $audits = $reader->createQuery(Post::class)->execute();
@@ -191,12 +194,13 @@ final class TransactionProcessorTest extends TestCase
         $this->assertContainsEquals($entry->userId, ['1', '2'], 'audit entry blame_id is ok.');
         $this->assertContainsEquals($entry->username, ['dark.vador', 'anakin.skywalker'], 'audit entry blame_user is ok.');
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
+        $this->assertSame([], $entry->getDiffs(), 'audit entry diffs is empty for non-snapshot remove.');
         $this->assertSame([
             'class' => Post::class,
             'id' => 1,
             'label' => 'First post',
             'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
-        ], $entry->getDiffs(), 'audit entry diffs is ok.');
+        ], $entry->getDiffSource(), 'audit entry diff source is ok.');
 
         $post = new Post();
         $post
@@ -268,7 +272,7 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::associate() creates an audit entry.');
@@ -343,7 +347,7 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');
@@ -464,8 +468,8 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, 'what-a-nice-transaction-hash', $blame]);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(2, $audits, 'TransactionProcessor::associate() creates an audit entry per association.');
@@ -478,6 +482,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -485,7 +490,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => (string) $post,
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',
@@ -503,6 +507,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -510,7 +515,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => (string) $post,
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',
@@ -613,10 +617,10 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, 'what-a-nice-transaction-hash', $blame]);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
-        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(3, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');
@@ -629,6 +633,7 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'is_owning_side' => true,
+            'join_table' => 'post__tag',
             'source' => [
                 'class' => Post::class,
                 'field' => 'tags',
@@ -636,7 +641,6 @@ final class TransactionProcessorTest extends TestCase
                 'label' => 'First post',
                 'table' => $entityManager->getClassMetadata(Post::class)->getTableName(),
             ],
-            'table' => 'post__tag',
             'target' => [
                 'class' => Tag::class,
                 'field' => 'posts',

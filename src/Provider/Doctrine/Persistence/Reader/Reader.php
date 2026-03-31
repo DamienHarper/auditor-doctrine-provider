@@ -66,8 +66,10 @@ final readonly class Reader implements ReaderInterface
             $query->addFilter(new SimpleFilter(Query::USER_ID, $blame_id));
         }
 
-        if (null !== $config['transaction_hash']) {
-            $query->addFilter(new SimpleFilter(Query::TRANSACTION_HASH, $config['transaction_hash']));
+        // Support both the new 'transaction_id' key and the deprecated 'transaction_hash' alias
+        $transactionId = $config['transaction_id'] ?? $config['transaction_hash'];
+        if (null !== $transactionId) {
+            $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, $transactionId));
         }
 
         if (null !== $config['page'] && null !== $config['page_size']) {
@@ -89,19 +91,46 @@ final readonly class Reader implements ReaderInterface
     }
 
     /**
-     * Returns an array of all audited entries/operations for a given transaction hash
+     * Returns an array of all audited entries/operations for a given transaction ID
      * indexed by entity FQCN.
+     *
+     * Supports both schema v2 (transaction_id column) and legacy schema v1 (transaction_hash column).
      */
-    public function getAuditsByTransactionHash(string $transactionHash): array
+    public function getAuditsByTransactionId(string $transactionId): array
     {
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
         $results = [];
 
+        // Cache per audit table name to avoid repeated schema introspections.
+        $transactionColumnCache = [];
+
         $entities = $configuration->getEntities();
         foreach (array_keys($entities) as $entity) {
             try {
-                $audits = $this->createQuery($entity, ['transaction_hash' => $transactionHash, 'page_size' => null])->execute();
+                $auditTable = $this->getEntityAuditTableName($entity);
+
+                // Detect which transaction column this table uses (once per table per request).
+                if (!isset($transactionColumnCache[$auditTable])) {
+                    $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+                    $table = $connection->createSchemaManager()->introspectSchema()->getTable($auditTable);
+                    $transactionColumnCache[$auditTable] = $table->hasColumn(Query::TRANSACTION_ID)
+                        ? Query::TRANSACTION_ID
+                        : Query::LEGACY_TRANSACTION_HASH;
+                }
+
+                $transactionColumn = $transactionColumnCache[$auditTable];
+
+                if (Query::TRANSACTION_ID === $transactionColumn) {
+                    // Schema v2: use the standard createQuery path.
+                    $audits = $this->createQuery($entity, ['transaction_id' => $transactionId, 'page_size' => null])->execute();
+                } else {
+                    // Schema v1 (legacy): transaction_id column does not exist yet — filter by transaction_hash.
+                    $query = $this->createQuery($entity, ['page_size' => null]);
+                    $query->addFilter(new SimpleFilter(Query::LEGACY_TRANSACTION_HASH, $transactionId));
+                    $audits = $query->execute();
+                }
+
                 if ([] !== $audits) {
                     $results[$entity] = $audits;
                 }
@@ -111,6 +140,12 @@ final readonly class Reader implements ReaderInterface
         }
 
         return $results;
+    }
+
+    #[\Deprecated(message: 'Use getAuditsByTransactionId() instead')]
+    public function getAuditsByTransactionHash(string $transactionHash): array
+    {
+        return $this->getAuditsByTransactionId($transactionHash);
     }
 
     /**
@@ -175,7 +210,8 @@ final readonly class Reader implements ReaderInterface
                 'object_id' => null,
                 'blame_id' => null,
                 'user_id' => null,
-                'transaction_hash' => null,
+                'transaction_id' => null,
+                'transaction_hash' => null,     // @deprecated use transaction_id
                 'page' => 1,
                 'page_size' => self::PAGE_SIZE,
                 'strict' => true,
@@ -184,6 +220,7 @@ final readonly class Reader implements ReaderInterface
             ->setAllowedTypes('object_id', ['null', 'int', 'string', 'array'])
             ->setAllowedTypes('blame_id', ['null', 'int', 'string', 'array'])
             ->setAllowedTypes('user_id', ['null', 'int', 'string', 'array'])
+            ->setAllowedTypes('transaction_id', ['null', 'string', 'array'])
             ->setAllowedTypes('transaction_hash', ['null', 'string', 'array'])
             ->setAllowedTypes('page', ['null', 'int'])
             ->setAllowedTypes('page_size', ['null', 'int'])
