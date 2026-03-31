@@ -93,6 +93,8 @@ final readonly class Reader implements ReaderInterface
     /**
      * Returns an array of all audited entries/operations for a given transaction ID
      * indexed by entity FQCN.
+     *
+     * Supports both schema v2 (transaction_id column) and legacy schema v1 (transaction_hash column).
      */
     public function getAuditsByTransactionId(string $transactionId): array
     {
@@ -100,10 +102,35 @@ final readonly class Reader implements ReaderInterface
         $configuration = $this->provider->getConfiguration();
         $results = [];
 
+        // Cache per audit table name to avoid repeated schema introspections.
+        $transactionColumnCache = [];
+
         $entities = $configuration->getEntities();
         foreach (array_keys($entities) as $entity) {
             try {
-                $audits = $this->createQuery($entity, ['transaction_id' => $transactionId, 'page_size' => null])->execute();
+                $auditTable = $this->getEntityAuditTableName($entity);
+
+                // Detect which transaction column this table uses (once per table per request).
+                if (!isset($transactionColumnCache[$auditTable])) {
+                    $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+                    $table = $connection->createSchemaManager()->introspectSchema()->getTable($auditTable);
+                    $transactionColumnCache[$auditTable] = $table->hasColumn(Query::TRANSACTION_ID)
+                        ? Query::TRANSACTION_ID
+                        : Query::LEGACY_TRANSACTION_HASH;
+                }
+
+                $transactionColumn = $transactionColumnCache[$auditTable];
+
+                if (Query::TRANSACTION_ID === $transactionColumn) {
+                    // Schema v2: use the standard createQuery path.
+                    $audits = $this->createQuery($entity, ['transaction_id' => $transactionId, 'page_size' => null])->execute();
+                } else {
+                    // Schema v1 (legacy): transaction_id column does not exist yet — filter by transaction_hash.
+                    $query = $this->createQuery($entity, ['page_size' => null]);
+                    $query->addFilter(new SimpleFilter(Query::LEGACY_TRANSACTION_HASH, $transactionId));
+                    $audits = $query->execute();
+                }
+
                 if ([] !== $audits) {
                     $results[$entity] = $audits;
                 }

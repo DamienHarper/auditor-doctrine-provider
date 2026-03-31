@@ -32,6 +32,11 @@ final class Query implements QueryInterface
     #[\Deprecated(message: 'Use TRANSACTION_ID instead')]
     public const string TRANSACTION_HASH = 'transaction_id';
 
+    /**
+     * Legacy v1 column name — used to filter by transaction_hash on un-migrated tables.
+     */
+    public const string LEGACY_TRANSACTION_HASH = 'transaction_hash';
+
     public const string OBJECT_ID = 'object_id';
 
     public const string USER_ID = 'blame_id';
@@ -162,7 +167,7 @@ final class Query implements QueryInterface
 
     public function getSupportedFilters(): array
     {
-        return [...array_keys(SchemaHelper::getAuditTableIndices('fake')), self::JSON];
+        return [...array_keys(SchemaHelper::getAuditTableIndices('fake')), self::JSON, self::LEGACY_TRANSACTION_HASH];
     }
 
     public function getFilters(): array
