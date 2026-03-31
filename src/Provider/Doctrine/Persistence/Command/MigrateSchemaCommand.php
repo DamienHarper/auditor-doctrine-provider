@@ -802,7 +802,7 @@ final class MigrateSchemaCommand extends Command
         $changes = [];
         foreach ($diffs as $field => $diff) {
             if (\is_array($diff) && \array_key_exists('new', $diff)) {
-                $changes[$field] = ['old' => $diff['old'] ?? null, 'new' => $diff['new']];
+                $changes[$field] = ['new' => $diff['new'], 'old' => $diff['old'] ?? null];
             }
         }
 
@@ -825,7 +825,7 @@ final class MigrateSchemaCommand extends Command
         $changes = [];
         foreach ($diffs as $field => $diff) {
             if (\is_array($diff)) {
-                $changes[$field] = ['old' => $diff['old'] ?? null, 'new' => $diff['new'] ?? null];
+                $changes[$field] = ['new' => $diff['new'] ?? null, 'old' => $diff['old'] ?? null];
             }
         }
 

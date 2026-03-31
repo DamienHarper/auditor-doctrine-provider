@@ -51,7 +51,7 @@ final class TransactionProcessorTest extends TestCase
                 'fullname' => [null, 'John Doe'],
                 'email' => [null, 'john.doe@gmail.com'],
             ],
-            'what-a-nice-transaction-hash',
+            '01ABCDEFGHJKMNPQRSTVWXYZ00',
             $blame,
         ]);
 
@@ -66,12 +66,12 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'email' => [
-                'old' => null,
                 'new' => 'john.doe@gmail.com',
+                'old' => null,
             ],
             'fullname' => [
-                'old' => null,
                 'new' => 'John Doe',
+                'old' => null,
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }
@@ -100,7 +100,7 @@ final class TransactionProcessorTest extends TestCase
                 'fullname' => ['John Doe', 'Dark Vador'],
                 'email' => ['john.doe@gmail.com', 'dark.vador@gmail.com'],
             ],
-            'what-a-nice-transaction-hash',
+            '01ABCDEFGHJKMNPQRSTVWXYZ00',
             $blame,
         ]);
 
@@ -115,12 +115,12 @@ final class TransactionProcessorTest extends TestCase
         $this->assertSame('1.2.3.4', $entry->ip, 'audit entry IP is ok.');
         $this->assertSame([
             'email' => [
-                'old' => 'john.doe@gmail.com',
                 'new' => 'dark.vador@gmail.com',
+                'old' => 'john.doe@gmail.com',
             ],
             'fullname' => [
-                'old' => 'John Doe',
                 'new' => 'Dark Vador',
+                'old' => 'John Doe',
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }
@@ -143,7 +143,7 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, 1, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::remove() creates an audit entry.');
@@ -182,7 +182,7 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, 1, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         // 1 "remove" audit entry added => count is 1
         $audits = $reader->createQuery(Post::class)->execute();
@@ -272,7 +272,7 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::associate() creates an audit entry.');
@@ -347,7 +347,7 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');
@@ -468,8 +468,8 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, 'what-a-nice-transaction-hash', $blame]);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(2, $audits, 'TransactionProcessor::associate() creates an audit entry per association.');
@@ -617,10 +617,10 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, 'what-a-nice-transaction-hash', $blame]);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
-        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, 'what-a-nice-transaction-hash', $blame]);
+        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(3, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');

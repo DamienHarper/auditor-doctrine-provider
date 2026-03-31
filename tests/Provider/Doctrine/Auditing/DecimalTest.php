@@ -91,8 +91,8 @@ final class DecimalTest extends TestCase
         $updateEntry = array_shift($audits);
         $this->assertSame([
             'decimal_value' => [
-                'old' => '60',
                 'new' => '60.5',
+                'old' => '60',
             ],
         ], $updateEntry->getDiffs(), 'Diff shows the correct old/new decimal values.');
     }

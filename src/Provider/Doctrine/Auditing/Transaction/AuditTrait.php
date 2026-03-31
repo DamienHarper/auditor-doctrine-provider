@@ -243,7 +243,7 @@ trait AuditTrait
                     $changes[$fieldName] = $this->deepDiff($o, $n);
                 } else {
                     // Always include both old and new, even when null (e.g. INSERT has old=null)
-                    $changes[$fieldName] = ['old' => $o, 'new' => $n];
+                    $changes[$fieldName] = ['new' => $n, 'old' => $o];
                 }
             }
         }
@@ -300,7 +300,7 @@ trait AuditTrait
             }
 
             $value = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
-            $changes[$fieldName] = ['old' => $this->value($platform, $type, $value), 'new' => null];
+            $changes[$fieldName] = ['new' => null, 'old' => $this->value($platform, $type, $value)];
         }
 
         return [
@@ -454,7 +454,7 @@ trait AuditTrait
                     }
                 } elseif ($new[$key] !== $value) {
                     // values are different
-                    $diff[$key] = ['old' => $value, 'new' => $new[$key]];
+                    $diff[$key] = ['new' => $new[$key], 'old' => $value];
                 }
             }
         }

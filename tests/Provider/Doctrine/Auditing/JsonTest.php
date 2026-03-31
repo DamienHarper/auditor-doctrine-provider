@@ -64,8 +64,8 @@ final class JsonTest extends TestCase
                 ],
             ],
             'label' => [
-                'old' => null,
                 'new' => 'label',
+                'old' => null,
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
     }
@@ -112,13 +112,13 @@ final class JsonTest extends TestCase
         $this->assertSame([
             'json_array' => [
                 'field1' => [
-                    'old' => 'value1',
                     'new' => 'new value1',
+                    'old' => 'value1',
                 ],
                 'field3' => [
                     'field3.1' => [
-                        'old' => 'value3.1',
                         'new' => 'new value3.1',
+                        'old' => 'value3.1',
                     ],
                 ],
             ],

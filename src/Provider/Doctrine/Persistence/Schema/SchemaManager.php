@@ -16,6 +16,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Schema\SchemaManagerTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Schema\Comparator;
+use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
@@ -419,7 +420,11 @@ final readonly class SchemaManager
                 // Skip drop+recreate when the index already exists with the same columns — avoids
                 // generating DROP INDEX SQL (MySQL requires ON <table> which DBAL omits on ALTER).
                 if ($table->hasIndex($options['name'])) {
-                    if ($table->getIndex($options['name'])->getIndexedColumns() === $columns) {
+                    $existingColumns = array_map(
+                        static fn (IndexedColumn $col): string => $col->getColumnName()->toString(),
+                        $table->getIndex($options['name'])->getIndexedColumns(),
+                    );
+                    if ($existingColumns === $columns) {
                         continue;
                     }
 
