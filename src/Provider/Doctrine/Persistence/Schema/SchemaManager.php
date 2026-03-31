@@ -52,7 +52,10 @@ final readonly class SchemaManager
 
             foreach (array_keys($configuration->getEntities()) as $entity) {
                 $auditTableName = $this->resolveAuditTableName($entity, $configuration);
-                if (null === $auditTableName || !$schema->hasTable($auditTableName)) {
+                if (null === $auditTableName) {
+                    continue;
+                }
+                if (!$schema->hasTable($auditTableName)) {
                     continue;
                 }
 

@@ -128,12 +128,14 @@ final class MigrateSchemaCommand extends Command
             foreach (array_keys($tables) as $tableName) {
                 $io->text(\sprintf('  - %s', $tableName));
             }
+
             $io->newLine();
         } elseif ([] !== $diffsOnlyTables) {
             $io->text(\sprintf('Found <info>%d</info> table(s) with unconverted diffs (schema_version=1):', \count($diffsOnlyTables)));
             foreach (array_keys($diffsOnlyTables) as $tableName) {
                 $io->text(\sprintf('  - %s', $tableName));
             }
+
             $io->newLine();
         }
 
@@ -166,12 +168,15 @@ final class MigrateSchemaCommand extends Command
                     $io->text(\sprintf('    %s;', $sql));
                 }
             }
+
             if ($convertTransactionHash) {
                 $io->text('    [+ UPDATE queries to convert transaction_hash → transaction_id (ULID, cross-table)]');
             }
+
             if ($convertDiffs) {
                 $io->text('    [+ UPDATE queries to convert diffs (executed in PHP batches)]');
             }
+
             if (null === $limit) {
                 foreach ($allDdlSqls as $phases) {
                     foreach ($phases['destructive'] as $sql) {
@@ -181,6 +186,7 @@ final class MigrateSchemaCommand extends Command
             } else {
                 $io->text('    [legacy columns are NOT dropped when --limit is set]');
             }
+
             $io->newLine();
         }
 
@@ -381,10 +387,12 @@ final class MigrateSchemaCommand extends Command
                 }
 
                 $table = $schema->getTable($auditTableName);
-
                 // Only consider tables whose DDL is fully applied (no legacy transaction_hash column)
                 // but that still carry unconverted rows (schema_version=1).
-                if ($table->hasColumn('transaction_hash') || !$table->hasColumn('schema_version')) {
+                if ($table->hasColumn('transaction_hash')) {
+                    continue;
+                }
+                if (!$table->hasColumn('schema_version')) {
                     continue;
                 }
 
@@ -715,6 +723,7 @@ final class MigrateSchemaCommand extends Command
                 if ($remaining <= 0) {
                     break;
                 }
+
                 $batchLimit = min(self::BATCH_SIZE, $remaining);
             }
 
