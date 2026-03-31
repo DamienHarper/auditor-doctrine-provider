@@ -256,13 +256,17 @@ final class MigrateSchemaCommand extends Command
                 $limit,
             ));
         } else {
-            if (!$convertDiffs) {
-                $io->note(
-                    'Existing rows have been marked with schema_version = 1 (legacy format). '
-                    .'Run with --convert-diffs to also convert their diffs JSON to the new format.',
-                );
-            } else {
+            if ($convertDiffs) {
                 $io->note('Diffs conversion complete. All migrated rows now have schema_version = 2.');
+            } else {
+                // Only suggest --convert-diffs if there are actually schema_version=1 rows remaining.
+                $hasLegacyDiffsRows = $this->hasLegacyDiffsRows($allDiffsTables);
+                if ($hasLegacyDiffsRows) {
+                    $io->note(
+                        'Existing rows have been marked with schema_version = 1 (legacy format). '
+                        .'Run with --convert-diffs to also convert their diffs JSON to the new format.',
+                    );
+                }
             }
 
             // Only warn about transaction_hash data loss when DDL tables were actually processed
@@ -324,6 +328,25 @@ final class MigrateSchemaCommand extends Command
         }
 
         return $legacyTables;
+    }
+
+    /**
+     * Returns true if any of the given tables still contain rows with schema_version=1.
+     *
+     * @param array<string, Connection> $tables
+     */
+    private function hasLegacyDiffsRows(array $tables): bool
+    {
+        foreach ($tables as $tableName => $connection) {
+            $count = $connection->fetchOne(
+                \sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $tableName),
+            );
+            if (is_numeric($count) && (int) $count > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
