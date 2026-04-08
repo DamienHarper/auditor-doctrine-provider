@@ -24,6 +24,21 @@ trait AuditTrait
     private static array $typeNameCache = [];
 
     /**
+     * Caches method_exists($entity, '__toString') result per class to avoid
+     * repeated reflection on hot-path summarize() calls.
+     */
+    private static array $hasToStringCache = [];
+
+    /**
+     * Per-entity-class config cache (ignored_columns, diff_label_resolvers,
+     * computed_audit_table_name). Populated lazily on first access per class
+     * and shared across all flush operations for the lifetime of the provider.
+     *
+     * @var array<string, array{computed_audit_table_name: string, ignored_columns: string[], diff_label_resolvers: array<string, string>}>
+     */
+    private array $entityConfigCache = [];
+
+    /**
      * Returns the primary key value of an entity.
      *
      * @throws MappingException
@@ -174,10 +189,22 @@ trait AuditTrait
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
         $globalIgnoredColumns = $configuration->getIgnoredColumns();
-        $entityIgnoredColumns = $configuration->getEntities()[$meta->name]['ignored_columns'] ?? [];
-        $diffLabelResolvers = $configuration->getEntities()[$meta->name]['diff_label_resolvers'] ?? [];
         $resolverLocator = $this->provider->getDiffLabelResolverLocator();
         $jsonTypes = DoctrineHelper::jsonTypes();
+
+        // Cache entity-class-level config (ignored_columns, diff_label_resolvers) for the
+        // process lifetime — config is set at bootstrap and never changes at runtime.
+        if (!isset($this->entityConfigCache[$meta->name])) {
+            $entityCfg = $configuration->getEntities()[$meta->name] ?? [];
+            $this->entityConfigCache[$meta->name] = [
+                'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
+                'ignored_columns'           => $entityCfg['ignored_columns'] ?? [],
+                'diff_label_resolvers'      => $entityCfg['diff_label_resolvers'] ?? [],
+            ];
+        }
+
+        $entityIgnoredColumns = $this->entityConfigCache[$meta->name]['ignored_columns'];
+        $diffLabelResolvers = $this->entityConfigCache[$meta->name]['diff_label_resolvers'];
 
         foreach ($changeset as $fieldName => [$old, $new]) {
             $o = null;
@@ -322,46 +349,52 @@ trait AuditTrait
             return null;
         }
 
-        try {
-            $entityManager->getUnitOfWork()->initializeObject($entity); // ensure that proxies are initialized
-        } catch (\Throwable) {
-            /**
-             * Proxy initialization failed — the entity row is inaccessible (e.g. hidden by a
-             * Doctrine filter such as SoftDeleteable, or hard-deleted between two flushes).
-             * Fall back to the identifier stored in the UoW identity map, which is available
-             * without accessing any property on the (possibly uninitialized) proxy object.
-             *
-             * @see https://github.com/DamienHarper/auditor/issues/285
-             */
-            $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+        $entityClass = $entity::class;
 
+        if (str_contains($entityClass, '__CG__')) {
+            // Legacy Doctrine __CG__ proxy: may fail to initialize when the entity row is
+            // inaccessible (e.g. hidden by SoftDeleteable or hard-deleted between flushes).
+            // Fall back to the identifier stored in the UoW identity map in that case.
+            //
+            // @see https://github.com/DamienHarper/auditor/issues/285
             try {
-                $pkName = $meta->getSingleIdentifierFieldName();
+                $entityManager->getUnitOfWork()->initializeObject($entity);
             } catch (\Throwable) {
-                $pkName = 'id';
-            }
+                $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
 
-            $identifiers = $entityManager->getUnitOfWork()->getEntityIdentifier($entity);
-            $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? null);
-            $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
-            if ('id' !== $pkName) {
-                $extra['pkName'] = $pkName;
-            }
+                try {
+                    $pkName = $meta->getSingleIdentifierFieldName();
+                } catch (\Throwable) {
+                    $pkName = 'id';
+                }
 
-            return [
-                $pkName => $pkValue,
-                'class' => $meta->name,
-                'label' => $label,
-                'table' => $meta->getTableName(),
-            ] + $extra;
+                $identifiers = $entityManager->getUnitOfWork()->getEntityIdentifier($entity);
+                $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? null);
+                $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
+                if ('id' !== $pkName) {
+                    $extra['pkName'] = $pkName;
+                }
+
+                return [
+                    $pkName  => $pkValue,
+                    'class'  => $meta->name,
+                    'label'  => $label,
+                    'table'  => $meta->getTableName(),
+                ] + $extra;
+            }
+            $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+        } else {
+            // Plain entity or PHP 8.4+ native lazy object: already initialized by UoW change
+            // detection before summarize() is ever called — skip the try/catch overhead entirely.
+            $meta ??= $entityManager->getClassMetadata($entityClass);
         }
 
-        $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-
-        $pkValue = $extra['id'] ?? $this->id($entityManager, $entity);
+        // Pass $meta to avoid a redundant getClassMetadata() call inside id()
+        $pkValue = $extra['id'] ?? $this->id($entityManager, $entity, $meta);
         $pkName = $meta->getSingleIdentifierFieldName();
 
-        if (method_exists($entity, '__toString')) {
+        $hasToString = self::$hasToStringCache[$entityClass] ??= method_exists($entity, '__toString');
+        if ($hasToString) {
             try {
                 $label = (string) $entity;
             } catch (\Throwable) {
@@ -376,10 +409,10 @@ trait AuditTrait
         }
 
         return [
-            $pkName => $pkValue,
-            'class' => $meta->name,
-            'label' => $label,
-            'table' => $meta->getTableName(),
+            $pkName  => $pkValue,
+            'class'  => $meta->name,
+            'label'  => $label,
+            'table'  => $meta->getTableName(),
         ] + $extra;
     }
 

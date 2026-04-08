@@ -254,16 +254,25 @@ final class TransactionProcessor implements TransactionProcessorInterface
     private function audit(array $data): void
     {
         $entityObject = $data['entity_object'] ?? null;
+        $entityClass  = $data['entity'];
 
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
-        // Use the pre-computed audit table name from configuration, which correctly handles
-        // quoted identifiers (e.g. PostgreSQL reserved words like "user").
-        // Direct string concatenation of schema + prefix + table + suffix breaks when the
-        // table name contains quotes, producing e.g. `"user"_audit` instead of `"user_audit"`.
-        $auditTable = $configuration->getEntities()[$data['entity']]['computed_audit_table_name'];
+
+        // Populate entity config cache if not already done by diff() (e.g. remove/associate).
+        // The cache correctly handles quoted identifiers for computed_audit_table_name.
+        if (!isset($this->entityConfigCache[$entityClass])) {
+            $entityCfg = $configuration->getEntities()[$entityClass] ?? [];
+            $this->entityConfigCache[$entityClass] = [
+                'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
+                'ignored_columns'           => $entityCfg['ignored_columns'] ?? [],
+                'diff_label_resolvers'      => $entityCfg['diff_label_resolvers'] ?? [],
+            ];
+        }
+
+        $auditTable = $this->entityConfigCache[$entityClass]['computed_audit_table_name'];
         $diff = $data['diff'];
-        if ($configuration->isUtf8ConvertEnabled() && (\is_string($diff) || \is_array($diff))) {
+        if ((\is_string($diff) || \is_array($diff)) && $configuration->isUtf8ConvertEnabled()) {
             $diff = $this->convertEncoding($diff);
         }
 
