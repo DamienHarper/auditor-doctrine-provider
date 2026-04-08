@@ -27,7 +27,9 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     // Per-flush context — computed once in process(), consumed in audit()
     private ?string $flushCreatedAt = null;
+
     private ?string $flushBlameId = null;
+
     private ?string $flushBlameJson = null;
 
     public function __construct(private DoctrineProvider $provider) {}
@@ -56,7 +58,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
     private function preComputeFlushContext(array $blame): void
     {
         $tz = $this->dateTimeZone ??= new \DateTimeZone($this->provider->getAuditor()->getConfiguration()->timezone);
-        $this->flushCreatedAt = (new \DateTimeImmutable('now', $tz))->format('Y-m-d H:i:s.u');
+        $this->flushCreatedAt = new \DateTimeImmutable('now', $tz)->format('Y-m-d H:i:s.u');
         $this->flushBlameId = $blame['user_id'];
         $hasBlame = null !== $blame['user_id']
             || null !== $blame['username']
@@ -65,10 +67,10 @@ final class TransactionProcessor implements TransactionProcessorInterface
             || null !== $blame['client_ip'];
         $this->flushBlameJson = $hasBlame
             ? json_encode([
-                'username'      => $blame['username'],
-                'user_fqdn'     => $blame['user_fqdn'],
+                'username' => $blame['username'],
+                'user_fqdn' => $blame['user_fqdn'],
                 'user_firewall' => $blame['user_firewall'],
-                'ip'            => $blame['client_ip'],
+                'ip' => $blame['client_ip'],
             ], JSON_THROW_ON_ERROR)
             : null;
     }
@@ -86,15 +88,15 @@ final class TransactionProcessor implements TransactionProcessorInterface
     {
         $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         $this->audit([
-            'action'         => TransactionType::Insert,
-            'diff'           => $this->diff($entityManager, $entity, $ch, $meta),
-            'table'          => $meta->getTableName(),
-            'schema'         => $meta->getSchemaName(),
-            'id'             => $this->id($entityManager, $entity, $meta),
+            'action' => TransactionType::Insert,
+            'diff' => $this->diff($entityManager, $entity, $ch, $meta),
+            'table' => $meta->getTableName(),
+            'schema' => $meta->getSchemaName(),
+            'id' => $this->id($entityManager, $entity, $meta),
             'transaction_id' => $transactionId,
-            'discriminator'  => $this->getDiscriminator($entity, $meta->inheritanceType),
-            'entity'         => $meta->getName(),
-            'entity_object'  => $entity,
+            'discriminator' => $this->getDiscriminator($entity, $meta->inheritanceType),
+            'entity' => $meta->getName(),
+            'entity_object' => $entity,
         ]);
     }
 
@@ -111,15 +113,15 @@ final class TransactionProcessor implements TransactionProcessorInterface
         }
 
         $this->audit([
-            'action'         => TransactionType::Update,
-            'diff'           => $diff,
-            'table'          => $meta->getTableName(),
-            'schema'         => $meta->getSchemaName(),
-            'id'             => $this->id($entityManager, $entity, $meta),
+            'action' => TransactionType::Update,
+            'diff' => $diff,
+            'table' => $meta->getTableName(),
+            'schema' => $meta->getSchemaName(),
+            'id' => $this->id($entityManager, $entity, $meta),
             'transaction_id' => $transactionId,
-            'discriminator'  => $this->getDiscriminator($entity, $meta->inheritanceType),
-            'entity'         => $meta->getName(),
-            'entity_object'  => $entity,
+            'discriminator' => $this->getDiscriminator($entity, $meta->inheritanceType),
+            'entity' => $meta->getName(),
+            'entity_object' => $entity,
         ]);
     }
 
@@ -139,21 +141,21 @@ final class TransactionProcessor implements TransactionProcessorInterface
             $diff = $this->snapshot($entityManager, $entity, $meta);
         } else {
             $diff = [
-                'source'  => $this->summarize($entityManager, $entity, ['id' => $id], $meta),
+                'source' => $this->summarize($entityManager, $entity, ['id' => $id], $meta),
                 'changes' => [],
             ];
         }
 
         $this->audit([
-            'action'         => TransactionType::Remove,
-            'diff'           => $diff,
-            'table'          => $meta->getTableName(),
-            'schema'         => $meta->getSchemaName(),
-            'id'             => $id,
+            'action' => TransactionType::Remove,
+            'diff' => $diff,
+            'table' => $meta->getTableName(),
+            'schema' => $meta->getSchemaName(),
+            'id' => $id,
             'transaction_id' => $transactionId,
-            'discriminator'  => $this->getDiscriminator($entity, $meta->inheritanceType),
-            'entity'         => $meta->getName(),
-            'entity_object'  => $entity,
+            'discriminator' => $this->getDiscriminator($entity, $meta->inheritanceType),
+            'entity' => $meta->getName(),
+            'entity_object' => $entity,
         ]);
     }
 
@@ -221,19 +223,19 @@ final class TransactionProcessor implements TransactionProcessorInterface
     {
         $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($source));
         $data = [
-            'action'         => $type,
-            'diff'           => [
-                'source'        => $this->summarize($entityManager, $source, ['field' => $mapping['fieldName']], $meta),
-                'target'        => $this->summarize($entityManager, $target, ['field' => $mapping['isOwningSide'] ? ($mapping['inversedBy'] ?? null) : ($mapping['mappedBy'] ?? null)]),
+            'action' => $type,
+            'diff' => [
+                'source' => $this->summarize($entityManager, $source, ['field' => $mapping['fieldName']], $meta),
+                'target' => $this->summarize($entityManager, $target, ['field' => $mapping['isOwningSide'] ? ($mapping['inversedBy'] ?? null) : ($mapping['mappedBy'] ?? null)]),
                 'is_owning_side' => $mapping['isOwningSide'],
             ],
-            'table'          => $meta->getTableName(),
-            'schema'         => $meta->getSchemaName(),
-            'id'             => $this->id($entityManager, $source, $meta),
+            'table' => $meta->getTableName(),
+            'schema' => $meta->getSchemaName(),
+            'id' => $this->id($entityManager, $source, $meta),
             'transaction_id' => $transactionId,
-            'discriminator'  => $this->getDiscriminator($source, $meta->inheritanceType),
-            'entity'         => $meta->getName(),
-            'entity_object'  => $source,
+            'discriminator' => $this->getDiscriminator($source, $meta->inheritanceType),
+            'entity' => $meta->getName(),
+            'entity_object' => $source,
         ];
 
         if (isset($mapping['joinTable']['name'])) {
@@ -266,18 +268,18 @@ final class TransactionProcessor implements TransactionProcessorInterface
         }
 
         $payload = [
-            'entity'         => $data['entity'],
-            'table'          => $auditTable,
+            'entity' => $data['entity'],
+            'table' => $auditTable,
             'schema_version' => 2,
-            'type'           => $data['action']->value,
-            'object_id'      => (string) $data['id'],
-            'discriminator'  => $data['discriminator'],
+            'type' => $data['action']->value,
+            'object_id' => (string) $data['id'],
+            'discriminator' => $data['discriminator'],
             'transaction_id' => $data['transaction_id'],
-            'diffs'          => json_encode($diff, JSON_THROW_ON_ERROR),
-            'extra_data'     => $this->extraData(),
-            'blame_id'       => $this->flushBlameId,
-            'blame'          => $this->flushBlameJson,
-            'created_at'     => $this->flushCreatedAt,
+            'diffs' => json_encode($diff, JSON_THROW_ON_ERROR),
+            'extra_data' => $this->extraData(),
+            'blame_id' => $this->flushBlameId,
+            'blame' => $this->flushBlameJson,
+            'created_at' => $this->flushCreatedAt,
         ];
 
         // send an `AuditEvent` event

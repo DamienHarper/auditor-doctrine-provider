@@ -31,7 +31,6 @@ final class Issue115Test extends TestCase
     {
         $reader = new Reader($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(DummyEntity::class);
         $entityManager = $storageService->getEntityManager();
         $processor = new TransactionProcessor($this->provider);

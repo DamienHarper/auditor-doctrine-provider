@@ -56,7 +56,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
      * Maps each field name to its 1-based bind position for prepared statements.
      * Computed once from FIELDS and cached for the process lifetime.
      *
-     * @var array<string, int>|null
+     * @var null|array<string, int>
      */
     private static ?array $fieldIndex = null;
 
@@ -188,7 +188,6 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $entity = $payload['entity'];
         unset($payload['table'], $payload['entity']);
 
-        /** @var StorageService $storageService */
         $storageService = $this->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
         $cacheKey = spl_object_id($connection).'.'.$auditTable;

@@ -11,7 +11,6 @@ use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\DateRangeFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
-use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -418,7 +417,6 @@ final class ReaderTest extends TestCase
     {
         $reader = $this->createReader();
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
 
         $author = new Author();
@@ -462,7 +460,6 @@ final class ReaderTest extends TestCase
     {
         $reader = $this->createReader();
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
 
         $author = new Author();

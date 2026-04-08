@@ -150,7 +150,6 @@ final class SchemaManagerTest extends TestCase
     {
         $updater = new SchemaManager($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
         $storageConnection = $entityManager->getConnection();
@@ -191,7 +190,6 @@ final class SchemaManagerTest extends TestCase
     {
         $updater = new SchemaManager($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
         $storageConnection = $entityManager->getConnection();
