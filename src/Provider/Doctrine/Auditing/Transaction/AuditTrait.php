@@ -198,8 +198,8 @@ trait AuditTrait
             $entityCfg = $configuration->getEntities()[$meta->name] ?? [];
             $this->entityConfigCache[$meta->name] = [
                 'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
-                'ignored_columns'           => $entityCfg['ignored_columns'] ?? [],
-                'diff_label_resolvers'      => $entityCfg['diff_label_resolvers'] ?? [],
+                'ignored_columns' => $entityCfg['ignored_columns'] ?? [],
+                'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
             ];
         }
 
@@ -376,12 +376,13 @@ trait AuditTrait
                 }
 
                 return [
-                    $pkName  => $pkValue,
-                    'class'  => $meta->name,
-                    'label'  => $label,
-                    'table'  => $meta->getTableName(),
+                    $pkName => $pkValue,
+                    'class' => $meta->name,
+                    'label' => $label,
+                    'table' => $meta->getTableName(),
                 ] + $extra;
             }
+
             $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         } else {
             // Plain entity or PHP 8.4+ native lazy object: already initialized by UoW change
@@ -409,10 +410,10 @@ trait AuditTrait
         }
 
         return [
-            $pkName  => $pkValue,
-            'class'  => $meta->name,
-            'label'  => $label,
-            'table'  => $meta->getTableName(),
+            $pkName => $pkValue,
+            'class' => $meta->name,
+            'label' => $label,
+            'table' => $meta->getTableName(),
         ] + $extra;
     }
 

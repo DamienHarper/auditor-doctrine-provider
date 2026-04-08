@@ -254,7 +254,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
     private function audit(array $data): void
     {
         $entityObject = $data['entity_object'] ?? null;
-        $entityClass  = $data['entity'];
+        $entityClass = $data['entity'];
 
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
@@ -265,8 +265,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
             $entityCfg = $configuration->getEntities()[$entityClass] ?? [];
             $this->entityConfigCache[$entityClass] = [
                 'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
-                'ignored_columns'           => $entityCfg['ignored_columns'] ?? [],
-                'diff_label_resolvers'      => $entityCfg['diff_label_resolvers'] ?? [],
+                'ignored_columns' => $entityCfg['ignored_columns'] ?? [],
+                'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
             ];
         }
 
