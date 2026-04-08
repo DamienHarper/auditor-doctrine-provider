@@ -30,7 +30,13 @@ final class DoctrineHelper
     {
         $subject = \is_object($subject) ? $subject::class : $subject;
 
+        // Fast path: with PHP 8.4+ native lazy objects, __CG__ proxies are never generated.
+        // str_contains is significantly faster than mb_strrpos for the common no-proxy case.
         // __CG__: Doctrine Proxy Marker (Doctrine\Persistence\Proxy::MARKER)
+        if (!str_contains($subject, '__CG__')) {
+            return $subject;
+        }
+
         $position = mb_strrpos($subject, '\__CG__\\');
         if (false === $position) {
             return $subject;
@@ -68,11 +74,14 @@ final class DoctrineHelper
      */
     public static function jsonTypes(): array
     {
-        $jsonTypes = [Type::getType(Types::JSON)];
-        if (\defined(Types::class.'::JSONB')) {
-            $jsonTypes[] = Type::getType(Types::JSONB);
+        static $cache = null;
+        if (null === $cache) {
+            $cache = [Type::getType(Types::JSON)];
+            if (\defined(Types::class.'::JSONB')) {
+                $cache[] = Type::getType(Types::JSONB);
+            }
         }
 
-        return $jsonTypes;
+        return $cache;
     }
 }
