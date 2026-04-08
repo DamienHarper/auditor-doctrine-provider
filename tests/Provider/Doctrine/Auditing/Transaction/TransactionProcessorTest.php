@@ -8,7 +8,6 @@ use DH\Auditor\Model\TransactionType;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\TransactionProcessor;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
-use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -40,10 +39,10 @@ final class TransactionProcessorTest extends TestCase
             ->setEmail('john.doe@gmail.com')
         ;
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
         $method->invokeArgs($processor, [
             $entityManager,
             $author,
@@ -52,7 +51,6 @@ final class TransactionProcessorTest extends TestCase
                 'email' => [null, 'john.doe@gmail.com'],
             ],
             '01ABCDEFGHJKMNPQRSTVWXYZ00',
-            $blame,
         ]);
 
         $audits = $reader->createQuery(Author::class)->execute();
@@ -89,10 +87,10 @@ final class TransactionProcessorTest extends TestCase
             ->setEmail('john.doe@gmail.com')
         ;
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
         $method->invokeArgs($processor, [
             $entityManager,
             $author,
@@ -101,7 +99,6 @@ final class TransactionProcessorTest extends TestCase
                 'email' => ['john.doe@gmail.com', 'dark.vador@gmail.com'],
             ],
             '01ABCDEFGHJKMNPQRSTVWXYZ00',
-            $blame,
         ]);
 
         $audits = $reader->createQuery(Author::class)->execute();
@@ -131,7 +128,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $method = $this->reflectMethod(TransactionProcessor::class, 'remove');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -143,7 +139,8 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::remove() creates an audit entry.');
@@ -169,7 +166,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $method = $this->reflectMethod(TransactionProcessor::class, 'remove');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Post::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -182,7 +178,8 @@ final class TransactionProcessorTest extends TestCase
         ;
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, 1, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         // 1 "remove" audit entry added => count is 1
         $audits = $reader->createQuery(Post::class)->execute();
@@ -230,7 +227,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $method = $this->reflectMethod(TransactionProcessor::class, 'associate');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Post::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -272,7 +268,8 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::associate() creates an audit entry.');
@@ -308,7 +305,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $method = $this->reflectMethod(TransactionProcessor::class, 'dissociate');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -347,7 +343,8 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $method->invokeArgs($processor, [$entityManager, $author, $post, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         $audits = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');
@@ -383,7 +380,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $method = $this->reflectMethod(TransactionProcessor::class, 'associate');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -468,8 +464,9 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
-        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
+        $method->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(2, $audits, 'TransactionProcessor::associate() creates an audit entry per association.');
@@ -532,7 +529,6 @@ final class TransactionProcessorTest extends TestCase
         $associateMethod = $this->reflectMethod(TransactionProcessor::class, 'associate');
         $dissociateMethod = $this->reflectMethod(TransactionProcessor::class, 'dissociate');
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -617,10 +613,11 @@ final class TransactionProcessorTest extends TestCase
         ];
 
         $blame = $this->reflectMethod(TransactionProcessor::class, 'blame')->invoke($processor);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
-        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $this->reflectMethod(TransactionProcessor::class, 'preComputeFlushContext')->invokeArgs($processor, [$blame]);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag1, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
+        $associateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
-        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00', $blame]);
+        $dissociateMethod->invokeArgs($processor, [$entityManager, $post, $tag2, $mapping, '01ABCDEFGHJKMNPQRSTVWXYZ00']);
 
         $audits = $reader->createQuery(Post::class)->execute();
         $this->assertCount(3, $audits, 'TransactionProcessor::dissociate() creates an audit entry.');
@@ -656,7 +653,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $processor = new TransactionProcessor($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -688,7 +684,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $processor = new TransactionProcessor($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -732,7 +727,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $processor = new TransactionProcessor($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -792,7 +786,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $processor = new TransactionProcessor($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 
@@ -849,7 +842,6 @@ final class TransactionProcessorTest extends TestCase
         $reader = new Reader($this->provider);
         $processor = new TransactionProcessor($this->provider);
 
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity(Author::class);
         $entityManager = $storageService->getEntityManager();
 

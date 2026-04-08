@@ -196,7 +196,6 @@ final readonly class SchemaManager
      */
     public function createAuditTable(string $entity, ?Schema $schema = null): Schema
     {
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
 
@@ -258,7 +257,6 @@ final readonly class SchemaManager
      */
     public function updateAuditTable(string $entity, ?Schema $schema = null): Schema
     {
-        /** @var StorageService $storageService */
         $storageService = $this->provider->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
 

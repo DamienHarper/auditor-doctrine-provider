@@ -11,7 +11,6 @@ use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
-use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\ReaderTest;
 use Doctrine\ORM\Mapping\ClassMetadata as ORMMetadata;
 use Symfony\Component\OptionsResolver\OptionsResolver;
@@ -76,7 +75,6 @@ final readonly class Reader implements ReaderInterface
             $query->limit($config['page_size'], ($config['page'] - 1) * $config['page_size']);
         }
 
-        /** @var AuditingService $auditingService */
         $auditingService = $this->provider->getAuditingServiceForEntity($entity);
         $metadata = $auditingService->getEntityManager()->getClassMetadata($entity);
         if (
@@ -180,7 +178,6 @@ final readonly class Reader implements ReaderInterface
      */
     public function getEntityTableName(string $entity): string
     {
-        /** @var AuditingService $auditingService */
         $auditingService = $this->provider->getAuditingServiceForEntity($entity);
 
         return $auditingService->getEntityManager()->getClassMetadata($entity)->getTableName();

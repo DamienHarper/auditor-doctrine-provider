@@ -52,6 +52,14 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         'created_at' => '?',
     ];
 
+    /**
+     * Maps each field name to its 1-based bind position for prepared statements.
+     * Computed once from FIELDS and cached for the process lifetime.
+     *
+     * @var null|array<string, int>
+     */
+    private static ?array $fieldIndex = null;
+
     private readonly TransactionManager $transactionManager;
 
     /** @var array<string, Statement> */
@@ -180,17 +188,15 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $entity = $payload['entity'];
         unset($payload['table'], $payload['entity']);
 
-        /** @var StorageService $storageService */
         $storageService = $this->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
-
-        $keys = array_keys(self::FIELDS);
 
         if (!isset($this->preparedStatements[$cacheKey])) {
             // PostgreSQL requires an explicit ::jsonb cast for jsonb columns in prepared statements
             // (the driver otherwise infers the placeholder type as text, causing a type mismatch).
             $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
+            $keys = array_keys(self::FIELDS);
             $placeholders = array_map(
                 static fn (string $col): string => \in_array($col, ['diffs', 'extra_data', 'blame'], true)
                     ? '?'.$jsonCast
@@ -208,8 +214,13 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
 
         $statement = $this->preparedStatements[$cacheKey];
 
+        $fieldIndex = self::$fieldIndex ??= array_map(
+            static fn (int $i): int => $i + 1,
+            array_flip(array_keys(self::FIELDS))
+        );
+
         foreach ($payload as $key => $value) {
-            $statement->bindValue(array_search($key, $keys, true) + 1, $value);
+            $statement->bindValue($fieldIndex[$key], $value);
         }
 
         $statement->executeStatement();
