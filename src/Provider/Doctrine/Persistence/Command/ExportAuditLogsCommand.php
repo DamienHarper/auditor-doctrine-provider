@@ -302,7 +302,7 @@ final class ExportAuditLogsCommand extends Command
     /**
      * Converts an array to a CSV-formatted string using fputcsv on a temp stream.
      *
-     * @param list<mixed> $fields
+     * @param list<null|bool|float|int|string> $fields
      */
     private function toCsvLine(array $fields): string
     {
@@ -321,12 +321,14 @@ final class ExportAuditLogsCommand extends Command
      *
      * @param array<string, mixed> $data
      *
-     * @return list<mixed>
+     * @return list<null|bool|float|int|string>
      */
     private function flattenForCsv(array $data): array
     {
         return array_values(array_map(
-            static fn (mixed $value): mixed => \is_array($value) ? json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE) : $value,
+            static fn (mixed $value): bool|float|int|string|null => \is_array($value)
+                ? json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)
+                : (\is_scalar($value) || null === $value ? $value : null),
             $data
         ));
     }
