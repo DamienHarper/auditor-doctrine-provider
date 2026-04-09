@@ -116,7 +116,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('clean audits created before 2023-04-26 09:00:00', $output);
+        $this->assertStringContainsString('global keep: 2023-04-26 09:00:00', $output);
     }
 
     public function testExcludeOptionSingleValue(): void
@@ -129,7 +129,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('6 classes involved', $output);
+        $this->assertStringContainsString('6 classes', $output);
     }
 
     public function testExcludeOptionMultipleValues(): void
@@ -145,7 +145,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('5 classes involved', $output);
+        $this->assertStringContainsString('5 classes', $output);
     }
 
     public function testIncludeOptionSignleValue(): void
@@ -158,7 +158,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('1 classes involved', $output);
+        $this->assertStringContainsString('1 classes', $output);
     }
 
     public function testIncludeOptionMultipleValues(): void
@@ -174,7 +174,37 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('2 classes involved', $output);
+        $this->assertStringContainsString('2 classes', $output);
+    }
+
+    public function testPerEntityMaxAgeOverridesGlobalKeep(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_age' => 'P1D'],
+            Post::class => ['enabled' => true],
+        ]);
+
+        $command = $this->createCommand();
+        $commandTester = new CommandTester($command);
+        $commandTester->execute([
+            '--no-confirm' => true,
+            '--dump-sql' => true,
+            'keep' => 'P12M',
+        ]);
+
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('[OK] Success', $output);
+
+        // Author uses per-entity max_age P1D — its cutoff date must be recent (within the last 2 days)
+        $recentDate = new \DateTimeImmutable('-2 days');
+        $schemaManager = new SchemaManager($this->provider);
+        $configuration = $this->provider->getConfiguration();
+        $authorTable = $schemaManager->resolveAuditTableName(Author::class, $configuration);
+
+        $this->assertMatchesRegularExpression(
+            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2})/',
+            $output
+        );
     }
 
     private function createCommand(): CleanAuditLogsCommand

@@ -81,6 +81,8 @@ final readonly class AttributeLoader
             'enabled' => $auditableAttribute->enabled,
             'roles' => $roles,
             'diff_label_resolvers' => $diffLabelResolvers,
+            'max_age' => $auditableAttribute->maxAge,
+            'max_entries' => $auditableAttribute->maxEntries,
         ];
     }
 
