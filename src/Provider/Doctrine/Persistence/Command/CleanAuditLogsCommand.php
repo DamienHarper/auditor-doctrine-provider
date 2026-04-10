@@ -87,7 +87,9 @@ final class CleanAuditLogsCommand extends Command
         }
 
         if (!$until instanceof \DateTimeImmutable) {
-            return Command::SUCCESS;
+            $this->release();
+
+            return Command::FAILURE;
         }
 
         /** @var DoctrineProvider $provider */
@@ -142,6 +144,35 @@ final class CleanAuditLogsCommand extends Command
             /** @var Configuration $configuration */
             $configuration = $provider->getConfiguration();
             $entities = $configuration->getEntities();
+
+            // Validate per-entity max_age values before starting — an invalid value
+            // is a misconfiguration that must be reported explicitly, not silently ignored.
+            $configErrors = [];
+            foreach ($repository as $classes) {
+                foreach (array_keys($classes) as $entity) {
+                    $maxAge = $entities[$entity]['max_age'] ?? null;
+                    if (\is_string($maxAge) && '' !== $maxAge) {
+                        try {
+                            new \DateInterval($maxAge);
+                        } catch (\Exception) {
+                            $configErrors[] = \sprintf(
+                                "Entity '%s': invalid max_age value '%s' (must be a valid ISO 8601 duration, e.g. P30D).",
+                                $entity,
+                                $maxAge,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if ([] !== $configErrors) {
+                foreach ($configErrors as $error) {
+                    $io->error($error);
+                }
+                $this->release();
+
+                return Command::FAILURE;
+            }
 
             $progressBar = new ProgressBar($output, $count);
             $progressBar->setBarWidth(70);
@@ -261,7 +292,8 @@ final class CleanAuditLogsCommand extends Command
     private function buildMaxEntriesSql(string $auditTable, int $maxEntries, AbstractPlatform $platform): string
     {
         if ($platform instanceof AbstractMySQLPlatform) {
-            // MySQL rejects DELETE ... WHERE id NOT IN (SELECT ... FROM same table).
+            // MySQL (and MariaDB, which extends AbstractMySQLPlatform) rejects
+            // DELETE ... WHERE id NOT IN (SELECT ... FROM same table).
             // Wrapping the subquery in a derived table bypasses this restriction.
             return \sprintf(
                 'DELETE FROM %1$s WHERE id NOT IN (SELECT id FROM (SELECT id FROM %1$s ORDER BY created_at DESC LIMIT %2$d) AS _keep)',
@@ -270,6 +302,7 @@ final class CleanAuditLogsCommand extends Command
             );
         }
 
+        // PostgreSQL and SQLite support DELETE ... WHERE id NOT IN (SELECT ... LIMIT N) natively.
         return \sprintf(
             'DELETE FROM %1$s WHERE id NOT IN (SELECT id FROM %1$s ORDER BY created_at DESC LIMIT %2$d)',
             $auditTable,
