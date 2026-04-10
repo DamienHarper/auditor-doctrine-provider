@@ -10,6 +10,8 @@ use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommandTest;
+use Doctrine\DBAL\Platforms\AbstractMySQLPlatform;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Command\LockableTrait;
@@ -85,7 +87,9 @@ final class CleanAuditLogsCommand extends Command
         }
 
         if (!$until instanceof \DateTimeImmutable) {
-            return Command::SUCCESS;
+            $this->release();
+
+            return Command::FAILURE;
         }
 
         /** @var DoctrineProvider $provider */
@@ -127,9 +131,9 @@ final class CleanAuditLogsCommand extends Command
         }
 
         $message = \sprintf(
-            "You are about to clean audits created before <comment>%s</comment>: %d classes involved.\n Do you want to proceed?",
-            $until->format(self::UNTIL_DATE_FORMAT),
-            $count
+            "You are about to clean audits for <comment>%d</comment> classes (global keep: <comment>%s</comment>, per-entity retention policies apply where configured).\n Do you want to proceed?",
+            $count,
+            $until->format(self::UNTIL_DATE_FORMAT)
         );
 
         $confirm = $input->getOption('no-confirm') ? true : $io->confirm($message, false);
@@ -139,6 +143,36 @@ final class CleanAuditLogsCommand extends Command
         if ($confirm) {
             /** @var Configuration $configuration */
             $configuration = $provider->getConfiguration();
+            $entities = $configuration->getEntities();
+
+            // Validate per-entity max_age values before starting — an invalid value
+            // is a misconfiguration that must be reported explicitly, not silently ignored.
+            $configErrors = [];
+            foreach ($repository as $classes) {
+                foreach (array_keys($classes) as $entity) {
+                    $maxAge = $entities[$entity]['max_age'] ?? null;
+                    if (\is_string($maxAge) && '' !== $maxAge) {
+                        try {
+                            new \DateInterval($maxAge);
+                        } catch (\Exception) {
+                            $configErrors[] = \sprintf(
+                                "Entity '%s': invalid max_age value '%s' (must be a valid ISO 8601 duration, e.g. P30D).",
+                                $entity,
+                                $maxAge,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if ([] !== $configErrors) {
+                foreach ($configErrors as $error) {
+                    $io->error($error);
+                }
+                $this->release();
+
+                return Command::FAILURE;
+            }
 
             $progressBar = new ProgressBar($output, $count);
             $progressBar->setBarWidth(70);
@@ -160,19 +194,44 @@ final class CleanAuditLogsCommand extends Command
                     /** @var string $auditTable */
                     $auditTable = $schemaManager->resolveAuditTableName($entity, $configuration);
 
+                    $entityConfig = $entities[$entity] ?? [];
+
+                    // Resolve the cutoff date: per-entity max_age takes priority over the global keep
+                    $entityUntil = $until;
+                    $maxAge = $entityConfig['max_age'] ?? null;
+                    if (\is_string($maxAge) && '' !== $maxAge) {
+                        $entityUntil = $this->parseMaxAge($maxAge) ?? $until;
+                    }
+
+                    // Age-based DELETE
                     $queryBuilder = $connection->createQueryBuilder();
                     $queryBuilder
                         ->delete($auditTable)
                         ->where('created_at < :until')
-                        ->setParameter('until', $until->format(self::UNTIL_DATE_FORMAT))
+                        ->setParameter('until', $entityUntil->format(self::UNTIL_DATE_FORMAT))
                     ;
 
                     if ($dumpSQL) {
-                        $queries[] = str_replace(':until', "'".$until->format(self::UNTIL_DATE_FORMAT)."'", $queryBuilder->getSQL());
+                        $queries[] = str_replace(':until', "'".$entityUntil->format(self::UNTIL_DATE_FORMAT)."'", $queryBuilder->getSQL());
                     }
 
                     if (!$dryRun) {
                         $queryBuilder->executeStatement();
+                    }
+
+                    // Count-based DELETE: keep only the N most recent entries
+                    $maxEntries = $entityConfig['max_entries'] ?? null;
+                    if (\is_int($maxEntries) && $maxEntries > 0) {
+                        $platform = $connection->getDatabasePlatform();
+                        $sql = $this->buildMaxEntriesSql($auditTable, $maxEntries, $platform);
+
+                        if ($dumpSQL) {
+                            $queries[] = $sql;
+                        }
+
+                        if (!$dryRun) {
+                            $connection->executeStatement($sql);
+                        }
                     }
 
                     $progressBar->setMessage(\sprintf('Cleaning audit tables... (<info>%s</info>)', $auditTable));
@@ -217,5 +276,37 @@ final class CleanAuditLogsCommand extends Command
         }
 
         return new \DateTimeImmutable()->sub($dateInterval);
+    }
+
+    private function parseMaxAge(string $maxAge): ?\DateTimeImmutable
+    {
+        try {
+            $dateInterval = new \DateInterval($maxAge);
+        } catch (\Exception) {
+            return null;
+        }
+
+        return new \DateTimeImmutable()->sub($dateInterval);
+    }
+
+    private function buildMaxEntriesSql(string $auditTable, int $maxEntries, AbstractPlatform $platform): string
+    {
+        if ($platform instanceof AbstractMySQLPlatform) {
+            // MySQL (and MariaDB, which extends AbstractMySQLPlatform) rejects
+            // DELETE ... WHERE id NOT IN (SELECT ... FROM same table).
+            // Wrapping the subquery in a derived table bypasses this restriction.
+            return \sprintf(
+                'DELETE FROM %1$s WHERE id NOT IN (SELECT id FROM (SELECT id FROM %1$s ORDER BY created_at DESC LIMIT %2$d) AS _keep)',
+                $auditTable,
+                $maxEntries
+            );
+        }
+
+        // PostgreSQL and SQLite support DELETE ... WHERE id NOT IN (SELECT ... LIMIT N) natively.
+        return \sprintf(
+            'DELETE FROM %1$s WHERE id NOT IN (SELECT id FROM %1$s ORDER BY created_at DESC LIMIT %2$d)',
+            $auditTable,
+            $maxEntries
+        );
     }
 }

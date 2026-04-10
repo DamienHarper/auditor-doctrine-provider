@@ -18,6 +18,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Command\LockableTrait;
 use Symfony\Component\Console\Tester\CommandTester;
 
@@ -46,6 +47,34 @@ final class CleanAuditLogsCommandTest extends TestCase
         $this->assertStringContainsString(\sprintf("[ERROR] 'keep' argument must be a valid ISO 8601 date interval, '%s' given.", self::KEEP), $output);
     }
 
+    public function testExecuteFailsWithInvalidDateOption(): void
+    {
+        $command = $this->createCommand();
+        $commandTester = new CommandTester($command);
+        $commandTester->execute([
+            '--no-confirm' => true,
+            '--date' => 'not-a-date',
+        ]);
+
+        $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
+    }
+
+    public function testExecuteFailsWithInvalidPerEntityMaxAge(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_age' => 'NOT_AN_INTERVAL'],
+        ]);
+
+        $command = $this->createCommand();
+        $commandTester = new CommandTester($command);
+        $commandTester->execute(['--no-confirm' => true]);
+
+        $output = $commandTester->getDisplay();
+        $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
+        $this->assertStringContainsString('invalid max_age value', $output);
+        $this->assertStringContainsString('NOT_AN_INTERVAL', $output);
+    }
+
     public function testDumpSQL(): void
     {
         $schemaManager = new SchemaManager($this->provider);
@@ -65,11 +94,12 @@ final class CleanAuditLogsCommandTest extends TestCase
         $output = $commandTester->getDisplay();
 
         foreach (array_keys($entities) as $entity) {
-            $storageService = $this->provider->getStorageServiceForEntity($entity);
-            $platform = $storageService->getEntityManager()->getConnection()->getDatabasePlatform();
             $expected = 'DELETE FROM '.$schemaManager->resolveAuditTableName($entity, $configuration);
             $this->assertStringContainsString($expected, $output);
         }
+
+        // No max_entries is configured in configureEntities() — no count-based DELETE expected
+        $this->assertStringNotContainsString('WHERE id NOT IN', $output);
 
         $this->assertStringContainsString('[OK] Success', $output);
     }
@@ -116,7 +146,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('clean audits created before 2023-04-26 09:00:00', $output);
+        $this->assertStringContainsString('global keep: 2023-04-26 09:00:00', $output);
     }
 
     public function testExcludeOptionSingleValue(): void
@@ -129,7 +159,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('6 classes involved', $output);
+        $this->assertStringContainsString('6 classes', $output);
     }
 
     public function testExcludeOptionMultipleValues(): void
@@ -145,7 +175,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('5 classes involved', $output);
+        $this->assertStringContainsString('5 classes', $output);
     }
 
     public function testIncludeOptionSignleValue(): void
@@ -158,7 +188,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('1 classes involved', $output);
+        $this->assertStringContainsString('1 classes', $output);
     }
 
     public function testIncludeOptionMultipleValues(): void
@@ -174,7 +204,93 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('2 classes involved', $output);
+        $this->assertStringContainsString('2 classes', $output);
+    }
+
+    public function testPerEntityMaxAgeOverridesGlobalKeep(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_age' => 'P1D'],
+            Post::class => ['enabled' => true],
+        ]);
+
+        $command = $this->createCommand();
+        $commandTester = new CommandTester($command);
+        $commandTester->execute([
+            '--no-confirm' => true,
+            '--dump-sql' => true,
+            'keep' => 'P12M',
+        ]);
+
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('[OK] Success', $output);
+
+        $schemaManager = new SchemaManager($this->provider);
+        $configuration = $this->provider->getConfiguration();
+        $authorTable = $schemaManager->resolveAuditTableName(Author::class, $configuration);
+        $postTable = $schemaManager->resolveAuditTableName(Post::class, $configuration);
+
+        // Extract the DELETE cutoff date for Author (per-entity P1D)
+        $this->assertMatchesRegularExpression(
+            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            $output
+        );
+        preg_match(
+            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            $output,
+            $authorMatches
+        );
+
+        // Extract the DELETE cutoff date for Post (global P12M)
+        $this->assertMatchesRegularExpression(
+            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            $output
+        );
+        preg_match(
+            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            $output,
+            $postMatches
+        );
+
+        // Author cutoff (P1D ago) must be more recent than Post cutoff (P12M ago)
+        $authorCutoff = new \DateTimeImmutable($authorMatches[1]);
+        $postCutoff = new \DateTimeImmutable($postMatches[1]);
+        $this->assertGreaterThan($postCutoff, $authorCutoff, 'Per-entity max_age P1D must yield a more recent cutoff than global P12M');
+    }
+
+    public function testMaxEntriesSqlAppearsInDumpOutput(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_entries' => 50],
+            Post::class => ['enabled' => true],
+        ]);
+
+        $command = $this->createCommand();
+        $commandTester = new CommandTester($command);
+        $commandTester->execute([
+            '--no-confirm' => true,
+            '--dump-sql' => true,
+        ]);
+
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('[OK] Success', $output);
+
+        $schemaManager = new SchemaManager($this->provider);
+        $configuration = $this->provider->getConfiguration();
+        $authorTable = $schemaManager->resolveAuditTableName(Author::class, $configuration);
+        $postTable = $schemaManager->resolveAuditTableName(Post::class, $configuration);
+
+        // Author has max_entries — count-based DELETE must appear with correct table and limit
+        $this->assertMatchesRegularExpression(
+            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE id NOT IN.*LIMIT 50/',
+            $output
+        );
+
+        // Post has no max_entries — no count-based DELETE for its table
+        $this->assertDoesNotMatchRegularExpression(
+            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE id NOT IN/',
+            $output
+        );
     }
 
     private function createCommand(): CleanAuditLogsCommand
