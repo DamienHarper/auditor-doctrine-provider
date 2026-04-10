@@ -82,13 +82,13 @@ final class ExportAuditLogsCommandTest extends TestCase
             $handle = fopen($tmpFile, 'r');
             $this->assertIsResource($handle);
 
-            $headers = fgetcsv($handle);
+            $headers = fgetcsv($handle, escape: '\\');
             $this->assertIsArray($headers);
             $this->assertContains('id', $headers);
             $this->assertContains('type', $headers);
             $this->assertContains('object_id', $headers);
 
-            $row = fgetcsv($handle);
+            $row = fgetcsv($handle, escape: '\\');
             $this->assertIsArray($row, 'CSV must contain at least one data row.');
             fclose($handle);
         } finally {

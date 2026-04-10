@@ -103,6 +103,7 @@ final class ExportAuditLogsCommand extends Command
         /** @var ?string $entityArg */
         $entityArg = $input->getArgument('entity');
         $entityArg = \is_array($entityArg) ? $entityArg[0] : $entityArg;
+
         $entities = $this->resolveEntities($entityArg, $schemaManager, $io);
 
         /** @var ?string $outputPath */
@@ -124,7 +125,11 @@ final class ExportAuditLogsCommand extends Command
         }
 
         $write = null !== $fileStream
-            ? static function (string $data) use ($fileStream): void { fwrite($fileStream, $data); }
+            ? static function (string $data) use ($fileStream): void {
+                if (false === fwrite($fileStream, $data)) {
+                    throw new \RuntimeException('Failed to write to output file.');
+                }
+            }
         : static function (string $data) use ($output): void { $output->write($data, false, OutputInterface::OUTPUT_RAW); };
 
         /** @var ?string $id */
@@ -135,62 +140,64 @@ final class ExportAuditLogsCommand extends Command
         $anonymize = (bool) $input->getOption('anonymize');
         $timezone = new \DateTimeZone($provider->getAuditor()->getConfiguration()->timezone);
 
-        if ('json' === $format) {
-            $write('[');
-        }
-
-        $first = true;
-        $headerWritten = false;
-
-        foreach ($entities as $entityFqcn) {
-            try {
-                $query = $reader->createQuery($entityFqcn, ['page_size' => null]);
-            } catch (InvalidArgumentException) {
-                $io->warning(\sprintf("Entity '%s' is not auditable or could not be found. Skipping.", $entityFqcn));
-
-                continue;
+        try {
+            if ('json' === $format) {
+                $write('[');
             }
 
-            if (null !== $id && '' !== $id) {
-                $query->addFilter(new SimpleFilter(Query::OBJECT_ID, $id));
-            }
+            $first = true;
+            $headerWritten = false;
 
-            if (null !== $blameId && '' !== $blameId) {
-                $query->addFilter(new SimpleFilter(Query::USER_ID, $blameId));
-            }
+            foreach ($entities as $entityFqcn) {
+                try {
+                    $query = $reader->createQuery($entityFqcn, ['page_size' => null]);
+                } catch (InvalidArgumentException) {
+                    $io->warning(\sprintf("Entity '%s' is not auditable or could not be found. Skipping.", $entityFqcn));
 
-            if ($from instanceof \DateTimeImmutable || $to instanceof \DateTimeImmutable) {
-                $query->addFilter(new DateRangeFilter(Query::CREATED_AT, $from ?: null, $to ?: null));
-            }
-
-            foreach ($query->iterate() as $row) {
-                \assert(\is_string($row['created_at']));
-                $row['created_at'] = new \DateTimeImmutable($row['created_at'], $timezone);
-
-                if ($anonymize) {
-                    $row = $this->anonymizeRow($row);
+                    continue;
                 }
 
-                $entry = Entry::fromArray($row);
-                $data = $entry->toArray();
+                if (null !== $id && '' !== $id) {
+                    $query->addFilter(new SimpleFilter(Query::OBJECT_ID, $id));
+                }
 
-                match ($format) {
-                    'ndjson' => $this->writeNdjsonRow($write, $data),
-                    'json' => $this->writeJsonRow($write, $data, $first),
-                    'csv' => $this->writeCsvRow($write, $data, $headerWritten),
-                };
+                if (null !== $blameId && '' !== $blameId) {
+                    $query->addFilter(new SimpleFilter(Query::USER_ID, $blameId));
+                }
+
+                if ($from instanceof \DateTimeImmutable || $to instanceof \DateTimeImmutable) {
+                    $query->addFilter(new DateRangeFilter(Query::CREATED_AT, $from ?: null, $to ?: null));
+                }
+
+                foreach ($query->iterate() as $row) {
+                    \assert(\is_string($row['created_at']));
+                    $row['created_at'] = new \DateTimeImmutable($row['created_at'], $timezone);
+
+                    if ($anonymize) {
+                        $row = $this->anonymizeRow($row);
+                    }
+
+                    $entry = Entry::fromArray($row);
+                    $data = $entry->toArray();
+
+                    match ($format) {
+                        'ndjson' => $this->writeNdjsonRow($write, $data),
+                        'json' => $this->writeJsonRow($write, $data, $first),
+                        'csv' => $this->writeCsvRow($write, $data, $headerWritten),
+                    };
+                }
             }
-        }
 
-        if ('json' === $format) {
-            $write(']');
-        }
+            if ('json' === $format) {
+                $write(']');
+            }
+        } finally {
+            if (null !== $fileStream) {
+                fclose($fileStream);
+            }
 
-        if (null !== $fileStream) {
-            fclose($fileStream);
+            $this->release();
         }
-
-        $this->release();
 
         return Command::SUCCESS;
     }
@@ -307,13 +314,21 @@ final class ExportAuditLogsCommand extends Command
     private function toCsvLine(array $fields): string
     {
         $stream = fopen('php://temp', 'r+');
-        \assert(\is_resource($stream));
-        fputcsv($stream, $fields);
+
+        if (!\is_resource($stream)) {
+            throw new \RuntimeException('Failed to open temporary stream for CSV generation.');
+        }
+
+        fputcsv($stream, $fields, escape: '\\');
         rewind($stream);
         $line = stream_get_contents($stream);
         fclose($stream);
 
-        return \is_string($line) ? $line : '';
+        if (false === $line) {
+            throw new \RuntimeException('Failed to read from temporary stream.');
+        }
+
+        return $line;
     }
 
     /**
