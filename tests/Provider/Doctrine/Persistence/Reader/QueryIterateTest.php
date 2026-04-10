@@ -99,6 +99,7 @@ final class QueryIterateTest extends TestCase
     {
         $query = new Query(self::TABLE, $this->connection, 'UTC');
         $query->addFilter(new SimpleFilter(Query::OBJECT_ID, '2'));
+
         $rows = iterator_to_array($query->iterate(), false);
 
         $this->assertCount(1, $rows);
@@ -109,6 +110,7 @@ final class QueryIterateTest extends TestCase
     {
         $query = new Query(self::TABLE, $this->connection, 'UTC');
         $query->addFilter(new SimpleFilter(Query::OBJECT_ID, 'nonexistent'));
+
         $rows = iterator_to_array($query->iterate(), false);
 
         $this->assertCount(0, $rows);
