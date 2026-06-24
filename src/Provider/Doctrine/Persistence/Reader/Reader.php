@@ -160,7 +160,7 @@ final readonly class Reader implements ReaderInterface
         $hasNextPage = ($currentPage * $pageSize) < $numResults;
 
         return [
-            'results' => new \ArrayIterator($query->execute()),
+            'results' => new \ArrayIterator($query->limit($pageSize, ($currentPage - 1) * $pageSize)->execute()),
             'currentPage' => $currentPage,
             'hasPreviousPage' => $hasPreviousPage,
             'hasNextPage' => $hasNextPage,
