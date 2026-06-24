@@ -201,6 +201,7 @@ final class ReaderTest extends TestCase
         $this->assertFalse($pager['hasNextPage'], 'Pager has next page.');
         $this->assertFalse($pager['haveToPaginate'], 'Pager has to paginate.');
         $this->assertSame(1, $pager['numPages'], 'Pager has 1 page.');
+        $this->assertCount(7, iterator_to_array($pager['results']), 'Page contains all 7 results.');
 
         $pager = $reader->paginate($reader->createQuery(Author::class), 1, 2);
         $this->assertIsArray($pager);
@@ -209,6 +210,13 @@ final class ReaderTest extends TestCase
         $this->assertTrue($pager['hasNextPage'], 'Pager has next page.');
         $this->assertTrue($pager['haveToPaginate'], 'Pager has to paginate.');
         $this->assertSame(4, $pager['numPages'], 'Pager has 4 pages.');
+        $this->assertCount(2, iterator_to_array($pager['results']), 'Page 1 contains 2 results.');
+
+        $pager = $reader->paginate($reader->createQuery(Author::class), 2, 2);
+        $this->assertCount(2, iterator_to_array($pager['results']), 'Page 2 contains 2 results.');
+
+        $pager = $reader->paginate($reader->createQuery(Author::class), 4, 2);
+        $this->assertCount(1, iterator_to_array($pager['results']), 'Last page contains 1 result.');
     }
 
     public function testMultipleFilters(): void
