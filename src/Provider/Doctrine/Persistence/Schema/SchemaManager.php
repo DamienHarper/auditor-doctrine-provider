@@ -98,7 +98,7 @@ final readonly class SchemaManager
      * Returns an array of audit table names indexed by entity FQN.
      * Only auditable entities are considered.
      */
-    public function getAuditableTableNames(EntityManagerInterface $entityManager): array
+    public function getAuditableTableNames(EntityManagerInterface $entityManager, bool $skipDisabled): array
     {
         $metadataDriver = $entityManager->getConfiguration()->getMetadataDriverImpl();
         $entities = [];
@@ -108,7 +108,7 @@ final readonly class SchemaManager
 
         $audited = [];
         foreach ($entities as $entity) {
-            if ($this->provider->isAuditable($entity)) {
+            if ($this->provider->isAuditable($entity, $skipDisabled)) {
                 $audited[$entity] = $entityManager->getClassMetadata($entity)->getTableName();
             }
         }
@@ -118,7 +118,7 @@ final readonly class SchemaManager
         return $audited;
     }
 
-    public function collectAuditableEntities(): array
+    public function collectAuditableEntities(bool $skipDisabled = false): array
     {
         // auditable entities by storage entity manager
         $repository = [];
@@ -126,7 +126,7 @@ final readonly class SchemaManager
         /** @var AuditingService[] $auditingServices */
         $auditingServices = $this->provider->getAuditingServices();
         foreach ($auditingServices as $auditingService) {
-            $classes = $this->getAuditableTableNames($auditingService->getEntityManager());
+            $classes = $this->getAuditableTableNames($auditingService->getEntityManager(), $skipDisabled);
             // Populate the auditable entities repository
             foreach ($classes as $entity => $tableName) {
                 $storageService = $this->provider->getStorageServiceForEntity($entity);
@@ -142,7 +142,7 @@ final readonly class SchemaManager
         return $repository;
     }
 
-    public function getUpdateAuditSchemaSql(): array
+    public function getUpdateAuditSchemaSql(bool $skipDisabled = false): array
     {
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
@@ -151,7 +151,7 @@ final readonly class SchemaManager
         $storageServices = $this->provider->getStorageServices();
 
         // Collect auditable entities from auditing entity managers
-        $repository = $this->collectAuditableEntities();
+        $repository = $this->collectAuditableEntities($skipDisabled);
 
         // Compute and collect SQL queries
         $sqls = [];
