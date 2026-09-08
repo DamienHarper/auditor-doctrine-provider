@@ -240,9 +240,11 @@ final class DoctrineProviderTest extends TestCase
         $provider = $this->createDoctrineProvider($configuration);
 
         $this->assertFalse($provider->isAudited(Post::class), 'Entity "'.Post::class.'" is not audited.');
-        $this->assertTrue($provider->isAuditable(Post::class), 'Entity "'.Post::class.'" is auditable.');
+        $this->assertFalse($provider->isAuditable(Post::class, true), 'Entity "'.Post::class.'" is not auditable.');
+        $this->assertTrue($provider->isAuditable(Post::class, false), 'Entity "'.Post::class.'" is auditable.');
         $this->assertFalse($provider->isAudited(Comment::class), 'Entity "'.Comment::class.'" is not audited.');
-        $this->assertFalse($provider->isAuditable(Comment::class), 'Entity "'.Comment::class.'" is not auditable.');
+        $this->assertFalse($provider->isAuditable(Comment::class, true), 'Entity "'.Comment::class.'" is not auditable.');
+        $this->assertFalse($provider->isAuditable(Comment::class, false), 'Entity "'.Comment::class.'" is not auditable.');
     }
 
     #[Depends('testIsAudited')]

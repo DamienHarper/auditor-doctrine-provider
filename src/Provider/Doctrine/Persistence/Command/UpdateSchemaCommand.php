@@ -42,6 +42,7 @@ final class UpdateSchemaCommand extends Command
         $this
             ->addOption('dump-sql', null, InputOption::VALUE_NONE, 'Dumps the generated SQL statements to the screen (does not execute them).')
             ->addOption('force', 'f', InputOption::VALUE_NONE, 'Causes the generated SQL statements to be physically executed against your database.')
+            ->addOption('skip-disabled', null, InputOption::VALUE_NONE, 'Skip entities with auditing explicitly disabled via #[Auditable(enabled: false)].')
         ;
     }
 
@@ -57,6 +58,7 @@ final class UpdateSchemaCommand extends Command
 
         $dumpSql = true === $input->getOption('dump-sql');
         $force = true === $input->getOption('force');
+        $skipDisabled = true === $input->getOption('skip-disabled');
 
         /** @var DoctrineProvider $provider */
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
@@ -81,7 +83,7 @@ final class UpdateSchemaCommand extends Command
             return Command::FAILURE;
         }
 
-        $sqls = $updateManager->getUpdateAuditSchemaSql();
+        $sqls = $updateManager->getUpdateAuditSchemaSql($skipDisabled);
 
         $count = 0;
         foreach ($sqls as $queries) {
@@ -145,6 +147,7 @@ final class UpdateSchemaCommand extends Command
                 '',
                 \sprintf('    <info>%s --force</info> to execute the command', $this->getName()),
                 \sprintf('    <info>%s --dump-sql</info> to dump the SQL statements to the screen', $this->getName()),
+                \sprintf('    <info>%s --skip-disabled</info> to skip entities disabled by #[Auditable(enabled: false)]', $this->getName()),
             ]
         );
 

@@ -234,11 +234,17 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     /**
      * Returns true if $entity is auditable.
      */
-    public function isAuditable(object|string $entity): bool
+    public function isAuditable(object|string $entity, bool $skipDisabled = false): bool
     {
         $class = DoctrineHelper::getRealClassName($entity);
         // is $entity part of audited entities?
         \assert($this->configuration instanceof Configuration);   // helps PHPStan
+
+        if ($skipDisabled && \array_key_exists($class, $this->configuration->getEntities())) {
+            $entityMetadata = $this->configuration->getEntities()[$class];
+
+            return $entityMetadata['enabled'] ?? false;
+        }
 
         // no => $entity is not audited
         return \array_key_exists($class, $this->configuration->getEntities());
