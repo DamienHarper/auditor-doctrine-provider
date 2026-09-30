@@ -21,8 +21,19 @@ final class AuditorConnection extends AbstractConnectionMiddleware
     public function commit(): void
     {
         $flusherList = $this->auditorDriver->getFlusherList();
-        foreach ($flusherList as $flusher) {
-            ($flusher)();
+
+        try {
+            foreach ($flusherList as $flusher) {
+                ($flusher)();
+            }
+        } catch (\Throwable $throwable) {
+            // DBAL counts the transaction as finished even though commit() threw, so nobody calls
+            // rollBack() afterwards: the flusher would stay in the list and fail every later commit
+            // on this connection, and the server-side transaction would stay open.
+            $this->auditorDriver->resetFlusherList();
+            parent::rollBack();
+
+            throw $throwable;
         }
 
         $this->auditorDriver->resetFlusherList();
