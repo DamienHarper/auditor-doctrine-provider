@@ -239,5 +239,23 @@ final class TransactionHydrator implements TransactionHydratorInterface
                 }
             }
         }
+
+        // Deleted entities have no changeset: dissociate them from the inverse-side owner they were
+        // originally attached to, unless that owner is deleted in the same flush.
+        foreach ($uow->getScheduledEntityDeletions() as $entity) {
+            $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+            $originalData = $uow->getOriginalEntityData($entity);
+
+            foreach ($meta->associationMappings as $fieldName => $assocMapping) {
+                $old = $originalData[$fieldName] ?? null;
+                if (!$assocMapping->isToOneOwningSide() || null === $assocMapping->inversedBy || null === $old
+                    || $uow->isScheduledForDelete($old) || !$this->provider->isAudited($old)) {
+                    continue;
+                }
+
+                $inverseMapping = $entityManager->getClassMetadata($assocMapping->targetEntity)->getAssociationMapping($assocMapping->inversedBy)->toArray();
+                $transaction->dissociate($old, $entity, $inverseMapping);
+            }
+        }
     }
 }
