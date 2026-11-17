@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -142,14 +143,16 @@ final class MigrateSchemaCommandTest extends TestCase
             if ($table->hasColumn('schema_version') && !$table->hasColumn('transaction_hash')) {
                 // Drop all indexes first (required by SQLite before dropping indexed columns)
                 $platform = $connection->getDatabasePlatform();
-                foreach ($table->getIndexes() as $index) {
-                    if (!$index->isPrimary()) {
-                        // MySQL/MariaDB require ON <table>; no IF EXISTS support for DROP INDEX
-                        if ($platform instanceof MySQLPlatform || $platform instanceof MariaDBPlatform) {
-                            $connection->executeStatement(\sprintf('DROP INDEX %s ON %s', $index->getName(), $name));
-                        } else {
-                            $connection->executeStatement(\sprintf('DROP INDEX IF EXISTS %s', $index->getName()));
-                        }
+                foreach (SchemaHelper::getAuditTableIndices((string) $name) as $struct) {
+                    if (!isset($struct['name']) || !$table->hasIndex($struct['name'])) {
+                        continue; // primary key
+                    }
+
+                    // MySQL/MariaDB require ON <table>; no IF EXISTS support for DROP INDEX
+                    if ($platform instanceof MySQLPlatform || $platform instanceof MariaDBPlatform) {
+                        $connection->executeStatement(\sprintf('DROP INDEX %s ON %s', $struct['name'], $name));
+                    } else {
+                        $connection->executeStatement(\sprintf('DROP INDEX IF EXISTS %s', $struct['name']));
                     }
                 }
 
