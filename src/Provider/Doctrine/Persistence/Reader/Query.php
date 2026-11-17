@@ -75,7 +75,6 @@ final class Query implements QueryInterface
         $statement = $queryBuilder->executeQuery();
 
         $result = [];
-        \assert($statement instanceof Result);
         foreach ($statement->fetchAllAssociative() as $row) {
             \assert(\is_string($row['created_at']));
             $row['created_at'] = new \DateTimeImmutable($row['created_at'], $this->timezone);
@@ -83,6 +82,21 @@ final class Query implements QueryInterface
         }
 
         return $result;
+    }
+
+    /**
+     * Yields raw DB rows as associative arrays, one at a time, without loading the full
+     * result set into memory. Suitable for streaming large exports via NDJSON, CSV, or JSON.
+     *
+     * The 'created_at' field is a raw string — callers must convert it before calling Entry::fromArray().
+     *
+     * @return \Generator<int, array<string, mixed>>
+     */
+    public function iterate(): \Generator
+    {
+        $statement = $this->buildQueryBuilder()->executeQuery();
+
+        yield from $statement->iterateAssociative();
     }
 
     public function count(): int
@@ -211,9 +225,7 @@ final class Query implements QueryInterface
         $grouped = [];
 
         foreach ($filters as $filter) {
-            if (!isset($grouped[$filter::class])) {
-                $grouped[$filter::class] = [];
-            }
+            $grouped[$filter::class] ??= [];
 
             $grouped[$filter::class][] = $filter;
         }
@@ -231,9 +243,7 @@ final class Query implements QueryInterface
         $name = null;
 
         foreach ($filters as $filter) {
-            if (null === $name) {
-                $name = $filter->getName();
-            }
+            $name ??= $filter->getName();
 
             if (\is_array($filter->getValue())) {
                 $merged = array_merge($merged, $filter->getValue());

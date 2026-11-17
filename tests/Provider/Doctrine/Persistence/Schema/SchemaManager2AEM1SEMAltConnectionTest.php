@@ -63,9 +63,7 @@ final class SchemaManager2AEM1SEMAltConnectionTest extends TestCase
          * @var StorageService $storageService
          */
         foreach ($storageServices as $name => $storageService) {
-            if (!isset($expected[$name])) {
-                $expected[$name] = [];
-            }
+            $expected[$name] ??= [];
 
             foreach ($entities as $entityOptions) {
                 if (!\in_array($entityOptions['computed_audit_table_name'], $expected[$name], true)) {

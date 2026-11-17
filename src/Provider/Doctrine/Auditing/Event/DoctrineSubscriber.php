@@ -22,6 +22,13 @@ final class DoctrineSubscriber implements ResetInterface
     /** @var Transaction[] */
     private array $transactions = [];
 
+    /**
+     * Flusher registered for each entity manager's transaction model, until it runs or is dropped.
+     *
+     * @var array<int, \Closure>
+     */
+    private array $flushers = [];
+
     public function __construct(
         private readonly DoctrineProvider $provider // kept for BC, no longer used directly
     ) {}
@@ -37,20 +44,21 @@ final class DoctrineSubscriber implements ResetInterface
         /** @var EntityManagerInterface $entityManager */
         $entityManager = $args->getObjectManager();
         $entityManagerId = spl_object_id($entityManager);
-        // cached transaction model, if it holds same EM no need to create a new one
-        $transaction = ($this->transactions[$entityManagerId] ??= new Transaction($entityManager));
+        $driver = $this->auditorDriver($entityManager);
+        $transaction = $this->transaction($entityManager, $driver);
         // Populate transaction
         $this->provider->getTransactionManager()->populate($transaction);
-        $driver = $entityManager->getConnection()->getDriver();
-        if (!$driver instanceof AuditorDriver) {
-            $driver = $this->getWrappedDriver($driver);
-        }
 
-        if ($driver instanceof AuditorDriver) {
-            $driver->addFlusher(function () use ($transaction): void {
-                $this->provider->getTransactionManager()->process($transaction);
-                $transaction->reset();
-            });
+        // A single flusher per database transaction processes everything populated until the commit.
+        if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
+            $this->flushers[$entityManagerId] = function () use ($transaction): void {
+                try {
+                    $this->provider->getTransactionManager()->process($transaction);
+                } finally {
+                    $transaction->reset();
+                }
+            };
+            $driver->addFlusher($this->flushers[$entityManagerId]);
         }
     }
 
@@ -58,10 +66,7 @@ final class DoctrineSubscriber implements ResetInterface
     {
         /** @var EntityManagerInterface $entityManager */
         $entityManager = $args->getObjectManager();
-        $entityManagerId = spl_object_id($entityManager);
-
-        // cached transaction model, if it holds same EM no need to create a new one
-        $transaction = ($this->transactions[$entityManagerId] ??= new Transaction($entityManager));
+        $transaction = $this->transaction($entityManager, $this->auditorDriver($entityManager));
 
         if ($this->provider->isAudited($args->getObject())) {
             $transaction->remove(
@@ -74,6 +79,7 @@ final class DoctrineSubscriber implements ResetInterface
     public function reset(): void
     {
         $this->transactions = [];
+        $this->flushers = [];
     }
 
     /**
@@ -107,5 +113,33 @@ final class DoctrineSubscriber implements ResetInterface
 
             return null;
         }, $driver, Driver::class)() ?: $driver;
+    }
+
+    private function auditorDriver(EntityManagerInterface $entityManager): ?AuditorDriver
+    {
+        $driver = $this->getWrappedDriver($entityManager->getConnection()->getDriver());
+
+        return $driver instanceof AuditorDriver ? $driver : null;
+    }
+
+    /**
+     * Returns the cached transaction model of the entity manager (one per entity manager).
+     *
+     * Once the entity manager's flusher has left the driver's list, it either ran or was dropped because
+     * its database transaction was rolled back or failed to commit: in both cases, the entries left in the
+     * transaction model must not be written with the next commit.
+     */
+    private function transaction(EntityManagerInterface $entityManager, ?AuditorDriver $driver): Transaction
+    {
+        $entityManagerId = spl_object_id($entityManager);
+        $transaction = ($this->transactions[$entityManagerId] ??= new Transaction($entityManager));
+
+        $flusher = $this->flushers[$entityManagerId] ?? null;
+        if ($flusher instanceof \Closure && !\in_array($flusher, $driver?->getFlusherList() ?? [], true)) {
+            unset($this->flushers[$entityManagerId]);
+            $transaction->reset();
+        }
+
+        return $transaction;
     }
 }

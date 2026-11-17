@@ -15,16 +15,27 @@ use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Schema\SchemaManagerTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
-use Doctrine\DBAL\Schema\Comparator;
+use Doctrine\DBAL\Schema\Column;
+use Doctrine\DBAL\Schema\ComparatorConfig;
+use Doctrine\DBAL\Schema\Index;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
+use Doctrine\DBAL\Schema\Name\Parsers;
+use Doctrine\DBAL\Schema\PrimaryKeyConstraint;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaConfig;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
+use Doctrine\DBAL\Schema\TableEditor;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\Mapping\Driver\MappingDriver;
 
 /**
+ * Builds, compares and updates audit tables with the DBAL schema editor API.
+ *
+ * Schema objects are immutable: createAuditTable() and updateAuditTable() return a new Schema and leave the
+ * given one untouched.
+ *
  * @see SchemaManagerTest
  */
 final readonly class SchemaManager
@@ -72,9 +83,7 @@ final readonly class SchemaManager
 
     public function updateAuditSchema(?array $sqls = null, ?callable $callback = null): void
     {
-        if (null === $sqls) {
-            $sqls = $this->getUpdateAuditSchemaSql();
-        }
+        $sqls ??= $this->getUpdateAuditSchemaSql();
 
         /** @var StorageService[] $storageServices */
         $storageServices = $this->provider->getStorageServices();
@@ -131,9 +140,7 @@ final readonly class SchemaManager
             foreach ($classes as $entity => $tableName) {
                 $storageService = $this->provider->getStorageServiceForEntity($entity);
                 $key = array_search($storageService, $this->provider->getStorageServices(), true);
-                if (!isset($repository[$key])) {
-                    $repository[$key] = [];
-                }
+                $repository[$key] ??= [];
 
                 $repository[$key][$entity] = $tableName;
             }
@@ -142,6 +149,12 @@ final readonly class SchemaManager
         return $repository;
     }
 
+    /**
+     * Computes the SQL queries that bring audit tables to their expected structure, by storage service.
+     *
+     * Only audit tables are compared: the other tables of the storage database are left out, so that
+     * comparing them can neither generate statements nor trigger deprecations.
+     */
     public function getUpdateAuditSchemaSql(): array
     {
         /** @var Configuration $configuration */
@@ -156,41 +169,72 @@ final readonly class SchemaManager
         // Compute and collect SQL queries
         $sqls = [];
         foreach ($repository as $name => $classes) {
-            $storageConnection = $storageServices[$name]->getEntityManager()->getConnection();
-            $storageSchemaManager = $storageConnection->createSchemaManager();
-
+            $connection = $storageServices[$name]->getEntityManager()->getConnection();
+            $storageSchemaManager = $connection->createSchemaManager();
+            $platform = $connection->getDatabasePlatform();
             $storageSchema = $storageSchemaManager->introspectSchema();
-            $fromSchema = clone $storageSchema;
+            $schemaConfig = $storageSchemaManager->createSchemaConfig();
+            $comparator = $storageSchemaManager->createComparator(new ComparatorConfig()->withReportModifiedIndexes(false));
 
+            $createdNamespaces = [];
+            $createdTables = [];
+            $alterSqls = [];
             $processed = [];
-            foreach ($classes as $entityFQCN => $tableName) {
-                if (!\in_array($entityFQCN, $processed, true)) {
-                    /** @var string $auditTablename */
-                    $auditTablename = $this->resolveAuditTableName($entityFQCN, $configuration);
+            foreach (array_keys($classes) as $entityFQCN) {
+                /** @var string $auditTablename */
+                $auditTablename = $this->resolveAuditTableName($entityFQCN, $configuration);
 
-                    if ($storageSchema->hasTable($auditTablename)) {
-                        // Audit table exists, let's update it if needed
-                        $this->updateAuditTable($entityFQCN, $storageSchema);
-                    } else {
-                        // Audit table does not exists, let's create it
-                        $this->createAuditTable($entityFQCN, $storageSchema);
+                // Several entities may share an audit table (single table inheritance)
+                $key = mb_strtolower($auditTablename);
+                if (isset($processed[$key])) {
+                    continue;
+                }
+
+                $processed[$key] = true;
+
+                if ($storageSchema->hasTable($auditTablename)) {
+                    // Audit table exists, let's update it if needed
+                    $currentTable = SchemaHelper::normalizeJsonbColumns($storageSchema->getTable($auditTablename));
+                    $expectedTable = $this->applyAuditTableStructure(
+                        $currentTable,
+                        SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
+                        SchemaHelper::getAuditTableIndices($auditTablename),
+                        $connection,
+                    );
+                    $tableDiff = $comparator->compareTables($currentTable, $expectedTable);
+                    if (!$tableDiff->isEmpty()) {
+                        array_push($alterSqls, ...$platform->getAlterTableSQL($tableDiff));
+                    }
+                } else {
+                    // Audit table does not exist, let's create it
+                    $auditTable = $this->buildAuditTable($auditTablename, $connection, $schemaConfig);
+                    $namespace = $this->getNamespaceName($auditTable);
+                    if (
+                        null !== $namespace
+                        && $platform->supportsSchemas()
+                        && 0 !== strcasecmp($namespace, (string) $schemaConfig->getName())
+                        && !$storageSchema->hasNamespace($namespace)
+                    ) {
+                        $createdNamespaces[mb_strtolower($namespace)] = $namespace;
                     }
 
-                    $processed[] = $entityFQCN;
+                    $createdTables[] = $auditTable;
                 }
             }
 
-            $platform = $storageConnection->getDatabasePlatform();
-            $sqls[$name] = $platform->getAlterSchemaSQL(
-                new Comparator($platform)->compareSchemas($fromSchema, $storageSchema)
-            );
+            $sqls[$name] = [
+                ...array_values(array_map($platform->getCreateSchemaSQL(...), $createdNamespaces)),
+                ...([] === $createdTables ? [] : $platform->getCreateTablesSQL($createdTables)),
+                ...$alterSqls,
+            ];
         }
 
         return $sqls;
     }
 
     /**
-     * Creates an audit table.
+     * Adds the audit table of an entity to a schema, if missing: the given schema is left untouched and a new
+     * schema is returned.
      *
      * @throws Exception
      */
@@ -207,50 +251,48 @@ final readonly class SchemaManager
         $configuration = $this->provider->getConfiguration();
         $auditTablename = $this->resolveAuditTableName($entity, $configuration);
 
-        if (null !== $auditTablename && !$schema->hasTable($auditTablename)) {
-            $auditTable = $schema->createTable($auditTablename);
-
-            // Add columns to audit table
-            $isJsonSupported = PlatformHelper::isJsonSupported($connection);
-            foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
-                if (\in_array($struct['type'], DoctrineHelper::jsonStringTypes(), true)) {
-                    $type = $isJsonSupported ? Types::JSON : Types::TEXT;
-                } else {
-                    $type = $struct['type'];
-                }
-
-                $auditTable->addColumn($columnName, $type, $struct['options']);
-            }
-
-            // Add indices to audit table
-            foreach (SchemaHelper::getAuditTableIndices($auditTablename) as $columnName => $struct) {
-                \assert(\is_string($columnName));
-                if ('primary' === $struct['type']) {
-                    DoctrineHelper::setPrimaryKey($auditTable, $columnName);
-                } elseif (isset($struct['name'])) {
-                    // Composite indexes carry an explicit 'columns' list; single-column indexes derive
-                    // from the array key (which is the column name for non-composite entries).
-                    $columns = $struct['columns'] ?? [$columnName];
-                    $auditTable->addIndex(
-                        $columns,
-                        $struct['name'],
-                        [],
-                        // Length limiting only applies to single string columns, not composites
-                        1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
-                            ? ['lengths' => [191]]
-                            : []
-                    );
-                } else {
-                    throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
-                }
-            }
+        if (null === $auditTablename || $schema->hasTable($auditTablename)) {
+            return $schema;
         }
 
-        return $schema;
+        $auditTable = $this->buildAuditTable($auditTablename, $connection, $connection->createSchemaManager()->createSchemaConfig());
+
+        return $schema->edit()->addTable($auditTable)->create();
     }
 
     /**
-     * Ensures an audit table's structure is valid.
+     * Adds the audit table of an entity to a schema in place, if missing, with the mutable schema API.
+     *
+     * Only meant for schemas owned by a caller that keeps using the mutable API on them (e.g. the ORM schema
+     * tool when it does not use the schema editor API, which silences the related DBAL deprecations itself).
+     *
+     * @internal
+     *
+     * @throws Exception
+     */
+    public function addAuditTableToSchema(string $entity, Schema $schema): void
+    {
+        $storageService = $this->provider->getStorageServiceForEntity($entity);
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        $auditTablename = $this->resolveAuditTableName($entity, $configuration);
+
+        if (null === $auditTablename || $schema->hasTable($auditTablename)) {
+            return;
+        }
+
+        $this->populateLegacyAuditTable(
+            // @phpstan-ignore method.deprecated (mutable schema of an ORM not using the schema editor API)
+            $schema->createTable($auditTablename),
+            $auditTablename,
+            $storageService->getEntityManager()->getConnection(),
+        );
+    }
+
+    /**
+     * Ensures an audit table's structure is valid: the given schema is left untouched and a new schema is
+     * returned.
      *
      * @throws SchemaException
      * @throws Exception
@@ -272,13 +314,18 @@ final readonly class SchemaManager
         \assert(\is_string($auditTablename));
         $table = $schema->getTable($auditTablename);
 
-        // process columns
-        $this->processColumns($table, $table->getColumns(), SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)), $connection);
+        $updatedTable = $this->applyAuditTableStructure(
+            $table,
+            SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
+            SchemaHelper::getAuditTableIndices($auditTablename),
+            $connection,
+        );
 
-        // process indices
-        $this->processIndices($table, SchemaHelper::getAuditTableIndices($auditTablename), $connection);
-
-        return $schema;
+        return $schema->edit()
+            ->dropTable($table->getObjectName())
+            ->addTable($updatedTable)
+            ->create()
+        ;
     }
 
     /**
@@ -357,87 +404,178 @@ final readonly class SchemaManager
         );
     }
 
-    private function processColumns(Table $table, array $columns, array $expectedColumns, Connection $connection): void
+    /**
+     * Returns the type of an audit table column: JSON columns fall back to TEXT when the platform does not
+     * support JSON.
+     */
+    private function resolveColumnType(string $type, bool $isJsonSupported): string
     {
-        $processed = [];
+        return !$isJsonSupported && \in_array($type, DoctrineHelper::jsonStringTypes(), true) ? Types::TEXT : $type;
+    }
 
-        $isJsonSupported = PlatformHelper::isJsonSupported($connection);
-        foreach ($columns as $column) {
-            if (\array_key_exists($column->getName(), $expectedColumns)) {
-                // column is part of expected columns
-                $table->dropColumn($column->getName());
-
-                if (\in_array($expectedColumns[$column->getName()]['type'], DoctrineHelper::jsonStringTypes(), true) && !$isJsonSupported) {
-                    $type = Types::TEXT;
-                } else {
-                    $type = $expectedColumns[$column->getName()]['type'];
-                }
-
-                $columnOptions = $expectedColumns[$column->getName()]['options'];
-
-                // Preserve the column's existing platformOptions (e.g. MySQL charset/collation)
-                // when the expected definition does not configure any. Without this, re-adding
-                // the column with platformOptions: [] produces a schema that differs from the
-                // introspected one, causing a false-positive ALTER TABLE on every run.
-                // @see https://github.com/DamienHarper/auditor/issues/276
-                if (isset($columnOptions['platformOptions']) && [] === $columnOptions['platformOptions']) {
-                    $columnOptions['platformOptions'] = $column->getPlatformOptions();
-                }
-
-                $table->addColumn($column->getName(), $type, $columnOptions);
-            } else {
-                // column is not part of expected columns so it has to be removed
-                $table->dropColumn($column->getName());
-            }
-
-            $processed[] = $column->getName();
-        }
-
-        foreach ($expectedColumns as $columnName => $options) {
-            if (!\in_array($columnName, $processed, true)) {
-                $table->addColumn($columnName, $options['type'], $options['options']);
-            }
-        }
+    private function getNamespaceName(Table $table): ?string
+    {
+        return $table->getObjectName()->getQualifier()?->getValue();
     }
 
     /**
+     * Builds a new audit table, detached from any schema.
+     *
+     * @throws Exception
+     */
+    private function buildAuditTable(string $auditTablename, Connection $connection, SchemaConfig $schemaConfig): Table
+    {
+        $editor = Table::editor()
+            ->setName(Parsers::parseOptionallyQualifiedName($auditTablename))
+            // Schema::createTable() used to apply the default table options of the schema configuration
+            ->setOptions($schemaConfig->getDefaultTableOptions())
+            ->setConfiguration($schemaConfig->toTableConfiguration())
+        ;
+
+        $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+        foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
+            $editor->addColumn(SchemaHelper::buildColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']));
+        }
+
+        $this->addAuditTableIndices($editor, null, SchemaHelper::getAuditTableIndices($auditTablename), $connection);
+
+        return $editor->create();
+    }
+
+    /**
+     * Brings an existing audit table to the given structure: returns a new table and leaves the given one
+     * untouched.
+     *
+     * @param array<string, array{type: string, options: array<string, mixed>}>                   $expectedColumns
+     * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
+     *
      * @throws SchemaException
      */
-    private function processIndices(Table $table, array $expectedIndices, Connection $connection): void
+    private function applyAuditTableStructure(Table $table, array $expectedColumns, array $expectedIndices, Connection $connection): Table
     {
-        foreach ($expectedIndices as $columnName => $options) {
+        $editor = $table->edit();
+        $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+
+        $processed = [];
+        foreach ($table->getColumns() as $column) {
+            $columnName = $column->getObjectName()->getIdentifier()->getValue();
+            $editor->dropColumn($column->getObjectName());
+
+            // column is part of expected columns: re-add it with its expected definition,
+            // otherwise it has to be removed
+            if (\array_key_exists($columnName, $expectedColumns)) {
+                $editor->addColumn(SchemaHelper::buildColumn(
+                    $columnName,
+                    $this->resolveColumnType($expectedColumns[$columnName]['type'], $isJsonSupported),
+                    $expectedColumns[$columnName]['options'],
+                    $column,
+                ));
+            }
+
+            $processed[] = $columnName;
+        }
+
+        foreach ($expectedColumns as $columnName => $struct) {
+            if (!\in_array($columnName, $processed, true)) {
+                $editor->addColumn(SchemaHelper::buildColumn($columnName, $struct['type'], $struct['options']));
+            }
+        }
+
+        $this->addAuditTableIndices($editor, $table, $expectedIndices, $connection);
+
+        return $editor->create();
+    }
+
+    /**
+     * Adds the primary key and indices of an audit table, replacing the ones of $currentTable.
+     *
+     * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
+     */
+    private function addAuditTableIndices(TableEditor $editor, ?Table $currentTable, array $expectedIndices, Connection $connection): void
+    {
+        foreach ($expectedIndices as $columnName => $struct) {
             \assert(\is_string($columnName));
-            if ('primary' === $options['type']) {
-                $table->dropPrimaryKey();
-                DoctrineHelper::setPrimaryKey($table, $columnName);
-            } else {
+            if ('primary' === $struct['type']) {
+                if ($currentTable?->getPrimaryKeyConstraint() instanceof PrimaryKeyConstraint) {
+                    $editor->dropPrimaryKeyConstraint();
+                }
+
+                $editor->addPrimaryKeyConstraint(
+                    PrimaryKeyConstraint::editor()
+                        ->setUnquotedColumnNames($columnName)
+                        ->setIsClustered(true)
+                        ->create()
+                );
+            } elseif (isset($struct['name'])) {
                 // Composite indexes carry an explicit 'columns' list; single-column indexes derive
                 // from the array key (which is the column name for non-composite entries).
-                $columns = $options['columns'] ?? [$columnName];
+                $columns = $struct['columns'] ?? [$columnName];
 
-                // Skip drop+recreate when the index already exists with the same columns — avoids
-                // generating DROP INDEX SQL (MySQL requires ON <table> which DBAL omits on ALTER).
-                if ($table->hasIndex($options['name'])) {
+                if ($currentTable instanceof Table && $currentTable->hasIndex($struct['name'])) {
+                    $currentIndex = $currentTable->getIndex($struct['name']);
+
+                    // Skip drop+recreate when the index already exists with the same columns — avoids
+                    // generating DROP INDEX SQL (MySQL requires ON <table> which DBAL omits on ALTER).
                     $existingColumns = array_map(
                         static fn (IndexedColumn $col): string => $col->getColumnName()->toString(),
-                        $table->getIndex($options['name'])->getIndexedColumns(),
+                        $currentIndex->getIndexedColumns(),
                     );
                     if ($existingColumns === $columns) {
                         continue;
                     }
 
-                    $table->dropIndex($options['name']);
+                    $editor->dropIndex($currentIndex->getObjectName());
                 }
 
-                $table->addIndex(
+                $indexEditor = Index::editor()->setUnquotedName($struct['name']);
+                // Length limiting only applies to single string columns, not composites
+                $isLengthLimited = 1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection);
+                foreach ($columns as $column) {
+                    $indexEditor->addUnquotedColumnName($column, $isLengthLimited ? 191 : null);
+                }
+
+                $editor->addIndex($indexEditor->create());
+            } else {
+                throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
+            }
+        }
+    }
+
+    /**
+     * Adds the columns, primary key and indices of an audit table with the mutable schema API.
+     *
+     * Only used for schemas of an ORM that does not use the schema editor API, see addAuditTableToSchema().
+     */
+    private function populateLegacyAuditTable(Table $auditTable, string $auditTablename, Connection $connection): void
+    {
+        // Add columns to audit table
+        $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+        foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
+            // @phpstan-ignore method.deprecated (mutable schema of an ORM not using the schema editor API)
+            $auditTable->addColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']);
+        }
+
+        // Add indices to audit table
+        foreach (SchemaHelper::getAuditTableIndices($auditTablename) as $columnName => $struct) {
+            \assert(\is_string($columnName));
+            if ('primary' === $struct['type']) {
+                DoctrineHelper::setPrimaryKey($auditTable, $columnName);
+            } elseif (isset($struct['name'])) {
+                // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                // from the array key (which is the column name for non-composite entries).
+                $columns = $struct['columns'] ?? [$columnName];
+                // @phpstan-ignore method.deprecated (mutable schema of an ORM not using the schema editor API)
+                $auditTable->addIndex(
                     $columns,
-                    $options['name'],
+                    $struct['name'],
                     [],
                     // Length limiting only applies to single string columns, not composites
                     1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection)
                         ? ['lengths' => [191]]
                         : []
                 );
+            } else {
+                throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
             }
         }
     }

@@ -9,6 +9,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Event\CreateSchemaListenerTest;
+use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Tools\Event\GenerateSchemaTableEventArgs;
 
@@ -64,6 +65,36 @@ final readonly class CreateSchemaListener
             && array_values($auditingServices)[0]->getEntityManager() === array_values($storageServices)[0]->getEntityManager();
 
         $updater = new SchemaManager($this->provider);
-        $updater->createAuditTable($targetEntity, $isSameEntityManager ? $eventArgs->getSchema() : null);
+
+        if (!$isSameEntityManager) {
+            $updater->createAuditTable($targetEntity);
+
+            return;
+        }
+
+        $entityManager = array_values($auditingServices)[0]->getEntityManager();
+        if ($this->canReplaceSchema($entityManager)) {
+            // DBAL schemas are immutable with the schema editor API: hand the new schema back to the ORM.
+            $eventArgs->setSchema($updater->createAuditTable($targetEntity, $eventArgs->getSchema()));
+
+            return;
+        }
+
+        $updater->addAuditTableToSchema($targetEntity, $eventArgs->getSchema());
+    }
+
+    /**
+     * Whether the ORM generates the schema with the DBAL schema editor API (ORM 3.8+), and thus reads back the
+     * schema replaced by listeners.
+     *
+     * Without that API, the ORM keeps adding tables to the schema with Schema::createTable(), which applies the
+     * default table options of the schema configuration: a schema built by the schema editor would lose them.
+     */
+    private function canReplaceSchema(EntityManagerInterface $entityManager): bool
+    {
+        $configuration = $entityManager->getConfiguration();
+
+        return method_exists($configuration, 'getUseSchemaEditorApi')
+            && $configuration->getUseSchemaEditorApi();
     }
 }

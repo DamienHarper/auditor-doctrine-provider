@@ -6,6 +6,7 @@ namespace DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter;
 
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\JsonPlatformHelper;
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\Filter\JsonFilterTest;
 use Doctrine\DBAL\Connection;
 
 /**
@@ -32,6 +33,8 @@ use Doctrine\DBAL\Connection;
  *
  * @note Only scalar value extraction is supported in this version.
  *       Nested arrays/objects comparison (e.g., JSON_CONTAINS) is not yet implemented.
+ *
+ * @see JsonFilterTest
  */
 final readonly class JsonFilter implements PlatformAwareFilterInterface
 {

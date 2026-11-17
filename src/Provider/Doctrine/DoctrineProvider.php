@@ -297,8 +297,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
 
         // are columns excluded and is field part of them?
         // yes => $field is not audited
-        return !(isset($entityOptions['ignored_columns'])
-            && \in_array($field, $entityOptions['ignored_columns'], true));
+        return !isset($entityOptions['ignored_columns']) || !\in_array($field, $entityOptions['ignored_columns'], true);
     }
 
     public function supportsStorage(): bool

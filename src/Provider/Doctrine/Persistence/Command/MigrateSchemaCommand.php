@@ -10,11 +10,14 @@ use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\MigrateSchemaCommandTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
+use Doctrine\DBAL\Schema\ComparatorConfig;
+use Doctrine\DBAL\Schema\TableEditor;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Command\LockableTrait;
@@ -38,6 +41,8 @@ use Symfony\Component\Uid\Ulid;
  *   Phase 2 (destructive)— drop legacy columns (transaction_hash, blame_user, …)
  *
  * Phase 2 is skipped when --limit is set so that partial runs can be resumed safely.
+ *
+ * @see MigrateSchemaCommandTest
  */
 #[AsCommand(
     name: 'audit:schema:migrate',
@@ -433,8 +438,20 @@ final class MigrateSchemaCommand extends Command
             $destructive = [];
             $platform = $connection->getDatabasePlatform();
             $dbSchemaManager = $connection->createSchemaManager();
-            $schema = $dbSchemaManager->introspectSchema();
-            $table = $schema->getTable($tableName);
+            // Only the audit table is compared: the other tables of the database are left out.
+            $comparator = $dbSchemaManager->createComparator(new ComparatorConfig()->withReportModifiedIndexes(false));
+            $table = SchemaHelper::normalizeJsonbColumns($dbSchemaManager->introspectSchema()->getTable($tableName));
+
+            // Applies a modification to the audit table and returns the matching SQL statements.
+            $alter = static function (callable $modification) use (&$table, $comparator, $platform): array {
+                $editor = $table->edit();
+                $modification($editor);
+                $newTable = $editor->create();
+                $diff = $comparator->compareTables($table, $newTable);
+                $table = $newTable;
+
+                return $diff->isEmpty() ? [] : $platform->getAlterTableSQL($diff);
+            };
 
             // 1. Add new columns (only those not yet present)
             $newColumns = SchemaHelper::getAuditTableColumns();
@@ -448,10 +465,8 @@ final class MigrateSchemaCommand extends Command
                         $colType = 'text';
                     }
 
-                    $fromSchema = clone $schema;
-                    $table->addColumn($colName, $colType, $colOptions);
-                    $diff = $dbSchemaManager->createComparator()->compareSchemas($fromSchema, $schema);
-                    foreach ($platform->getAlterSchemaSQL($diff) as $sql) {
+                    $column = SchemaHelper::buildColumn($colName, $colType, $colOptions);
+                    foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->addColumn($column)) as $sql) {
                         $additive[] = $sql;
                     }
 
@@ -473,10 +488,8 @@ final class MigrateSchemaCommand extends Command
             $hash = md5($tableName);
             $oldTxIdx = 'transaction_hash_'.$hash.'_idx';
             if ($table->hasIndex($oldTxIdx)) {
-                $fromSchema = clone $schema;
-                $table->dropIndex($oldTxIdx);
-                $diff = $dbSchemaManager->createComparator()->compareSchemas($fromSchema, $schema);
-                foreach ($platform->getAlterSchemaSQL($diff) as $sql) {
+                $indexName = $table->getIndex($oldTxIdx)->getObjectName();
+                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
                     $additive[] = $sql;
                 }
             }
@@ -489,10 +502,8 @@ final class MigrateSchemaCommand extends Command
                 }
 
                 if ($table->hasColumn($colName)) {
-                    $fromSchema = clone $schema;
-                    $table->dropColumn($colName);
-                    $diff = $dbSchemaManager->createComparator()->compareSchemas($fromSchema, $schema);
-                    foreach ($platform->getAlterSchemaSQL($diff) as $sql) {
+                    $columnName = $table->getColumn($colName)->getObjectName();
+                    foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropColumn($columnName)) as $sql) {
                         $destructive[] = $sql;
                     }
                 }
@@ -567,9 +578,7 @@ final class MigrateSchemaCommand extends Command
 
             foreach ($hashes as $raw) {
                 $hash = (string) $raw;
-                if (!isset($hashMap[$hash])) {
-                    $hashMap[$hash] = (string) new Ulid();
-                }
+                $hashMap[$hash] ??= (string) new Ulid();
             }
         }
 
