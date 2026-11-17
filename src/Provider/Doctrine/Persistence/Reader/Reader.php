@@ -10,6 +10,7 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ChangedFieldFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\ReaderTest;
 use Doctrine\ORM\Mapping\ClassMetadata as ORMMetadata;
@@ -69,6 +70,10 @@ final readonly class Reader implements ReaderInterface
         $transactionId = $config['transaction_id'] ?? $config['transaction_hash'];
         if (null !== $transactionId) {
             $query->addFilter(new SimpleFilter(Query::TRANSACTION_ID, $transactionId));
+        }
+
+        if (null !== $config['changed_field']) {
+            $query->addFilter(new ChangedFieldFilter($config['changed_field']));
         }
 
         if (null !== $config['page'] && null !== $config['page_size']) {
@@ -209,6 +214,7 @@ final readonly class Reader implements ReaderInterface
                 'user_id' => null,
                 'transaction_id' => null,
                 'transaction_hash' => null,     // @deprecated use transaction_id
+                'changed_field' => null,
                 'page' => 1,
                 'page_size' => self::PAGE_SIZE,
                 'strict' => true,
@@ -219,6 +225,7 @@ final readonly class Reader implements ReaderInterface
             ->setAllowedTypes('user_id', ['null', 'int', 'string', 'array'])
             ->setAllowedTypes('transaction_id', ['null', 'string', 'array'])
             ->setAllowedTypes('transaction_hash', ['null', 'string', 'array'])
+            ->setAllowedTypes('changed_field', ['null', 'string'])
             ->setAllowedTypes('page', ['null', 'int'])
             ->setAllowedTypes('page_size', ['null', 'int'])
             ->setAllowedTypes('strict', ['null', 'bool'])

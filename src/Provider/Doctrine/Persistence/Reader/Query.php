@@ -47,6 +47,11 @@ final class Query implements QueryInterface
 
     public const string JSON = 'json';
 
+    /**
+     * Name of the filters on the content of the diffs column (see ChangedFieldFilter).
+     */
+    public const string DIFFS = 'diffs';
+
     private array $filters = [];
 
     private array $orderBy = [];
@@ -181,7 +186,7 @@ final class Query implements QueryInterface
 
     public function getSupportedFilters(): array
     {
-        return [...array_keys(SchemaHelper::getAuditTableIndices('fake')), self::JSON, self::LEGACY_TRANSACTION_HASH];
+        return [...array_keys(SchemaHelper::getAuditTableIndices('fake')), self::JSON, self::DIFFS, self::LEGACY_TRANSACTION_HASH];
     }
 
     public function getFilters(): array

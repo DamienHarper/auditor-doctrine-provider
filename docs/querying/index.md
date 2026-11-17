@@ -59,6 +59,7 @@ $query = $reader->createQuery(App\Entity\Post::class, [
 | `blame_id`         | `int\|string\|array`    | `null`  | Filter by user ID(s) who made changes     |
 | `user_id`          | `int\|string\|array`    | `null`  | Alias for `blame_id`                      |
 | `transaction_id`   | `string\|array`         | `null`  | Filter by transaction ID(s) (ULID)        |
+| `changed_field`    | `string`                | `null`  | Entries whose diff touches this field (see [ChangedFieldFilter](filters.md#-changedfieldfilter)) |
 | `page`             | `int\|null`             | `1`     | Page number (1-based)                     |
 | `page_size`        | `int\|null`             | `50`    | Number of entries per page                |
 
