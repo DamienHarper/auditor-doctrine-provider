@@ -8,8 +8,8 @@ use DH\Auditor\Exception\MappingException;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\User\UserInterface;
+use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
-use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Types\ConversionException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -20,8 +20,6 @@ use Doctrine\ORM\Mapping\MappingException as ORMMappingException;
 
 trait AuditTrait
 {
-    private static array $typeNameCache = [];
-
     /**
      * Returns the primary key value of an entity.
      *
@@ -32,7 +30,7 @@ trait AuditTrait
     private function id(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): mixed
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $connection = $entityManager->getConnection();
 
         try {
             $pk = $meta->getSingleIdentifierFieldName();
@@ -40,9 +38,9 @@ trait AuditTrait
             throw new MappingException(\sprintf('Composite primary keys are not supported (%s).', $entity::class));
         }
 
-        $type = $this->getType($meta, $pk);
+        $type = $this->getType($connection, $meta, $pk);
         if (null !== $type) {
-            return $this->value($platform, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $entity));
+            return $this->value($connection, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $entity));
         }
 
         /**
@@ -60,11 +58,11 @@ trait AuditTrait
         $meta = $entityManager->getClassMetadata($mapping['targetEntity']);
         $pk = $meta->getSingleIdentifierFieldName();
 
-        $type = $this->getType($meta, $pk);
+        $type = $this->getType($connection, $meta, $pk);
         \assert(\is_object($type));
         \assert(\is_object($targetEntity));
 
-        return $this->value($platform, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $targetEntity));
+        return $this->value($connection, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $targetEntity));
     }
 
     /**
@@ -73,8 +71,10 @@ trait AuditTrait
      * @throws Exception
      * @throws ConversionException
      */
-    private function value(AbstractPlatform $platform, Type $type, mixed $value): mixed
+    private function value(Connection $connection, Type $type, mixed $value): mixed
     {
+        $platform = $connection->getDatabasePlatform();
+
         if (null === $value) {
             return null;
         }
@@ -83,7 +83,7 @@ trait AuditTrait
             $value = $value->value;
         }
 
-        switch ($this->getTypeName($type)) {
+        switch (DoctrineHelper::getTypeName($connection, $type)) {
             case Types::BIGINT:
             case 'uuid_binary':
             case 'uuid_binary_ordered_time':
@@ -179,7 +179,7 @@ trait AuditTrait
     private function diff(EntityManagerInterface $entityManager, object $entity, array $changeset, ?ClassMetadata $meta = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $connection = $entityManager->getConnection();
         $diff = [
             '@source' => $this->summarize($entityManager, $entity, [], $meta),
         ];
@@ -188,7 +188,7 @@ trait AuditTrait
         $configuration = $this->provider->getConfiguration();
         $globalIgnoredColumns = $configuration->getIgnoredColumns();
         $entityIgnoredColumns = $configuration->getEntities()[$meta->name]['ignored_columns'] ?? [];
-        $jsonTypes = DoctrineHelper::jsonTypes();
+        $jsonTypes = DoctrineHelper::jsonTypes($connection);
         foreach ($changeset as $fieldName => [$old, $new]) {
             $o = null;
             $n = null;
@@ -207,10 +207,10 @@ trait AuditTrait
                 && !isset($meta->embeddedClasses[$fieldName])
                 && $meta->hasField($fieldName)
             ) {
-                $type = $this->getType($meta, $fieldName);
+                $type = $this->getType($connection, $meta, $fieldName);
                 \assert(\is_object($type));
-                $o = $this->value($platform, $type, $old);
-                $n = $this->value($platform, $type, $new);
+                $o = $this->value($connection, $type, $old);
+                $n = $this->value($connection, $type, $new);
             } elseif (
                 $isAuditedField
                 && $meta->hasAssociation($fieldName)
@@ -424,16 +424,10 @@ trait AuditTrait
         return $result;
     }
 
-    private function getTypeName(Type $type): false|string
-    {
-        return self::$typeNameCache[$type::class]
-            ??= array_search($type::class, Type::getTypesMap(), true);
-    }
-
     /**
      * @throws Exception
      */
-    private function getType(ClassMetadata $meta, string $fieldName): ?Type
+    private function getType(Connection $connection, ClassMetadata $meta, string $fieldName): ?Type
     {
         $mapping = $meta->fieldMappings[$fieldName] ?? null;
         if (null === $mapping) {
@@ -442,6 +436,6 @@ trait AuditTrait
 
         $type = $mapping instanceof FieldMapping ? $mapping->type : $mapping['type'];
 
-        return Type::getType($type);
+        return DoctrineHelper::getType($connection, $type);
     }
 }

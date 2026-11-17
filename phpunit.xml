@@ -2,7 +2,14 @@
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/12.5/phpunit.xsd" bootstrap="vendor/autoload.php"
          executionOrder="depends,defects" beStrictAboutOutputDuringTests="true" cacheDirectory=".phpunit.cache"
-         requireCoverageMetadata="false" beStrictAboutCoverageMetadata="true">
+         requireCoverageMetadata="false" beStrictAboutCoverageMetadata="true"
+         failOnDeprecation="true" displayDetailsOnTestsThatTriggerDeprecations="true">
+    <php>
+        <!-- Route doctrine/deprecations to trigger_error() so PHPUnit can report them. -->
+        <server name="DOCTRINE_DEPRECATIONS" value="trigger"/>
+        <!-- Report every occurrence: a deprecation first raised by a dependency must not hide the same one raised from src/. -->
+        <server name="DOCTRINE_DEPRECATIONS_DEDUPLICATION" value="false"/>
+    </php>
     <coverage>
         <report>
             <html outputDirectory="tests/coverage"/>
@@ -14,9 +21,18 @@
             <directory suffix="Test.php">tests</directory>
         </testsuite>
     </testsuites>
-    <source>
+    <!--
+        Fail on deprecations triggered by calls made from src/ (direct deprecations).
+        Deprecations raised between third-party packages (indirect) are ignored.
+    -->
+    <source ignoreSuppressionOfDeprecations="true" ignoreIndirectDeprecations="true">
         <include>
             <directory suffix=".php">src</directory>
         </include>
+        <deprecationTrigger>
+            <method>Doctrine\Deprecations\Deprecation::trigger</method>
+            <method>Doctrine\Deprecations\Deprecation::triggerIfCalledFromOutside</method>
+            <method>Doctrine\Deprecations\Deprecation::delegateTriggerToBackend</method>
+        </deprecationTrigger>
     </source>
 </phpunit>

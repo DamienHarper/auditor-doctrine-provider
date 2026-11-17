@@ -36,7 +36,7 @@ jobs:
         run: composer validate --strict --no-check-lock
 
   tests:
-    name: Tests PHP ${{ matrix.php }}, Symfony ${{ matrix.symfony }}, ${{ matrix.db }}
+    name: Tests PHP ${{ matrix.php }}, Symfony ${{ matrix.symfony }}, ${{ matrix.db }}${{ matrix.dbal && format(', DBAL {0}', matrix.dbal) || '' }}
     runs-on: ubuntu-latest
     needs: [ code_style_composer_checks ]
 
@@ -77,6 +77,23 @@ jobs:
           - 'sqlite'
           - 'mysql'
           - 'pgsql'
+        # Empty: latest DBAL version
+        dbal:
+          - ''
+        include:
+          # Lowest supported DBAL version (DBAL < 4.5 and < 4.6 compatibility paths)
+          - php: '8.4'
+            symfony: '8.*'
+            db: 'sqlite'
+            dbal: '4.3.*'
+          - php: '8.4'
+            symfony: '8.*'
+            db: 'mysql'
+            dbal: '4.3.*'
+          - php: '8.4'
+            symfony: '8.*'
+            db: 'pgsql'
+            dbal: '4.3.*'
       fail-fast: false
 
     steps:
@@ -122,12 +139,15 @@ jobs:
       - name: Update project dependencies
         env:
           SYMFONY_REQUIRE: "^8.0"
-        run: composer update --no-progress --ansi --prefer-stable
+        run: composer update --no-progress --ansi --prefer-stable ${{ matrix.dbal && format('--with-all-dependencies --with "doctrine/dbal:{0}"', matrix.dbal) || '' }}
 
+      # PHPStan analyses the code against the latest DBAL version only
       - name: Install PHPStan
+        if: ${{ !matrix.dbal }}
         run: composer install --no-progress --ansi --working-dir=tools/phpstan
 
       - name: Run PHPStan
+        if: ${{ !matrix.dbal }}
         run: composer phpstan
 
       - name: Run tests
@@ -135,8 +155,8 @@ jobs:
           XDEBUG_MODE: coverage
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          RAW_CODECOV_REPORT="php-${{ matrix.php }}-sf-${{ matrix.symfony }}-${{ matrix.db }}-coverage"
-          echo "CODECOV_REPORT=$(echo $RAW_CODECOV_REPORT | sed 's/\.\*//')" >> $GITHUB_ENV
+          RAW_CODECOV_REPORT="php-${{ matrix.php }}-sf-${{ matrix.symfony }}-${{ matrix.db }}${{ matrix.dbal && format('-dbal-{0}', matrix.dbal) || '' }}-coverage"
+          echo "CODECOV_REPORT=$(echo $RAW_CODECOV_REPORT | sed 's/\.\*//g')" >> $GITHUB_ENV
           vendor/bin/phpunit -c phpunit.xml --coverage-clover=coverage.xml
 
       - name: Upload coverage file

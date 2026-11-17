@@ -231,7 +231,8 @@ When you add `#[Auditable]` to a new entity and add it to the configuration:
 
 ### PostgreSQL
 
-- Native `JSON` support
+- Native `JSONB` column type is used for `diffs` and `extra_data`
+- Audit tables created with `JSON` columns by previous versions are converted to `JSONB` by `audit:schema:update` (or by your next migration if you manage audit tables with Doctrine Migrations)
 - Indexed columns use PostgreSQL-compatible index names
 
 ### SQLite
