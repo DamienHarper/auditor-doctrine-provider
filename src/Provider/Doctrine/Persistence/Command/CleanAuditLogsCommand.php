@@ -9,7 +9,6 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Model\RetentionPolicy;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Retention\RetentionPruner;
-use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommandTest;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -98,24 +97,11 @@ final class CleanAuditLogsCommand extends Command
         $rawIncludeValues = $input->getOption('include') ?? [];
         $excludeEntities = \is_array($rawExcludeValues) ? $rawExcludeValues : [$rawExcludeValues];
         $includeEntities = \is_array($rawIncludeValues) ? $rawIncludeValues : [$rawIncludeValues];
-        $repository = new SchemaManager($provider)->collectAuditableEntities();
-        $entities = [];
-
-        foreach ($repository as $entityClasses) {
-            foreach (array_keys($entityClasses) as $entityClass) {
-                if (
-                    !\in_array($entityClass, $excludeEntities, true)
-                    && (
-                        [] === $includeEntities
-                        || \in_array($entityClass, $includeEntities, true)
-                    )
-                ) {
-                    $entities[] = $entityClass;
-                }
-            }
-        }
-
-        $entities = array_values(array_unique($entities));
+        $entities = array_values(array_filter(
+            $pruner->getAuditableEntities(),
+            static fn (string $entity): bool => !\in_array($entity, $excludeEntities, true)
+                && ([] === $includeEntities || \in_array($entity, $includeEntities, true)),
+        ));
         $count = \count($entities);
 
         // Per-entity retention policies are all validated before anything is deleted.

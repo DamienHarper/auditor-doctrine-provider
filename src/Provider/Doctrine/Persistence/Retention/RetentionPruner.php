@@ -49,6 +49,24 @@ final readonly class RetentionPruner
     }
 
     /**
+     * Returns every auditable entity class, across all storage services.
+     *
+     * @return list<string>
+     */
+    public function getAuditableEntities(): array
+    {
+        $entities = [];
+        foreach (new SchemaManager($this->provider)->collectAuditableEntities() as $classes) {
+            \assert(\is_array($classes));
+            foreach (array_keys($classes) as $entity) {
+                $entities[] = (string) $entity;
+            }
+        }
+
+        return array_values(array_unique($entities));
+    }
+
+    /**
      * Returns the non-empty retention policies of the given entities, keyed by entity class.
      *
      * Every entity is checked before returning, so that an invalid configuration is reported as a whole

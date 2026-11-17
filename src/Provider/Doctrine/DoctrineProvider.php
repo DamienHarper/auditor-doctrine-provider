@@ -348,9 +348,11 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
             if (!\is_array($entities[$entity] ?? null)) {
                 continue;
             }
+
             if (!\is_array($merged[$entity])) {
                 continue;
             }
+
             foreach (self::RETENTION_OPTIONS as $option) {
                 if (\array_key_exists($option, $entities[$entity])) {
                     $merged[$entity][$option] = $entities[$entity][$option];
