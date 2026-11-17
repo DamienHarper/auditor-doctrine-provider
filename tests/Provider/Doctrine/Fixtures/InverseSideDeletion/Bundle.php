@@ -98,6 +98,17 @@ class Bundle
         return $this;
     }
 
+    public function replaceTagsWithEmptyCollection(): self
+    {
+        foreach ($this->tags as $tag) {
+            $tag->getBundles()->removeElement($this);
+        }
+
+        $this->tags = new ArrayCollection();
+
+        return $this;
+    }
+
     public function removeTag(BundleTag $tag): self
     {
         $this->tags->removeElement($tag);
