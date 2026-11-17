@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader;
 
+use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
-use DH\Auditor\Tests\Provider\Doctrine\Traits\ConnectionTrait;
-use Doctrine\DBAL\Connection;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
+use DH\Auditor\Tests\Provider\Doctrine\Traits\ReaderTrait;
+use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\BlogSchemaSetupTrait;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -17,68 +19,32 @@ use PHPUnit\Framework\TestCase;
 #[Small]
 final class QueryIterateTest extends TestCase
 {
-    use ConnectionTrait;
-
-    private const string TABLE = 'author_audit';
-
-    private Connection $connection;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $this->connection = $this->createConnection();
-        $this->connection->executeStatement(
-            'CREATE TABLE '.self::TABLE.' (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                schema_version SMALLINT NOT NULL DEFAULT 2,
-                type VARCHAR(11) NOT NULL,
-                object_id VARCHAR(255) NOT NULL,
-                discriminator VARCHAR(255) DEFAULT NULL,
-                transaction_id CHAR(26) DEFAULT NULL,
-                diffs TEXT DEFAULT NULL,
-                extra_data TEXT DEFAULT NULL,
-                blame_id VARCHAR(255) DEFAULT NULL,
-                blame TEXT DEFAULT NULL,
-                created_at TEXT NOT NULL
-            )'
-        );
-
-        foreach ([
-            ['1', 'insert', '2025-01-01 00:00:00'],
-            ['2', 'update', '2025-01-02 00:00:00'],
-            ['3', 'remove', '2025-01-03 00:00:00'],
-        ] as [$objectId, $type, $createdAt]) {
-            $this->connection->insert(self::TABLE, [
-                'type' => $type,
-                'object_id' => $objectId,
-                'created_at' => $createdAt,
-                'diffs' => '{}',
-            ]);
-        }
-    }
+    use BlogSchemaSetupTrait;
+    use ReaderTrait;
 
     public function testIterateReturnsGenerator(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
-        $result = $query->iterate();
-
-        $this->assertInstanceOf(\Generator::class, $result);
+        $this->assertInstanceOf(\Generator::class, $this->createAuthorQuery()->iterate());
     }
 
-    public function testIterateYieldsAllRows(): void
+    public function testIterateYieldsTheSameRowsAsExecute(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
-        $rows = iterator_to_array($query->iterate(), false);
+        $entries = $this->createAuthorQuery()->execute();
+        $rows = iterator_to_array($this->createAuthorQuery()->iterate(), false);
 
-        $this->assertCount(3, $rows);
+        $this->assertNotEmpty($entries, 'The blog fixtures must have produced author audit entries.');
+        $this->assertCount(\count($entries), $rows);
+        $this->assertSame(
+            array_map(static fn (Entry $entry): string => $entry->objectId, $entries),
+            array_map(static fn (array $row): string => (string) $row['object_id'], $rows),
+        );
     }
 
     public function testIterateYieldsAssociativeArrays(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
-        $rows = iterator_to_array($query->iterate(), false);
+        $rows = iterator_to_array($this->createAuthorQuery()->iterate(), false);
 
+        $this->assertNotEmpty($rows);
         foreach ($rows as $row) {
             $this->assertIsArray($row);
             $this->assertArrayHasKey('type', $row);
@@ -89,30 +55,37 @@ final class QueryIterateTest extends TestCase
 
     public function testIterateYieldsRawStringForCreatedAt(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
-        $rows = iterator_to_array($query->iterate(), false);
+        $rows = iterator_to_array($this->createAuthorQuery()->iterate(), false);
 
+        $this->assertNotEmpty($rows);
         $this->assertIsString($rows[0]['created_at'], 'iterate() must yield raw string for created_at, not DateTimeImmutable');
     }
 
     public function testIterateRespectsFilters(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
-        $query->addFilter(new SimpleFilter(Query::OBJECT_ID, '2'));
+        $objectId = $this->createAuthorQuery()->execute()[0]->objectId;
+
+        $query = $this->createAuthorQuery();
+        $query->addFilter(new SimpleFilter(Query::OBJECT_ID, $objectId));
 
         $rows = iterator_to_array($query->iterate(), false);
 
-        $this->assertCount(1, $rows);
-        $this->assertSame('2', $rows[0]['object_id']);
+        $this->assertNotEmpty($rows);
+        foreach ($rows as $row) {
+            $this->assertSame($objectId, (string) $row['object_id']);
+        }
     }
 
     public function testIterateYieldsNothingOnEmptyResult(): void
     {
-        $query = new Query(self::TABLE, $this->connection, 'UTC');
+        $query = $this->createAuthorQuery();
         $query->addFilter(new SimpleFilter(Query::OBJECT_ID, 'nonexistent'));
 
-        $rows = iterator_to_array($query->iterate(), false);
+        $this->assertCount(0, iterator_to_array($query->iterate(), false));
+    }
 
-        $this->assertCount(0, $rows);
+    private function createAuthorQuery(): Query
+    {
+        return $this->createReader()->createQuery(Author::class, ['page_size' => null]);
     }
 }
