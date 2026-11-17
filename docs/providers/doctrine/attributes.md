@@ -41,9 +41,11 @@ class Post
 
 ### Parameters
 
-| Parameter  | Type   | Default | Description                        |
-|------------|--------|---------|------------------------------------|
-| `enabled`  | `bool` | `true`  | Whether auditing is enabled        |
+| Parameter    | Type      | Default | Description                                                         |
+|--------------|-----------|---------|---------------------------------------------------------------------|
+| `enabled`    | `bool`    | `true`  | Whether auditing is enabled                                         |
+| `maxAge`     | `?string` | `null`  | Retention: entries older than this ISO 8601 duration are deleted by `audit:clean` |
+| `maxEntries` | `?int`    | `null`  | Retention: only the N most recent entries are kept by `audit:clean` |
 
 ### Examples
 
@@ -60,6 +62,25 @@ class Post {}
 #[Auditable(enabled: false)]
 class DraftPost {}
 ```
+
+### Retention Policy
+
+```php
+// Keep 7 years of history, whatever the global audit:clean cutoff
+#[Auditable(maxAge: 'P7Y')]
+class Payment {}
+
+// Keep the 10,000 most recent entries (on top of the global audit:clean cutoff)
+#[Auditable(maxEntries: 10_000)]
+class Session {}
+```
+
+`maxAge` must be an ISO 8601 duration greater than zero and `maxEntries` a positive integer: invalid values fail when
+the entity metadata is loaded, with the entity name in the message. Both default to `null` (no policy). A policy given
+in the configuration (`max_age` / `max_entries` entity options) overrides the attribute value key by key.
+
+Attribute values are cached with the ORM metadata: clear the cache after changing them. See `audit:clean` in the
+auditor documentation for how policies are applied.
 
 ### Enabling/Disabling at Runtime
 

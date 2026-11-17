@@ -123,6 +123,12 @@ $configuration = new Configuration([
 | `enabled`         | `bool`     | `true`  | Whether auditing is enabled for this entity     |
 | `ignored_columns` | `array`    | `[]`    | Columns to ignore for this entity               |
 | `roles`           | `array`    | `null`  | View permissions (`['view' => ['ROLE_X']]`)     |
+| `max_age`         | `?string`  | `null`  | Retention: ISO 8601 duration applied by `audit:clean` instead of the global cutoff |
+| `max_entries`     | `?int`     | `null`  | Retention: number of most recent entries kept by `audit:clean` |
+
+`max_age` and `max_entries` take precedence over the `#[Auditable(maxAge: ..., maxEntries: ...)]` values, key by key:
+setting only `max_age` keeps the attribute `maxEntries`, and an explicit `null` disables the attribute value.
+They are validated (positive ISO 8601 duration, positive integer) before `audit:clean` deletes anything.
 
 ## 👁️ Viewer Configuration
 
