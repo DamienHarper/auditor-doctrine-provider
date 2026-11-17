@@ -86,6 +86,25 @@ final class InverseSideDissociateOnDeletionTest extends TestCase
         $this->assertDissociatedTargets([[BundleItem::class, $itemId, 'bundle']], $bundle);
     }
 
+    public function testDissociateIdentifiesAChildRemovedByAFlushInsideAnOuterTransaction(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
+
+        $bundle = new Bundle('bundle');
+        $item = new BundleItem($bundle, 'item');
+        $em->persist($bundle);
+        $em->flush();
+
+        $itemId = $item->getId();
+
+        $em->wrapInTransaction(static function () use ($em, $item): void {
+            $em->remove($item);
+            $em->flush();
+        });
+
+        $this->assertDissociatedTargets([[BundleItem::class, $itemId, 'bundle']], $bundle);
+    }
+
     public function testDissociateIsRecordedWhenChildIsRemovedThroughAnUninitializedReference(): void
     {
         // The item is not audited, so nothing initializes the reference before the inverse-side scan.
