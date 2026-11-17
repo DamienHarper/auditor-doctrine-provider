@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Persistence\Event;
 
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Event\CreateSchemaListenerTest;
+use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Tools\Event\GenerateSchemaTableEventArgs;
 
@@ -64,6 +66,38 @@ final readonly class CreateSchemaListener
             && array_values($auditingServices)[0]->getEntityManager() === array_values($storageServices)[0]->getEntityManager();
 
         $updater = new SchemaManager($this->provider);
-        $updater->createAuditTable($targetEntity, $isSameEntityManager ? $eventArgs->getSchema() : null);
+
+        if (!$isSameEntityManager) {
+            $updater->createAuditTable($targetEntity);
+
+            return;
+        }
+
+        $entityManager = array_values($auditingServices)[0]->getEntityManager();
+        if ($this->canReplaceSchema($eventArgs, $entityManager)) {
+            // DBAL schemas are immutable with the schema editor API: hand the new schema back to the ORM.
+            $eventArgs->setSchema($updater->createAuditTable($targetEntity, $eventArgs->getSchema()));
+
+            return;
+        }
+
+        $updater->addAuditTableToSchema($targetEntity, $eventArgs->getSchema());
+    }
+
+    /**
+     * Whether the ORM generates the schema with the DBAL schema editor API (ORM 3.8+, DBAL 4.5+) and accepts a
+     * replacement schema from listeners.
+     *
+     * Without that API, the ORM keeps adding tables to the schema with Schema::createTable(), which applies the
+     * default table options of the schema configuration: a schema built by the schema editor would lose them.
+     */
+    private function canReplaceSchema(GenerateSchemaTableEventArgs $eventArgs, EntityManagerInterface $entityManager): bool
+    {
+        $configuration = $entityManager->getConfiguration();
+
+        return DoctrineHelper::hasSchemaEditorApi()
+            && method_exists($eventArgs, 'setSchema')
+            && method_exists($configuration, 'getUseSchemaEditorApi')
+            && $configuration->getUseSchemaEditorApi();
     }
 }
