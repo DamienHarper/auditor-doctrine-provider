@@ -295,8 +295,16 @@ trait AuditTrait
 
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
 
-        $pkValue = $extra['id'] ?? $this->id($entityManager, $entity);
-        $pkName = $meta->getSingleIdentifierFieldName();
+        if ($meta->isIdentifierComposite) {
+            // An entity with a composite key cannot be audited itself (see id()), but it shows up as
+            // the target of an association audited on the other side. Its key is flattened into one
+            // string for the summary.
+            $pkValue = $extra['id'] ?? implode('-', $entityManager->getUnitOfWork()->getEntityIdentifier($entity));
+            $pkName = implode('-', $meta->getIdentifierFieldNames());
+        } else {
+            $pkValue = $extra['id'] ?? $this->id($entityManager, $entity);
+            $pkName = $meta->getSingleIdentifierFieldName();
+        }
 
         if (method_exists($entity, '__toString')) {
             try {
