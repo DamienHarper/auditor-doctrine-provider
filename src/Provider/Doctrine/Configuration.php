@@ -27,7 +27,7 @@ final class Configuration implements ConfigurationInterface
     /**
      * @var array<string>
      */
-    private array $ignoredColumns = [];
+    private readonly array $ignoredColumns;
 
     private ?array $entities = null;
 

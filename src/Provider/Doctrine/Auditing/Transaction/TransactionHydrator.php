@@ -8,10 +8,14 @@ use DH\Auditor\Model\TransactionInterface;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
+use DH\Auditor\Tests\Provider\Doctrine\Auditing\Transaction\TransactionHydratorTest;
 use DH\Auditor\Transaction\TransactionHydratorInterface;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\PersistentCollection;
 
+/**
+ * @see TransactionHydratorTest
+ */
 final class TransactionHydrator implements TransactionHydratorInterface
 {
     use AuditTrait;

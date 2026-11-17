@@ -10,6 +10,7 @@ use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\MigrateSchemaCommandTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
@@ -40,6 +41,8 @@ use Symfony\Component\Uid\Ulid;
  *   Phase 2 (destructive)— drop legacy columns (transaction_hash, blame_user, …)
  *
  * Phase 2 is skipped when --limit is set so that partial runs can be resumed safely.
+ *
+ * @see MigrateSchemaCommandTest
  */
 #[AsCommand(
     name: 'audit:schema:migrate',
@@ -575,9 +578,7 @@ final class MigrateSchemaCommand extends Command
 
             foreach ($hashes as $raw) {
                 $hash = (string) $raw;
-                if (!isset($hashMap[$hash])) {
-                    $hashMap[$hash] = (string) new Ulid();
-                }
+                $hashMap[$hash] ??= (string) new Ulid();
             }
         }
 
