@@ -31,7 +31,12 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             // rollBack() afterwards: the flusher would stay in the list and fail every later commit
             // on this connection, and the server-side transaction would stay open.
             $this->auditorDriver->resetFlusherList();
-            parent::rollBack();
+
+            try {
+                parent::rollBack();
+            } catch (\Throwable) {
+                // the audit failure is the root cause: a failing rollback (e.g. lost connection) must not hide it
+            }
 
             throw $throwable;
         }
