@@ -176,6 +176,32 @@ final class InverseSideDissociateOnDeletionTest extends TestCase
         $this->assertDissociatedTargets([[BundleTag::class, $tagId, 'bundles']], $bundle);
     }
 
+    public function testManyToManyCollectionClearedInTheFlushThatRemovesATargetIdentifiesEveryTarget(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
+
+        $bundle = new Bundle('bundle');
+        $removedTag = new BundleTag();
+        $keptTag = new BundleTag();
+        $bundle->addTag($removedTag)->addTag($keptTag);
+        $em->persist($bundle);
+        $em->persist($removedTag);
+        $em->persist($keptTag);
+        $em->flush();
+
+        $removedTagId = $removedTag->getId();
+        $keptTagId = $keptTag->getId();
+
+        $bundle->getTags()->clear();
+        $em->remove($removedTag);
+        $em->flush();
+
+        $this->assertDissociatedTargets([
+            [BundleTag::class, $removedTagId, 'bundles'],
+            [BundleTag::class, $keptTagId, 'bundles'],
+        ], $bundle);
+    }
+
     public function testOneDissociateIsRecordedPerRemovedChild(): void
     {
         $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
