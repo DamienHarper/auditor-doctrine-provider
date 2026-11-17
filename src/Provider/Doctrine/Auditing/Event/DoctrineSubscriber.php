@@ -117,7 +117,14 @@ final class DoctrineSubscriber implements ResetInterface
         }
 
         foreach ($pending->getDissociated() as $dto) {
-            $transaction->dissociate($dto->source, $dto->getTarget(), $dto->getMapping());
+            $target = $dto->getTarget();
+            $transaction->dissociate($dto->source, $target, $dto->getMapping());
+
+            // Identifier of a target deleted by this flush, captured before Doctrine reset it.
+            $removedId = $pending->getRemovedId($target);
+            if (null !== $removedId) {
+                $transaction->rememberRemovedId($target, $removedId);
+            }
         }
     }
 
