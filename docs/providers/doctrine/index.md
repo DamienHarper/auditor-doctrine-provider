@@ -93,7 +93,7 @@ flowchart TB
 > Important limitations to be aware of:
 
 1. **DQL and raw SQL are not tracked** — `UPDATE` or `DELETE` queries executed via DQL (`$em->createQuery(...)`) or raw DBAL bypass the ORM's UnitOfWork and will not be audited. Always use `EntityManager::persist()` and `flush()`.
-2. **Composite primary keys** — Not supported for auditing; each entity should have a single primary key.
+2. **Composite primary keys** — Not supported for auditing; each entity should have a single primary key. An entity with a composite primary key can still be the target of an association of an audited entity: its identifier is then stored flattened, field names and values joined with `-` (e.g. `"pkName": "article-tag"`, `"article-tag": "12-7"`).
 
 ## 📚 Sections
 
