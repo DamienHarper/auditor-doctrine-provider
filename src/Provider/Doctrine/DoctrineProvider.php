@@ -88,7 +88,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $evm->addEventListener([ToolEvents::postGenerateSchemaTable], new CreateSchemaListener($this));
 
         $doctrineSubscriber = new DoctrineSubscriber($this);
-        $evm->addEventListener([Events::onFlush], $doctrineSubscriber);
+        $evm->addEventListener([Events::onFlush, Events::postFlush], $doctrineSubscriber);
 
         // Register soft delete listener if Gedmo SoftDeleteable is available
         if (class_exists(SoftDeleteableListener::class)) {
