@@ -105,6 +105,34 @@ final class CompositeKeyAssociationTest extends TestCase
         $this->assertSame($expected, $updates[0]->getDiffs()['articleTag']['old']);
     }
 
+    public function testRemovingACompositeKeyEntityRecordsADissociateEntry(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Article::class)->getEntityManager();
+
+        $article = new Article()->setTitle('Article');
+        $tag = new Tag()->setName('Tag');
+        $em->persist($article);
+        $em->persist($tag);
+        $em->flush();
+
+        $articleTag = new ArticleTag($article, $tag);
+        $em->persist($articleTag);
+        $em->flush();
+
+        // The composite key of the deleted entity is captured before Doctrine forgets it.
+        $em->remove($articleTag);
+        $em->flush();
+
+        $entries = new Reader($this->provider)->createQuery(Article::class, ['type' => TransactionType::DISSOCIATE])->execute();
+        $this->assertCount(1, $entries);
+
+        $target = $entries[0]->getDiffs()['target'];
+        $this->assertSame(ArticleTag::class, $target['class']);
+        $this->assertSame('article-tag', $target['pkName']);
+        $this->assertSame($article->getId().'-'.$tag->getId(), $target['article-tag']);
+        $this->assertSame('article tag', $target['label']);
+    }
+
     private function configureEntities(): void
     {
         $this->provider->getConfiguration()->setEntities([
