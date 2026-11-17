@@ -24,11 +24,22 @@ class Bundle
     #[ORM\OneToMany(targetEntity: BundleItem::class, mappedBy: 'bundle', cascade: ['persist', 'remove'], orphanRemoval: true)]
     private Collection $items;
 
+    #[ORM\OneToOne(targetEntity: BundleCover::class, mappedBy: 'bundle')]
+    private ?BundleCover $cover = null;
+
+    /**
+     * @var Collection<int, BundleTag>
+     */
+    #[ORM\ManyToMany(targetEntity: BundleTag::class, inversedBy: 'bundles')]
+    #[ORM\JoinTable(name: 'inverse_side_deletion_bundle__tag')]
+    private Collection $tags;
+
     public function __construct(
         #[ORM\Column(type: Types::STRING, length: 255)]
         private string $name,
     ) {
         $this->items = new ArrayCollection();
+        $this->tags = new ArrayCollection();
     }
 
     public function getId(): int
@@ -63,5 +74,35 @@ class Bundle
     public function getItems(): Collection
     {
         return $this->items;
+    }
+
+    public function getCover(): ?BundleCover
+    {
+        return $this->cover;
+    }
+
+    public function setCover(?BundleCover $cover): self
+    {
+        $this->cover = $cover;
+
+        return $this;
+    }
+
+    public function addTag(BundleTag $tag): self
+    {
+        if (!$this->tags->contains($tag)) {
+            $this->tags->add($tag);
+            $tag->getBundles()->add($this);
+        }
+
+        return $this;
+    }
+
+    public function removeTag(BundleTag $tag): self
+    {
+        $this->tags->removeElement($tag);
+        $tag->getBundles()->removeElement($this);
+
+        return $this;
     }
 }
