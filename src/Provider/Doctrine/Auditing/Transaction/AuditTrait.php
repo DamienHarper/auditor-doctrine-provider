@@ -249,11 +249,15 @@ trait AuditTrait
     /**
      * Returns an array describing an entity.
      *
+     * $knownId is the identifier captured before the flush for an entity deleted in that flush:
+     * Doctrine resets the generated identifier of a deleted entity, so it can no longer be read
+     * from the entity itself.
+     *
      * @throws MappingException
      * @throws Exception
      * @throws ORMMappingException
      */
-    private function summarize(EntityManagerInterface $entityManager, ?object $entity = null, array $extra = [], ?ClassMetadata $meta = null): ?array
+    private function summarize(EntityManagerInterface $entityManager, ?object $entity = null, array $extra = [], ?ClassMetadata $meta = null, mixed $knownId = null): ?array
     {
         if (null === $entity) {
             return null;
@@ -279,7 +283,7 @@ trait AuditTrait
             }
 
             $identifiers = $entityManager->getUnitOfWork()->getEntityIdentifier($entity);
-            $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? null);
+            $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? $knownId);
             $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
             if ('id' !== $pkName) {
                 $extra['pkName'] = $pkName;
@@ -299,10 +303,10 @@ trait AuditTrait
             // An entity with a composite key cannot be audited itself (see id()), but it shows up as
             // the target of an association audited on the other side. Its key is flattened into one
             // string for the summary.
-            $pkValue = $extra['id'] ?? implode('-', $entityManager->getUnitOfWork()->getEntityIdentifier($entity));
+            $pkValue = $extra['id'] ?? $knownId ?? implode('-', $entityManager->getUnitOfWork()->getEntityIdentifier($entity));
             $pkName = implode('-', $meta->getIdentifierFieldNames());
         } else {
-            $pkValue = $extra['id'] ?? $this->id($entityManager, $entity);
+            $pkValue = $extra['id'] ?? $knownId ?? $this->id($entityManager, $entity);
             $pkName = $meta->getSingleIdentifierFieldName();
         }
 
