@@ -236,6 +236,52 @@ final class TransactionHydratorTest extends TestCase
     }
 
     /**
+     * Clearing an initialized owning-side ManyToMany collection with clear() must produce
+     * one DISSOCIATE entry per element: PersistentCollection::clear() schedules a collection
+     * deletion and then takes a new (empty) snapshot, so the elements are no longer in the
+     * collection when the hydrator reads it.
+     */
+    public function testClearingAnInitializedManyToManyCollectionRecordsOneDissociatePerElement(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Post::class => ['enabled' => true],
+            Tag::class => ['enabled' => true],
+        ]);
+
+        $em = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+        [$post, $tagIds] = $this->createPostWithTwoTags();
+
+        $post->getTags()->clear();
+        $em->flush();
+
+        $this->assertSame($tagIds, $this->dissociatedTagIds());
+    }
+
+    /**
+     * Same as above when the collection was never loaded: clear() on an uninitialized
+     * collection does not even load its elements.
+     */
+    public function testClearingAnUninitializedManyToManyCollectionRecordsOneDissociatePerElement(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Post::class => ['enabled' => true],
+            Tag::class => ['enabled' => true],
+        ]);
+
+        $em = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+        [$post, $tagIds] = $this->createPostWithTwoTags();
+        $postId = $post->getId();
+        $em->clear();
+
+        $post = $em->find(Post::class, $postId);
+        $this->assertInstanceOf(Post::class, $post);
+        $post->getTags()->clear();
+        $em->flush();
+
+        $this->assertSame($tagIds, $this->dissociatedTagIds());
+    }
+
+    /**
      * A flush with no scheduled operations must produce no audit entries.
      */
     public function testEmptyFlushProducesNoAuditEntries(): void
@@ -252,6 +298,49 @@ final class TransactionHydratorTest extends TestCase
 
         $entries = $reader->createQuery(Author::class)->execute();
         $this->assertCount(0, $entries, 'An empty flush must produce no audit entries.');
+    }
+
+    /**
+     * @return array{Post, list<int>}
+     */
+    private function createPostWithTwoTags(): array
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+
+        $post = new Post();
+        $post->setTitle('Post')->setBody('Body')->setCreatedAt(new \DateTimeImmutable());
+        foreach (['php', 'doctrine'] as $title) {
+            $tag = new Tag();
+            $tag->setTitle($title);
+            $em->persist($tag);
+            $post->addTag($tag);
+        }
+
+        $em->persist($post);
+        $em->flush();
+
+        $tagIds = array_map(static fn (Tag $tag): int => (int) $tag->getId(), $post->getTags()->toArray());
+        sort($tagIds);
+
+        return [$post, $tagIds];
+    }
+
+    /**
+     * @return list<int> sorted ids of the tags dissociated from posts
+     */
+    private function dissociatedTagIds(): array
+    {
+        $entries = new Reader($this->provider)->createQuery(Post::class)->execute();
+        $ids = [];
+        foreach ($entries as $entry) {
+            if (TransactionType::DISSOCIATE === $entry->type) {
+                $ids[] = (int) ($entry->getDiffs()['target']['id'] ?? 0);
+            }
+        }
+
+        sort($ids);
+
+        return $ids;
     }
 
     private function configureEntities(): void

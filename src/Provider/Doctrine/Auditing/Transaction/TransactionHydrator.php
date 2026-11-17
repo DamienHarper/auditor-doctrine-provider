@@ -156,11 +156,41 @@ final class TransactionHydrator implements TransactionHydratorInterface
                 $mapping = $collectionMapping->toArray();
 
                 /** @var object $entity */
-                foreach ($collection->toArray() as $entity) {
+                foreach ($this->deletedCollectionElements($entityManager, $collection) as $entity) {
                     $this->dissociate($transaction, $entityManager, $owner, $entity, $mapping);
                 }
             }
         }
+    }
+
+    /**
+     * Returns the elements whose association rows the scheduled deletion of $collection removes.
+     *
+     * A collection replaced by another one is de-referenced untouched: it still holds its
+     * elements (loaded on access if it was not initialized). A collection emptied in place with
+     * PersistentCollection::clear() is still the owner's one, but clear() drops its elements
+     * (without even loading them when the collection was not initialized) and takes a new,
+     * empty snapshot: neither toArray(), getSnapshot() nor getDeleteDiff() returns them anymore.
+     * They are read from the join table instead, which onFlush sees before the DELETE runs.
+     *
+     * @return array<object>
+     */
+    private function deletedCollectionElements(EntityManagerInterface $entityManager, PersistentCollection $collection): array
+    {
+        $owner = $collection->getOwner();
+        $collectionMapping = $collection->getMapping();
+
+        if (
+            null === $owner
+            || !$collectionMapping->isManyToMany()
+            || !$collectionMapping->isOwningSide()
+            || $entityManager->getUnitOfWork()->isScheduledForInsert($owner)
+            || $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($owner))->getFieldValue($owner, $collectionMapping->fieldName) !== $collection
+        ) {
+            return $collection->toArray();
+        }
+
+        return $entityManager->getUnitOfWork()->getCollectionPersister($collectionMapping)->slice($collection, 0);
     }
 
     /**
