@@ -10,6 +10,7 @@ use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Transaction\TransactionHydratorInterface;
 use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\PersistentCollection;
 
 final class TransactionHydrator implements TransactionHydratorInterface
@@ -30,6 +31,7 @@ final class TransactionHydrator implements TransactionHydratorInterface
         $this->hydrateWithScheduledCollectionUpdates($transaction, $em);
         $this->hydrateWithScheduledCollectionDeletions($transaction, $em);
         $this->hydrateInverseSideAssociations($transaction, $em);
+        $this->hydrateInverseSideDissociationsOfDeletedEntities($transaction, $em);
     }
 
     private function hydrateWithScheduledInsertions(Transaction $transaction, EntityManagerInterface $entityManager): void
@@ -124,11 +126,7 @@ final class TransactionHydrator implements TransactionHydratorInterface
 
                 /** @var object $entity */
                 foreach ($collection->getDeleteDiff() as $entity) {
-                    $transaction->dissociate(
-                        $owner,
-                        $entity,
-                        $mapping,
-                    );
+                    $this->dissociate($transaction, $entityManager, $owner, $entity, $mapping);
                 }
             }
         }
@@ -159,11 +157,7 @@ final class TransactionHydrator implements TransactionHydratorInterface
 
                 /** @var object $entity */
                 foreach ($collection->toArray() as $entity) {
-                    $transaction->dissociate(
-                        $owner,
-                        $entity,
-                        $mapping,
-                    );
+                    $this->dissociate($transaction, $entityManager, $owner, $entity, $mapping);
                 }
             }
         }
@@ -185,6 +179,9 @@ final class TransactionHydrator implements TransactionHydratorInterface
      * This method scans every inserted/updated entity's changeset for owning-side single-valued
      * association changes (ManyToOne, OneToOne owning) that declare an inversedBy, and emits
      * the corresponding associate/dissociate on the inverse-side owner.
+     *
+     * Deleted entities have no changeset: they are dissociated from the inverse-side owner they
+     * were originally attached to by hydrateInverseSideDissociationsOfDeletedEntities().
      *
      * @see https://github.com/DamienHarper/auditor/issues/310
      */
@@ -230,7 +227,7 @@ final class TransactionHydrator implements TransactionHydratorInterface
 
                 // Dissociate from the old target when the association is removed or re-assigned.
                 if (null !== $old && $this->provider->isAudited($old)) {
-                    $transaction->dissociate($old, $entity, $inverseMapping);
+                    $this->dissociate($transaction, $entityManager, $old, $entity, $inverseMapping);
                 }
 
                 // Associate with the new target when the association is set or re-assigned.
@@ -239,5 +236,83 @@ final class TransactionHydrator implements TransactionHydratorInterface
                 }
             }
         }
+    }
+
+    /**
+     * Dissociates every deleted entity from the inverse-side owner of its bidirectional owning-side
+     * single-valued associations (ManyToOne, OneToOne owning), unless that owner is deleted in the
+     * same flush. Deleting an entity — explicitly or through orphanRemoval — is the last way to
+     * break such an association, and it never shows up in an entity changeset.
+     */
+    private function hydrateInverseSideDissociationsOfDeletedEntities(Transaction $transaction, EntityManagerInterface $entityManager): void
+    {
+        $uow = $entityManager->getUnitOfWork();
+
+        foreach ($uow->getScheduledEntityDeletions() as $entity) {
+            $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+            $originalData = null;
+
+            foreach ($meta->associationMappings as $fieldName => $assocMapping) {
+                if (!$assocMapping->isToOneOwningSide()) {
+                    continue;
+                }
+
+                $inversedBy = $assocMapping->inversedBy;
+                if (null === $inversedBy || '' === $inversedBy) {
+                    continue; // Unidirectional association: nothing to audit on the inverse side.
+                }
+
+                $targetMeta = $entityManager->getClassMetadata($assocMapping->targetEntity);
+                if (!$this->isAuditedClassOrSubclass($targetMeta)) {
+                    continue; // The inverse-side owner can never be audited: avoid loading the entity.
+                }
+
+                if (null === $originalData) {
+                    // An entity deleted through a reference (EntityManager::getReference()) is an
+                    // uninitialized proxy whose original data is still empty: load it to know which
+                    // owner it was attached to. Audited deleted entities are already initialized by
+                    // hydrateWithScheduledDeletions().
+                    $uow->initializeObject($entity);
+                    $originalData = $uow->getOriginalEntityData($entity);
+                }
+
+                $old = $originalData[$fieldName] ?? null;
+                if (null === $old || $uow->isScheduledForDelete($old) || !$this->provider->isAudited($old)) {
+                    continue;
+                }
+
+                $this->dissociate($transaction, $entityManager, $old, $entity, $targetMeta->getAssociationMapping($inversedBy)->toArray());
+            }
+        }
+    }
+
+    /**
+     * Records a dissociation. When the target is deleted in the same flush, its identifier is
+     * captured now: Doctrine resets the generated identifier of a deleted entity once the DELETE
+     * statement is executed, i.e. before the audit entry is written.
+     *
+     * @param array<string, mixed> $mapping
+     */
+    private function dissociate(Transaction $transaction, EntityManagerInterface $entityManager, object $source, object $target, array $mapping): void
+    {
+        $uow = $entityManager->getUnitOfWork();
+        if ($uow->isScheduledForDelete($target)) {
+            $targetMeta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($target));
+
+            // Same identifier as summarize(): a composite key is flattened into one string.
+            $transaction->rememberRemovedId($target, $targetMeta->isIdentifierComposite
+                ? implode('-', $uow->getEntityIdentifier($target))
+                : $this->id($entityManager, $target, $targetMeta));
+        }
+
+        $transaction->dissociate($source, $target, $mapping);
+    }
+
+    /**
+     * @param ClassMetadata<object> $meta
+     */
+    private function isAuditedClassOrSubclass(ClassMetadata $meta): bool
+    {
+        return array_any([$meta->name, ...$meta->subClasses], fn (string $class): bool => $this->provider->isAudited($class));
     }
 }

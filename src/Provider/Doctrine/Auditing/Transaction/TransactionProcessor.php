@@ -124,10 +124,13 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     /**
      * Adds a dissociation entry to the audit table.
+     *
+     * $targetId is the identifier captured at hydration time when the target is deleted in the
+     * same flush (Doctrine resets it once the DELETE statement has run).
      */
-    private function dissociate(EntityManagerInterface $entityManager, object $source, object $target, array $mapping, string $transactionHash, array $blame): void
+    private function dissociate(EntityManagerInterface $entityManager, object $source, object $target, array $mapping, string $transactionHash, array $blame, mixed $targetId = null): void
     {
-        $this->associateOrDissociate(TransactionType::Dissociate, $entityManager, $source, $target, $mapping, $transactionHash, $blame);
+        $this->associateOrDissociate(TransactionType::Dissociate, $entityManager, $source, $target, $mapping, $transactionHash, $blame, $targetId);
     }
 
     private function processInsertions(Transaction $transaction, EntityManagerInterface $entityManager, array $blame): void
@@ -160,7 +163,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
     private function processDissociations(Transaction $transaction, EntityManagerInterface $entityManager, array $blame): void
     {
         foreach ($transaction->getDissociated() as $dto) {
-            $this->dissociate($entityManager, $dto->source, $dto->getTarget(), $dto->getMapping(), $transaction->getTransactionHash(), $blame);
+            $target = $dto->getTarget();
+            $this->dissociate($entityManager, $dto->source, $target, $dto->getMapping(), $transaction->getTransactionHash(), $blame, $transaction->getRemovedId($target));
         }
     }
 
@@ -174,7 +178,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
     /**
      * Adds an association entry to the audit table.
      */
-    private function associateOrDissociate(TransactionType $type, EntityManagerInterface $entityManager, object $source, object $target, array $mapping, string $transactionHash, array $blame): void
+    private function associateOrDissociate(TransactionType $type, EntityManagerInterface $entityManager, object $source, object $target, array $mapping, string $transactionHash, array $blame, mixed $targetId = null): void
     {
         $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($source));
         $data = [
@@ -182,7 +186,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
             'blame' => $blame,
             'diff' => [
                 'source' => $this->summarize($entityManager, $source, ['field' => $mapping['fieldName']], $meta),
-                'target' => $this->summarize($entityManager, $target, ['field' => $mapping['isOwningSide'] ? ($mapping['inversedBy'] ?? null) : ($mapping['mappedBy'] ?? null)]),
+                'target' => $this->summarize($entityManager, $target, ['field' => $mapping['isOwningSide'] ? ($mapping['inversedBy'] ?? null) : ($mapping['mappedBy'] ?? null)], null, $targetId),
                 'is_owning_side' => $mapping['isOwningSide'],
             ],
             'table' => $meta->getTableName(),
