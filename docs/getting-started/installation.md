@@ -9,8 +9,8 @@
 | Requirement               | Version  |
 |---------------------------|----------|
 | PHP                       | >= 8.4   |
-| doctrine/dbal             | >= 4.0   |
-| doctrine/orm              | >= 3.2   |
+| doctrine/dbal             | >= 4.6   |
+| doctrine/orm              | >= 3.7   |
 | symfony/cache             | >= 8.0   |
 | symfony/lock              | >= 8.0   |
 | symfony/event-dispatcher  | >= 8.0   |
