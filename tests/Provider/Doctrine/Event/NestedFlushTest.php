@@ -7,6 +7,8 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Event;
 use DH\Auditor\Provider\Doctrine\Auditing\Event\DoctrineSubscriber;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\DefaultSchemaSetupTrait;
 use Doctrine\ORM\Event\PostFlushEventArgs;
 use Doctrine\ORM\Event\PostPersistEventArgs;
@@ -81,6 +83,57 @@ final class NestedFlushTest extends TestCase
         $this->assertSame($audits[0]->transactionHash, $audits[1]->transactionHash);
     }
 
+    public function testEveryKindOfChangeOfAnOuterTransactionIsAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $john = new Author()->setFullname('John Doe')->setEmail('john@example.com');
+        $jane = new Author()->setFullname('Jane Doe')->setEmail('jane@example.com');
+        $tag1 = new Tag()->setTitle('tag1');
+        $tag2 = new Tag()->setTitle('tag2');
+        $post = new Post()->setTitle('First post')->setBody('Body')->setCreatedAt(new \DateTimeImmutable())->addTag($tag1);
+        foreach ([$john, $jane, $tag1, $tag2, $post] as $entity) {
+            $em->persist($entity);
+        }
+
+        $em->flush();
+
+        $connection->beginTransaction();
+        $john->setFullname('John Changed');
+        $em->remove($jane);
+        $post->addTag($tag2)->removeTag($tag1);
+        $em->flush();
+        // soft delete (Gedmo): postSoftDelete is dispatched before the auditor's onFlush
+        $em->remove($post);
+        $em->flush();
+
+        $connection->commit();
+
+        $reader = new Reader($this->provider);
+        $authorUpdate = $reader->createQuery(Author::class, ['type' => 'update'])->execute();
+        $this->assertCount(1, $authorUpdate);
+        $transactionHash = $authorUpdate[0]->transactionHash;
+
+        $types = [];
+        foreach ([Author::class, Post::class] as $entity) {
+            foreach ($reader->createQuery($entity)->execute() as $entry) {
+                if ($entry->transactionHash === $transactionHash) {
+                    $types[] = $entity.':'.$entry->type;
+                }
+            }
+        }
+
+        sort($types);
+        $this->assertSame([
+            Author::class.':remove',
+            Author::class.':update',
+            Post::class.':associate',
+            Post::class.':dissociate',
+            Post::class.':remove',
+        ], $types);
+    }
+
     /**
      * A listener flushing again from postFlush, before the auditor's postFlush listener has run, must not
      * make the auditor lose the entries of the outer flush.
@@ -124,6 +177,8 @@ final class NestedFlushTest extends TestCase
     {
         $this->provider->getConfiguration()->setEntities([
             Author::class => ['enabled' => true],
+            Post::class => ['enabled' => true],
+            Tag::class => ['enabled' => true],
         ]);
     }
 }
