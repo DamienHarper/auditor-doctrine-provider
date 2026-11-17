@@ -176,6 +176,61 @@ final class InverseSideDissociateOnDeletionTest extends TestCase
         $this->assertDissociatedTargets([[BundleTag::class, $tagId, 'bundles']], $bundle);
     }
 
+    public function testManyToManyDissociateIdentifiesATargetRemovedWhenTheCollectionIsReplaced(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
+
+        $bundle = new Bundle('bundle');
+        $kept = new BundleTag();
+        $removed = new BundleTag();
+        $bundle->addTag($kept);
+        $bundle->addTag($removed);
+
+        $em->persist($bundle);
+        $em->persist($kept);
+        $em->persist($removed);
+        $em->flush();
+
+        $keptId = $kept->getId();
+        $removedId = $removed->getId();
+
+        // Replacing an owning-side collection schedules the deletion of the previous one.
+        $bundle->replaceTagsWithEmptyCollection();
+        $em->remove($removed);
+        $em->flush();
+
+        $this->assertDissociatedTargets([
+            [BundleTag::class, $keptId, 'bundles'],
+            [BundleTag::class, $removedId, 'bundles'],
+        ], $bundle);
+    }
+
+    public function testManyToManyCollectionClearedInTheFlushThatRemovesATargetIdentifiesEveryTarget(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
+
+        $bundle = new Bundle('bundle');
+        $removedTag = new BundleTag();
+        $keptTag = new BundleTag();
+        $bundle->addTag($removedTag)->addTag($keptTag);
+        $em->persist($bundle);
+        $em->persist($removedTag);
+        $em->persist($keptTag);
+        $em->flush();
+
+        $removedTagId = $removedTag->getId();
+        $keptTagId = $keptTag->getId();
+
+        $bundle->getTags()->clear();
+        $em->remove($removedTag);
+        $em->flush();
+
+        $this->assertDissociatedTargets([
+            [BundleTag::class, $removedTagId, 'bundles'],
+            [BundleTag::class, $keptTagId, 'bundles'],
+        ], $bundle);
+    }
+
     public function testOneDissociateIsRecordedPerRemovedChild(): void
     {
         $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
