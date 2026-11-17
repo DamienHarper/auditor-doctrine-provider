@@ -85,6 +85,22 @@ final class Query implements QueryInterface
         return $result;
     }
 
+    /**
+     * Yields raw DB rows as associative arrays, one at a time, without loading the full
+     * result set into memory. Suitable for streaming large exports via NDJSON, CSV, or JSON.
+     *
+     * The 'created_at' field is a raw string — callers must convert it before calling Entry::fromArray().
+     *
+     * @return \Generator<int, array<string, mixed>>
+     */
+    public function iterate(): \Generator
+    {
+        $statement = $this->buildQueryBuilder()->executeQuery();
+        \assert($statement instanceof Result);
+
+        yield from $statement->iterateAssociative();
+    }
+
     public function count(): int
     {
         $queryBuilder = $this->buildQueryBuilder();
