@@ -299,8 +299,15 @@ final class TransactionHydrator implements TransactionHydratorInterface
      */
     private function dissociate(Transaction $transaction, EntityManagerInterface $entityManager, object $source, object $target, array $mapping): void
     {
-        if ($entityManager->getUnitOfWork()->isScheduledForDelete($target)) {
-            $transaction->rememberRemovedId($target, $this->id($entityManager, $target));
+        $uow = $entityManager->getUnitOfWork();
+        if ($uow->isScheduledForDelete($target)) {
+            $targetMeta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($target));
+
+            // A composite key is flattened into one string, as the summary of a composite-key
+            // association target is; Doctrine also forgets that key once the entity is deleted.
+            $transaction->rememberRemovedId($target, $targetMeta->isIdentifierComposite
+                ? implode('-', $uow->getEntityIdentifier($target))
+                : $this->id($entityManager, $target, $targetMeta));
         }
 
         $transaction->dissociate($source, $target, $mapping);
