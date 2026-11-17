@@ -116,4 +116,12 @@ class Bundle
 
         return $this;
     }
+
+    /**
+     * @return Collection<int, BundleTag>
+     */
+    public function getTags(): Collection
+    {
+        return $this->tags;
+    }
 }
