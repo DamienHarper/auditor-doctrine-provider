@@ -9,8 +9,8 @@ use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Provider\Doctrine\Transaction\NeedsConversionToAuditableType;
 use DH\Auditor\User\UserInterface;
+use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
-use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Types\ConversionException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -21,8 +21,6 @@ use Doctrine\ORM\Mapping\MappingException as ORMMappingException;
 
 trait AuditTrait
 {
-    private static array $typeNameCache = [];
-
     /**
      * Caches method_exists($entity, '__toString') result per class to avoid
      * repeated reflection on hot-path summarize() calls.
@@ -48,7 +46,7 @@ trait AuditTrait
     private function id(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): mixed
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $connection = $entityManager->getConnection();
 
         try {
             $pk = $meta->getSingleIdentifierFieldName();
@@ -56,9 +54,9 @@ trait AuditTrait
             throw new MappingException(\sprintf('Composite primary keys are not supported (%s).', $entity::class));
         }
 
-        $type = $this->getType($meta, $pk);
+        $type = $this->getType($connection, $meta, $pk);
         if (null !== $type) {
-            return $this->value($platform, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $entity));
+            return $this->value($connection, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $entity));
         }
 
         /**
@@ -76,11 +74,11 @@ trait AuditTrait
         $meta = $entityManager->getClassMetadata($mapping['targetEntity']);
         $pk = $meta->getSingleIdentifierFieldName();
 
-        $type = $this->getType($meta, $pk);
+        $type = $this->getType($connection, $meta, $pk);
         \assert(\is_object($type));
         \assert(\is_object($targetEntity));
 
-        return $this->value($platform, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $targetEntity));
+        return $this->value($connection, $type, DoctrineHelper::getReflectionPropertyValue($meta, $pk, $targetEntity));
     }
 
     /**
@@ -89,8 +87,10 @@ trait AuditTrait
      * @throws Exception
      * @throws ConversionException
      */
-    private function value(AbstractPlatform $platform, Type $type, mixed $value): mixed
+    private function value(Connection $connection, Type $type, mixed $value): mixed
     {
+        $platform = $connection->getDatabasePlatform();
+
         if (null === $value) {
             return null;
         }
@@ -103,7 +103,7 @@ trait AuditTrait
             return $type->convertToAuditableValue($value, $platform);
         }
 
-        switch ($this->getTypeName($type)) {
+        switch (DoctrineHelper::getTypeName($connection, $type)) {
             case Types::BIGINT:
             case 'uuid_binary':
             case 'uuid_binary_ordered_time':
@@ -182,7 +182,7 @@ trait AuditTrait
     private function diff(EntityManagerInterface $entityManager, object $entity, array $changeset, ?ClassMetadata $meta = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $connection = $entityManager->getConnection();
         $source = $this->summarize($entityManager, $entity, [], $meta);
         $changes = [];
 
@@ -190,7 +190,7 @@ trait AuditTrait
         $configuration = $this->provider->getConfiguration();
         $globalIgnoredColumns = $configuration->getIgnoredColumns();
         $resolverLocator = $this->provider->getDiffLabelResolverLocator();
-        $jsonTypes = DoctrineHelper::jsonTypes();
+        $jsonTypes = DoctrineHelper::jsonTypes($connection);
 
         // Cache entity-class-level config (ignored_columns, diff_label_resolvers) for the
         // process lifetime — config is set at bootstrap and never changes at runtime.
@@ -224,10 +224,10 @@ trait AuditTrait
                 && !isset($meta->embeddedClasses[$fieldName])
                 && $meta->hasField($fieldName)
             ) {
-                $type = $this->getType($meta, $fieldName);
+                $type = $this->getType($connection, $meta, $fieldName);
                 \assert(\is_object($type));
-                $o = $this->value($platform, $type, $old);
-                $n = $this->value($platform, $type, $new);
+                $o = $this->value($connection, $type, $old);
+                $n = $this->value($connection, $type, $new);
 
                 // Apply DiffLabel resolver if configured for this field
                 if ([] !== $diffLabelResolvers && isset($diffLabelResolvers[$fieldName]) && null !== $resolverLocator) {
@@ -299,7 +299,7 @@ trait AuditTrait
     private function snapshot(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
-        $platform = $entityManager->getConnection()->getDatabasePlatform();
+        $connection = $entityManager->getConnection();
         $source = $this->summarize($entityManager, $entity, [], $meta);
         $changes = [];
 
@@ -321,13 +321,13 @@ trait AuditTrait
                 continue;
             }
 
-            $type = $this->getType($meta, $fieldName);
+            $type = $this->getType($connection, $meta, $fieldName);
             if (null === $type) {
                 continue;
             }
 
             $value = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
-            $changes[$fieldName] = ['new' => null, 'old' => $this->value($platform, $type, $value)];
+            $changes[$fieldName] = ['new' => null, 'old' => $this->value($connection, $type, $value)];
         }
 
         return [
@@ -521,16 +521,10 @@ trait AuditTrait
         return $result;
     }
 
-    private function getTypeName(Type $type): false|string
-    {
-        return self::$typeNameCache[$type::class]
-            ??= array_search($type::class, Type::getTypesMap(), true);
-    }
-
     /**
      * @throws Exception
      */
-    private function getType(ClassMetadata $meta, string $fieldName): ?Type
+    private function getType(Connection $connection, ClassMetadata $meta, string $fieldName): ?Type
     {
         $mapping = $meta->fieldMappings[$fieldName] ?? null;
         if (null === $mapping) {
@@ -539,6 +533,6 @@ trait AuditTrait
 
         $type = $mapping instanceof FieldMapping ? $mapping->type : $mapping['type'];
 
-        return Type::getType($type);
+        return DoctrineHelper::getType($connection, $type);
     }
 }

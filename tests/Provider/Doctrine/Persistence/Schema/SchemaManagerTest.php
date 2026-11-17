@@ -23,8 +23,8 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\DefaultSchemaSetupTrait;
 use DH\Auditor\Tests\Traits\ReflectionTrait;
-use Doctrine\DBAL\Schema\Comparator;
-use Doctrine\DBAL\Schema\Index;
+use Doctrine\DBAL\Schema\ComparatorConfig;
+use Doctrine\DBAL\Schema\PrimaryKeyConstraint;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Types;
@@ -175,10 +175,10 @@ final class SchemaManagerTest extends TestCase
         }
 
         // check expected indices
-        $expected = SchemaHelper::getAuditTableIndices($authorAuditTable->getName());
+        $expected = SchemaHelper::getAuditTableIndices('author_audit');
         foreach ($expected as $name => $options) {
             if ('primary' === $options['type']) {
-                $this->assertInstanceOf(Index::class, $authorAuditTable->getPrimaryKey(), 'audit table has a primary key named "'.$name.'".');
+                $this->assertInstanceOf(PrimaryKeyConstraint::class, $authorAuditTable->getPrimaryKeyConstraint(), 'audit table has a primary key named "'.$name.'".');
             } else {
                 $this->assertTrue($authorAuditTable->hasIndex($options['name']), 'audit table has an index named "'.$name.'".');
             }
@@ -229,15 +229,17 @@ final class SchemaManagerTest extends TestCase
 
         // apply new structure to author_audit table
         $fromSchema = $schemaManager->introspectSchema();
-        $authorAuditTable = $this->getTable($schemaManager->listTables(), 'author_audit');
+        $toSchema = method_exists(Schema::class, 'edit') ? $fromSchema : clone $fromSchema;
         $table = $toSchema->getTable('author_audit');
-        $columns = $schemaManager->listTableColumns($authorAuditTable->getName());
 
-        $reflectedMethod = $this->reflectMethod($updater, 'processColumns');
-        $reflectedMethod->invokeArgs($updater, [$table, $columns, self::ALTERNATE_COLUMNS, $entityManager->getConnection()]);
+        $reflectedMethod = $this->reflectMethod($updater, 'applyAuditTableStructure');
+        $updatedTable = $reflectedMethod->invokeArgs($updater, [$table, self::ALTERNATE_COLUMNS, $alternateIndices, $entityManager->getConnection()]);
+        $this->assertInstanceOf(Table::class, $updatedTable);
 
-        $reflectedMethod = $this->reflectMethod($updater, 'processIndices');
-        $reflectedMethod->invokeArgs($updater, [$table, $alternateIndices, $entityManager->getConnection()]);
+        if ($updatedTable !== $table) {
+            // DBAL 4.5+: tables are immutable
+            $toSchema = $toSchema->edit()->dropTable($table->getObjectName())->addTable($updatedTable)->create();
+        }
 
         $this->migrate($fromSchema, $toSchema, $entityManager);
 
@@ -251,7 +253,7 @@ final class SchemaManagerTest extends TestCase
         // check expected alternate indices
         foreach ($alternateIndices as $name => $options) {
             if ('primary' === $options['type']) {
-                $this->assertInstanceOf(Index::class, $authorAuditTable->getPrimaryKey(), 'audit table has a primary key named "'.$name.'".');
+                $this->assertInstanceOf(PrimaryKeyConstraint::class, $authorAuditTable->getPrimaryKeyConstraint(), 'audit table has a primary key named "'.$name.'".');
             } else {
                 $this->assertTrue($authorAuditTable->hasIndex($options['name']), 'audit table has an index named "'.$name.'".');
             }
@@ -271,9 +273,9 @@ final class SchemaManagerTest extends TestCase
         }
 
         // check expected indices
-        foreach (SchemaHelper::getAuditTableIndices($authorAuditTable->getName()) as $name => $options) {
+        foreach (SchemaHelper::getAuditTableIndices('author_audit') as $name => $options) {
             if ('primary' === $options['type']) {
-                $this->assertInstanceOf(Index::class, $authorAuditTable->getPrimaryKey(), 'audit table has a primary key named "'.$name.'".');
+                $this->assertInstanceOf(PrimaryKeyConstraint::class, $authorAuditTable->getPrimaryKeyConstraint(), 'audit table has a primary key named "'.$name.'".');
             } else {
                 $this->assertTrue($authorAuditTable->hasIndex($options['name']), 'audit table has an index named "'.$name.'".');
             }
@@ -321,9 +323,8 @@ final class SchemaManagerTest extends TestCase
     {
         $connection = $entityManager->getConnection();
         $platform = $connection->getDatabasePlatform();
-        $sqls = $platform->getAlterSchemaSQL(
-            new Comparator($platform)->compareSchemas($fromSchema, $toSchema)
-        );
+        $comparator = $connection->createSchemaManager()->createComparator(new ComparatorConfig()->withReportModifiedIndexes(false));
+        $sqls = $platform->getAlterSchemaSQL($comparator->compareSchemas($fromSchema, $toSchema));
         foreach ($sqls as $sql) {
             $statement = $connection->prepare($sql);
             $statement->executeStatement();
@@ -333,7 +334,7 @@ final class SchemaManagerTest extends TestCase
     private function getTable(array $tables, string $name): ?Table
     {
         foreach ($tables as $table) {
-            if ($name === $table->getName()) {
+            if ($name === $table->getObjectName()->getUnqualifiedName()->getValue()) {
                 return $table;
             }
         }
