@@ -9,7 +9,7 @@
 | Requirement               | Version  |
 |---------------------------|----------|
 | PHP                       | >= 8.4   |
-| doctrine/dbal             | >= 4.0   |
+| doctrine/dbal             | >= 4.3   |
 | doctrine/orm              | >= 3.2   |
 | symfony/cache             | >= 8.0   |
 | symfony/lock              | >= 8.0   |
