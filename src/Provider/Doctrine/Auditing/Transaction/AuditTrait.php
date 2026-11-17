@@ -394,9 +394,18 @@ trait AuditTrait
             $meta ??= $entityManager->getClassMetadata($entityClass);
         }
 
-        // Pass $meta to avoid a redundant getClassMetadata() call inside id()
-        $pkValue = $extra['id'] ?? $knownId ?? $this->id($entityManager, $entity, $meta);
-        $pkName = $meta->getSingleIdentifierFieldName();
+        if ($meta->isIdentifierComposite) {
+            // An entity with a composite key cannot be audited itself (see id()), but it shows up as
+            // the target of an association audited on the other side. Its key is flattened into one
+            // string for the summary, in the same format as 1.x so migrated entries stay consistent.
+            // $knownId comes first: the unit of work no longer knows an entity deleted in this flush.
+            $pkValue = $extra['id'] ?? $knownId ?? implode('-', $entityManager->getUnitOfWork()->getEntityIdentifier($entity));
+            $pkName = implode('-', $meta->getIdentifierFieldNames());
+        } else {
+            // Pass $meta to avoid a redundant getClassMetadata() call inside id()
+            $pkValue = $extra['id'] ?? $knownId ?? $this->id($entityManager, $entity, $meta);
+            $pkName = $meta->getSingleIdentifierFieldName();
+        }
 
         $hasToString = self::$hasToStringCache[$entityClass] ??= method_exists($entity, '__toString');
         if ($hasToString) {
