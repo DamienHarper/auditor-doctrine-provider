@@ -11,6 +11,7 @@ use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\CompositeKey\Article;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\CompositeKey\ArticleTag;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\CompositeKey\Bookmark;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\CompositeKey\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use PHPUnit\Framework\Attributes\Small;
@@ -64,10 +65,51 @@ final class CompositeKeyAssociationTest extends TestCase
         $this->assertSame('article tag', $target['label']);
     }
 
+    public function testManyToOneToACompositeKeyEntityIsAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bookmark::class)->getEntityManager();
+
+        $article = new Article()->setTitle('Article');
+        $tag = new Tag()->setName('Tag');
+        $em->persist($article);
+        $em->persist($tag);
+        $em->flush();
+
+        $articleTag = new ArticleTag($article, $tag);
+        $em->persist($articleTag);
+        $em->flush();
+
+        $bookmark = new Bookmark()->setArticleTag($articleTag);
+        $em->persist($bookmark);
+        $em->flush();
+
+        $bookmark->setArticleTag(null);
+        $em->flush();
+
+        $expected = [
+            'article-tag' => $article->getId().'-'.$tag->getId(),
+            'class' => ArticleTag::class,
+            'label' => 'article tag',
+            'pkName' => 'article-tag',
+            'table' => 'composite_key_article_tag',
+        ];
+
+        $reader = new Reader($this->provider);
+
+        $inserts = $reader->createQuery(Bookmark::class, ['type' => TransactionType::INSERT])->execute();
+        $this->assertCount(1, $inserts);
+        $this->assertSame($expected, $inserts[0]->getDiffs()['articleTag']['new']);
+
+        $updates = $reader->createQuery(Bookmark::class, ['type' => TransactionType::UPDATE])->execute();
+        $this->assertCount(1, $updates);
+        $this->assertSame($expected, $updates[0]->getDiffs()['articleTag']['old']);
+    }
+
     private function configureEntities(): void
     {
         $this->provider->getConfiguration()->setEntities([
             Article::class => ['enabled' => true],
+            Bookmark::class => ['enabled' => true],
         ]);
     }
 
