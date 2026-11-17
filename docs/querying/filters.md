@@ -13,6 +13,7 @@ Filters allow you to restrict the results returned by a `Query`. They can be add
 | `RangeFilter`      | `RangeFilter`     | Filter by a numeric range                      |
 | `NullFilter`       | `NullFilter`      | Filter for NULL / NOT NULL values              |
 | `JsonFilter`       | `JsonFilter`      | Filter by a value inside the diffs JSON column |
+| `ChangedFieldFilter` | `ChangedFieldFilter` | Entries whose diff touches a given field    |
 
 All filter classes live under:
 
@@ -147,6 +148,39 @@ $query->addFilter(new JsonFilter(Query::JSON, 'title'));
 > - **MySQL / MariaDB** — Uses `JSON_CONTAINS_PATH(diffs, 'one', '$.title')`
 > - **PostgreSQL** — Uses `diffs ? 'title'`
 > - **SQLite** — Uses `json_extract(diffs, '$.title') IS NOT NULL`
+
+## ✏️ ChangedFieldFilter
+
+Restricts the results to the entries whose diff touches a given field, whatever the operation:
+
+- inserts and updates that changed the field;
+- removes recorded with `full_snapshot_on_remove` enabled (removes without a snapshot carry no field);
+- associations and dissociations recorded on the field, so that filtering on a collection returns the items added to or removed from it.
+
+Both diff formats are read: the schema v2 envelope (including the rows converted by `audit:schema:migrate --convert-diffs`) and the legacy rows (`schema_version = 1`) that were not converted yet.
+
+### Usage
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ChangedFieldFilter;
+
+// Through the createQuery() option
+$query = $reader->createQuery(Post::class, ['changed_field' => 'title']);
+
+// Or directly on the query
+$query->addFilter(new ChangedFieldFilter('tags'));
+
+// Fields of embeddables use their dotted name
+$query->addFilter(new ChangedFieldFilter('address.street'));
+```
+
+The field name must be a Doctrine field name (letters, digits and underscores, dotted for embeddables), otherwise an `InvalidArgumentException` is thrown. It is always passed to the database as a bound parameter.
+
+> [!NOTE]
+> `ChangedFieldFilter` requires native JSON support (MySQL 5.7+, MariaDB 10.2.3+, PostgreSQL 9.4+, SQLite 3.38+) and an audit table with the schema v2 structure: run `audit:schema:migrate` on legacy tables first. It throws an `InvalidArgumentException` otherwise; check `JsonPlatformHelper::isJsonSearchSupported()` beforehand to offer the filter only where it works.
+
+> [!TIP]
+> The predicate cannot use an index: the database reads the `diffs` of every row left by the other filters. Combine it with `object_id` or a date range on large audit tables.
 
 ## 🔗 Combining Filters
 
