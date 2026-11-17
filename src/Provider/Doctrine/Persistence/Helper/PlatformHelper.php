@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Helper;
 
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\PlatformHelperTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Types\Types;
 
+/**
+ * @see PlatformHelperTest
+ */
 abstract class PlatformHelper
 {
     /**

@@ -83,9 +83,7 @@ final readonly class SchemaManager
 
     public function updateAuditSchema(?array $sqls = null, ?callable $callback = null): void
     {
-        if (null === $sqls) {
-            $sqls = $this->getUpdateAuditSchemaSql();
-        }
+        $sqls ??= $this->getUpdateAuditSchemaSql();
 
         /** @var StorageService[] $storageServices */
         $storageServices = $this->provider->getStorageServices();
@@ -142,9 +140,7 @@ final readonly class SchemaManager
             foreach ($classes as $entity => $tableName) {
                 $storageService = $this->provider->getStorageServiceForEntity($entity);
                 $key = array_search($storageService, $this->provider->getStorageServices(), true);
-                if (!isset($repository[$key])) {
-                    $repository[$key] = [];
-                }
+                $repository[$key] ??= [];
 
                 $repository[$key][$entity] = $tableName;
             }

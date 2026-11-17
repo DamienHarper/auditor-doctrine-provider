@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter;
 
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\Filter\NullFilterTest;
+
 /**
  * Filter for NULL values (e.g., anonymous users where blame_id IS NULL).
+ *
+ * @see NullFilterTest
  */
 final readonly class NullFilter implements FilterInterface
 {

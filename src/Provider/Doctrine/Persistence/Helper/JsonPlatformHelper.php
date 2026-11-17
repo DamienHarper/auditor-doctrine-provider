@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Helper;
 
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\JsonPlatformHelperTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
@@ -18,6 +19,8 @@ use Doctrine\DBAL\Platforms\SQLitePlatform;
  * - MariaDB 10.2.3+
  * - PostgreSQL 9.4+
  * - SQLite 3.38+
+ *
+ * @see JsonPlatformHelperTest
  */
 abstract class JsonPlatformHelper
 {
