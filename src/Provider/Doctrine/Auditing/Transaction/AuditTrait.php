@@ -339,11 +339,15 @@ trait AuditTrait
     /**
      * Returns an array describing an entity.
      *
+     * $knownId is the identifier captured before the flush for an entity deleted in that flush:
+     * Doctrine resets the generated identifier of a deleted entity, so it can no longer be read
+     * from the entity itself.
+     *
      * @throws MappingException
      * @throws Exception
      * @throws ORMMappingException
      */
-    private function summarize(EntityManagerInterface $entityManager, ?object $entity = null, array $extra = [], ?ClassMetadata $meta = null): ?array
+    private function summarize(EntityManagerInterface $entityManager, ?object $entity = null, array $extra = [], ?ClassMetadata $meta = null, mixed $knownId = null): ?array
     {
         if (null === $entity) {
             return null;
@@ -369,7 +373,7 @@ trait AuditTrait
                 }
 
                 $identifiers = $entityManager->getUnitOfWork()->getEntityIdentifier($entity);
-                $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? null);
+                $pkValue = $extra['id'] ?? ($identifiers[$pkName] ?? $knownId);
                 $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
                 if ('id' !== $pkName) {
                     $extra['pkName'] = $pkName;
@@ -391,7 +395,7 @@ trait AuditTrait
         }
 
         // Pass $meta to avoid a redundant getClassMetadata() call inside id()
-        $pkValue = $extra['id'] ?? $this->id($entityManager, $entity, $meta);
+        $pkValue = $extra['id'] ?? $knownId ?? $this->id($entityManager, $entity, $meta);
         $pkName = $meta->getSingleIdentifierFieldName();
 
         $hasToString = self::$hasToStringCache[$entityClass] ??= method_exists($entity, '__toString');
