@@ -176,6 +176,35 @@ final class InverseSideDissociateOnDeletionTest extends TestCase
         $this->assertDissociatedTargets([[BundleTag::class, $tagId, 'bundles']], $bundle);
     }
 
+    public function testManyToManyDissociateIdentifiesATargetRemovedWhenTheCollectionIsReplaced(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
+
+        $bundle = new Bundle('bundle');
+        $kept = new BundleTag();
+        $removed = new BundleTag();
+        $bundle->addTag($kept);
+        $bundle->addTag($removed);
+
+        $em->persist($bundle);
+        $em->persist($kept);
+        $em->persist($removed);
+        $em->flush();
+
+        $keptId = $kept->getId();
+        $removedId = $removed->getId();
+
+        // Replacing an owning-side collection schedules the deletion of the previous one.
+        $bundle->replaceTagsWithEmptyCollection();
+        $em->remove($removed);
+        $em->flush();
+
+        $this->assertDissociatedTargets([
+            [BundleTag::class, $keptId, 'bundles'],
+            [BundleTag::class, $removedId, 'bundles'],
+        ], $bundle);
+    }
+
     public function testManyToManyCollectionClearedInTheFlushThatRemovesATargetIdentifiesEveryTarget(): void
     {
         $em = $this->provider->getAuditingServiceForEntity(Bundle::class)->getEntityManager();
