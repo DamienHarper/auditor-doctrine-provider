@@ -6,6 +6,7 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Retention\RetentionPruner;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\Joined\Animal;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\Joined\Cat;
@@ -15,6 +16,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -71,7 +73,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         $output = $commandTester->getDisplay();
         $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
-        $this->assertStringContainsString('invalid max_age value', $output);
+        $this->assertStringContainsString('Invalid retention "maxAge" value', $output);
         $this->assertStringContainsString('NOT_AN_INTERVAL', $output);
     }
 
@@ -99,7 +101,7 @@ final class CleanAuditLogsCommandTest extends TestCase
         }
 
         // No max_entries is configured in configureEntities() — no count-based DELETE expected
-        $this->assertStringNotContainsString('WHERE id NOT IN', $output);
+        $this->assertStringNotContainsString('created_at = ', $output);
 
         $this->assertStringContainsString('[OK] Success', $output);
     }
@@ -146,7 +148,7 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // the output of the command in the console
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('global keep: 2023-04-26 09:00:00', $output);
+        $this->assertStringContainsString('clean audits created before 2023-04-26 09:00:00', $output);
     }
 
     public function testExcludeOptionSingleValue(): void
@@ -232,22 +234,22 @@ final class CleanAuditLogsCommandTest extends TestCase
 
         // Extract the DELETE cutoff date for Author (per-entity P1D)
         $this->assertMatchesRegularExpression(
-            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            '/DELETE FROM '.preg_quote((string) $authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
             $output
         );
         preg_match(
-            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            '/DELETE FROM '.preg_quote((string) $authorTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
             $output,
             $authorMatches
         );
 
         // Extract the DELETE cutoff date for Post (global P12M)
         $this->assertMatchesRegularExpression(
-            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            '/DELETE FROM '.preg_quote((string) $postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
             $output
         );
         preg_match(
-            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
+            '/DELETE FROM '.preg_quote((string) $postTable, '/').' WHERE created_at < \'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\'/',
             $output,
             $postMatches
         );
@@ -258,39 +260,84 @@ final class CleanAuditLogsCommandTest extends TestCase
         $this->assertGreaterThan($postCutoff, $authorCutoff, 'Per-entity max_age P1D must yield a more recent cutoff than global P12M');
     }
 
-    public function testMaxEntriesSqlAppearsInDumpOutput(): void
+    public function testMaxEntriesKeepsTheMostRecentEntries(): void
     {
         $this->provider->getConfiguration()->setEntities([
-            Author::class => ['enabled' => true, 'max_entries' => 50],
+            Author::class => ['enabled' => true, 'max_entries' => 2],
             Post::class => ['enabled' => true],
         ]);
+        $this->insertEntries(Author::class, ['a' => 'P3D', 'b' => 'P2D', 'c' => 'P1D']);
+        $this->insertEntries(Post::class, ['x' => 'P3D', 'y' => 'P2D', 'z' => 'P1D']);
 
-        $command = $this->createCommand();
-        $commandTester = new CommandTester($command);
-        $commandTester->execute([
-            '--no-confirm' => true,
-            '--dump-sql' => true,
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--no-confirm' => true]);
+
+        $this->assertSame(Command::SUCCESS, $commandTester->getStatusCode());
+        $this->assertStringContainsString('Per-entity retention policies', $commandTester->getDisplay());
+        $this->assertSame(['b', 'c'], $this->remainingEntries(Author::class));
+        $this->assertSame(['x', 'y', 'z'], $this->remainingEntries(Post::class));
+    }
+
+    public function testDryRunKeepsEveryEntry(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_age' => 'P1D', 'max_entries' => 1],
         ]);
+        $this->insertEntries(Author::class, ['a' => 'P3D', 'b' => 'P2D', 'c' => 'PT1M', 'd' => 'PT1M']);
 
-        $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('[OK] Success', $output);
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--no-confirm' => true, '--dry-run' => true, '--dump-sql' => true]);
 
-        $schemaManager = new SchemaManager($this->provider);
-        $configuration = $this->provider->getConfiguration();
-        $authorTable = $schemaManager->resolveAuditTableName(Author::class, $configuration);
-        $postTable = $schemaManager->resolveAuditTableName(Post::class, $configuration);
+        $this->assertSame(Command::SUCCESS, $commandTester->getStatusCode());
+        $this->assertStringContainsString('created_at = ', $commandTester->getDisplay());
+        $this->assertSame(['a', 'b', 'c', 'd'], $this->remainingEntries(Author::class));
+    }
 
-        // Author has max_entries — count-based DELETE must appear with correct table and limit
-        $this->assertMatchesRegularExpression(
-            '/DELETE FROM '.preg_quote($authorTable, '/').' WHERE id NOT IN.*LIMIT 50/',
-            $output
-        );
+    public function testAnInvalidPolicyFailsBeforeAnyDeletion(): void
+    {
+        // Author comes first and has a valid policy; Post has an invalid one.
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_entries' => 1],
+            Post::class => ['enabled' => true, 'max_entries' => 0],
+        ]);
+        $this->insertEntries(Author::class, ['a' => 'P2Y', 'b' => 'P1D']);
+        $this->insertEntries(Post::class, ['x' => 'P2Y']);
 
-        // Post has no max_entries — no count-based DELETE for its table
-        $this->assertDoesNotMatchRegularExpression(
-            '/DELETE FROM '.preg_quote($postTable, '/').' WHERE id NOT IN/',
-            $output
-        );
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--no-confirm' => true]);
+
+        $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
+        $this->assertStringContainsString('Invalid retention "maxEntries" value 0', $commandTester->getDisplay());
+        $this->assertSame(['a', 'b'], $this->remainingEntries(Author::class));
+        $this->assertSame(['x'], $this->remainingEntries(Post::class));
+    }
+
+    public function testEntitiesWithoutPolicyKeepTheGlobalBehavior(): void
+    {
+        $this->insertEntries(Post::class, ['old' => 'P13M', 'recent' => 'P11M']);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--no-confirm' => true]);
+
+        $this->assertSame(Command::SUCCESS, $commandTester->getStatusCode());
+        $this->assertStringNotContainsString('Per-entity retention policies', $commandTester->getDisplay());
+        $this->assertSame(['recent'], $this->remainingEntries(Post::class));
+    }
+
+    public function testExcludedEntitiesAreNotCleaned(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true, 'max_entries' => 1],
+            Post::class => ['enabled' => true],
+        ]);
+        $this->insertEntries(Author::class, ['a' => 'P2Y', 'b' => 'P1D']);
+        $this->insertEntries(Post::class, ['x' => 'P2Y']);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--no-confirm' => true, '--exclude' => [Author::class]]);
+
+        $this->assertSame(['a', 'b'], $this->remainingEntries(Author::class));
+        $this->assertSame([], $this->remainingEntries(Post::class));
     }
 
     private function createCommand(): CleanAuditLogsCommand
@@ -299,6 +346,46 @@ final class CleanAuditLogsCommandTest extends TestCase
         $command->setAuditor($this->provider->getAuditor());
 
         return $command;
+    }
+
+    /**
+     * Inserts audit entries, in the given order, created the given ISO 8601 duration ago.
+     *
+     * @param array<string, string> $entries object_id => age
+     */
+    private function insertEntries(string $entity, array $entries): void
+    {
+        $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+        $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
+        $now = new RetentionPruner($this->provider)->now();
+
+        foreach ($entries as $objectId => $age) {
+            $connection->executeStatement(
+                \sprintf('INSERT INTO %s (schema_version, type, object_id, diffs, created_at) VALUES (?, ?, ?, ?%s, ?)', $this->auditTable($entity), $jsonCast),
+                [2, 'update', $objectId, '{}', $now->sub(new \DateInterval($age))->format('Y-m-d H:i:s')],
+            );
+        }
+    }
+
+    /**
+     * @return list<string> object ids of the remaining entries, in insertion order
+     */
+    private function remainingEntries(string $entity): array
+    {
+        $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+
+        /** @var list<string> */
+        return array_map(strval(...), $connection->fetchFirstColumn(\sprintf('SELECT object_id FROM %s ORDER BY id', $this->auditTable($entity))));
+    }
+
+    private function auditTable(string $entity): string
+    {
+        $configuration = $this->provider->getConfiguration();
+        $this->assertInstanceOf(Configuration::class, $configuration);
+        $table = new SchemaManager($this->provider)->resolveAuditTableName($entity, $configuration);
+        \assert(\is_string($table));
+
+        return $table;
     }
 
     private function configureEntities(): void

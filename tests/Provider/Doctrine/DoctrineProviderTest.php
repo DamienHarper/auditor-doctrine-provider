@@ -17,6 +17,7 @@ use DH\Auditor\Security\SecurityProviderInterface;
 use DH\Auditor\Tests\Fixtures\Provider\AuditNoStorageProvider;
 use DH\Auditor\Tests\Fixtures\Provider\StorageNoAuditProvider;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditedEntity as AuditedEntityWithAttribute;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
@@ -438,6 +439,34 @@ final class DoctrineProviderTest extends TestCase
         $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'id'), 'Field "'.AuditedEntityWithAttribute::class.'::$id" is audited.');
     }
 
+    public function testConfiguredRetentionOverridesTheAttributeKeyByKey(): void
+    {
+        // RetentionEntity carries #[Auditable(maxAge: 'P7Y', maxEntries: 1_000)]
+        $options = $this->loadRetentionEntityWith(['enabled' => true, 'max_age' => 'P2Y']);
+
+        // The configured value wins, the other one comes from the attribute.
+        $this->assertSame('P2Y', $options['max_age']);
+        $this->assertSame(1_000, $options['max_entries']);
+        // Other options still come from the attribute.
+        $this->assertArrayHasKey('ignored_columns', $options);
+    }
+
+    public function testConfiguredNullRetentionDisablesTheAttributeValue(): void
+    {
+        $options = $this->loadRetentionEntityWith(['enabled' => true, 'max_entries' => null]);
+
+        $this->assertSame('P7Y', $options['max_age']);
+        $this->assertNull($options['max_entries']);
+    }
+
+    public function testAttributeRetentionIsKeptWithoutConfiguredRetention(): void
+    {
+        $options = $this->loadRetentionEntityWith(['enabled' => true]);
+
+        $this->assertSame('P7Y', $options['max_age']);
+        $this->assertSame(1_000, $options['max_entries']);
+    }
+
     #[Depends('testIsAuditedHonorsEnabledFlag')]
     public function testEnableAuditFor(): void
     {
@@ -589,6 +618,39 @@ final class DoctrineProviderTest extends TestCase
         $provider = $this->createDoctrineProvider();
 
         $this->assertInstanceOf(ResetInterface::class, $provider);
+    }
+
+    /**
+     * @param array<string, mixed> $configuredOptions
+     *
+     * @return array<string, mixed>
+     */
+    private function loadRetentionEntityWith(array $configuredOptions): array
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+
+        $auditor = $this->createAuditor();
+        $provider = new DoctrineProvider($this->createProviderConfiguration());
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+
+        $auditor->registerProvider($provider);
+
+        $provider->loadAttributes($entityManager, [RetentionEntity::class => $configuredOptions]);
+
+        $configuration = $provider->getConfiguration();
+        $this->assertInstanceOf(Configuration::class, $configuration);
+        $options = $configuration->getEntities()[RetentionEntity::class];
+        \assert(\is_array($options));
+
+        /** @var array<string, mixed> $options */
+        return $options;
     }
 }
 

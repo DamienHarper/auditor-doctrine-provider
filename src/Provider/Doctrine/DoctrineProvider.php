@@ -37,6 +37,11 @@ use Symfony\Contracts\Service\ResetInterface;
 final class DoctrineProvider extends AbstractProvider implements ResetInterface
 {
     /**
+     * Retention options that, when given in the configuration, take precedence over the #[Auditable] ones.
+     */
+    private const array RETENTION_OPTIONS = ['max_age', 'max_entries'];
+
+    /**
      * @var array<string, string>
      */
     private const array FIELDS = [
@@ -335,7 +340,25 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
             $attributeEntities = $attributeLoader->load();
         }
 
-        $this->configuration->setEntities(array_merge($entities, $attributeEntities));
+        $merged = array_merge($entities, $attributeEntities);
+
+        // Retention settings given in the configuration (e.g. bundle YAML) take precedence over the attribute ones,
+        // key by key, so that they can be overridden per environment (an explicit null disables the attribute value).
+        foreach (array_keys($attributeEntities) as $entity) {
+            if (!\is_array($entities[$entity] ?? null)) {
+                continue;
+            }
+            if (!\is_array($merged[$entity])) {
+                continue;
+            }
+            foreach (self::RETENTION_OPTIONS as $option) {
+                if (\array_key_exists($option, $entities[$entity])) {
+                    $merged[$entity][$option] = $entities[$entity][$option];
+                }
+            }
+        }
+
+        $this->configuration->setEntities($merged);
 
         return $this;
     }

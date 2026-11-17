@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute;
 
+use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DiffLabelEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
+use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\Retention\InvalidRetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\EntityManagerInterfaceTrait;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -126,5 +128,22 @@ final class AttributeLoaderTest extends TestCase
                 $this->assertNull($config['max_entries'], $entityClass.' must have null max_entries');
             }
         }
+    }
+
+    public function testInvalidRetentionAttributeFailsWithTheEntityName(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../InvalidFixtures/Retention',
+            ],
+            'default'
+        );
+        $attributeLoader = new AttributeLoader($entityManager);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(\sprintf('Invalid #[Auditable] attribute on "%s": Invalid retention "maxEntries" value 0', InvalidRetentionEntity::class));
+
+        $attributeLoader->load();
     }
 }
