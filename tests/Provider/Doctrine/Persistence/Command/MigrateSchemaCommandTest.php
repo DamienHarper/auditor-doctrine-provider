@@ -18,6 +18,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
@@ -410,6 +411,11 @@ final class MigrateSchemaCommandTest extends TestCase
 
     public function testConvertDiffsConvertsABatchEntirelyOrNotAtAll(): void
     {
+        if (!$this->auditConnection()->getDatabasePlatform() instanceof SQLitePlatform) {
+            // a failing row is simulated with an invalid diffs value, which native JSON columns reject on insert
+            $this->markTestSkipped('Needs a platform that stores diffs as text.');
+        }
+
         $this->simulateLegacySchema('post_audit');
         $first = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Old', 'new' => 'New']]);
         $broken = $this->insertLegacyRow('post_audit', 'update', '2', []);
