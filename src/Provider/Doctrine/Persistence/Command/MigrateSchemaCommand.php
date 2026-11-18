@@ -843,13 +843,7 @@ final class MigrateSchemaCommand extends Command
                     ['id' => $row['id']],
                 );
                 ++$converted;
-
-                $id = $row['id'];
-                if (!is_numeric($id)) {
-                    throw new \UnexpectedValueException(\sprintf('Unexpected non-numeric id in audit table %s.', $tableName));
-                }
-
-                $lastId = (int) $id;
+                $lastId = $row['id'];
             }
 
             if (\count($rows) < $batchLimit) {
