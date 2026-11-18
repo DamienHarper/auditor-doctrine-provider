@@ -13,6 +13,8 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Driver;
 use Doctrine\DBAL\Driver\Connection as DriverConnection;
 use Doctrine\DBAL\Driver\Middleware\AbstractDriverMiddleware;
+use Doctrine\DBAL\Exception\TableNotFoundException;
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -162,11 +164,155 @@ final class AuditorConnectionTest extends TestCase
         $this->assertSame($audits[0]->transactionId, $audits[1]->transactionId);
     }
 
+    public function testBufferedAuditEntriesAreWrittenRightBeforeTheCommit(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $driver = $this->auditorDriver($connection);
+        $buffered = null;
+        $driver->addFlusher(static function () use ($driver, $connection, &$buffered): void {
+            $driver->getInsertBuffer()->add($connection, 'author_audit', self::auditRow('buffered'), 100);
+            $buffered = (int) $connection->fetchOne("SELECT COUNT(*) FROM author_audit WHERE object_id = 'buffered'");
+        });
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $this->assertSame(0, $buffered, 'A buffered audit entry is not written by the flusher.');
+        $this->assertSame(1, (int) $connection->fetchOne("SELECT COUNT(*) FROM author_audit WHERE object_id = 'buffered'"));
+        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+    }
+
+    public function testAFailingBufferFlushFailsTheCommit(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $driver = $this->auditorDriver($connection);
+        $rolledBack = false;
+        $driver->addFlusher(static function () use ($driver, $connection, &$rolledBack): void {
+            $driver->addRollbackHandler(static function () use (&$rolledBack): void {
+                $rolledBack = true;
+            });
+            $driver->getInsertBuffer()->add($connection, 'author_audit', self::auditRow('buffered'), 100);
+            $driver->getInsertBuffer()->add($connection, 'missing_audit', self::auditRow('buffered'), 100);
+        });
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+
+        try {
+            $em->flush();
+            $this->fail('The flush must fail with the buffered audit entries.');
+        } catch (AssertionFailedError $assertionFailedError) {
+            throw $assertionFailedError;
+        } catch (\Throwable $throwable) {
+            $this->assertCausedBy(TableNotFoundException::class, $throwable);
+        }
+
+        $this->assertFalse($connection->isTransactionActive());
+        $this->assertTrue($rolledBack, 'The rollback handlers run.');
+        $this->assertSame([], $driver->getFlusherList());
+        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author_audit'), 'No audit entry is left.');
+    }
+
+    /**
+     * A batch written while the audit entries are persisted fails where the auditor ignores exceptions.
+     */
+    public function testAFailingEarlyBatchFailsTheCommit(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $driver = $this->auditorDriver($connection);
+        $driver->addFlusher(static function () use ($driver, $connection): void {
+            $driver->getInsertBuffer()->add($connection, 'missing_audit', self::auditRow('buffered'), 1);
+        });
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+
+        try {
+            $em->flush();
+            $this->fail('The flush must fail with the buffered audit entries.');
+        } catch (AssertionFailedError $assertionFailedError) {
+            throw $assertionFailedError;
+        } catch (\Throwable $throwable) {
+            $this->assertCausedBy(TableNotFoundException::class, $throwable);
+        }
+
+        $this->assertFalse($connection->isTransactionActive());
+        $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author_audit'));
+    }
+
+    public function testAFailingFlusherDiscardsTheBufferedAuditEntries(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $driver = $this->auditorDriver($connection);
+        $driver->addFlusher(static function () use ($driver, $connection): void {
+            $driver->getInsertBuffer()->add($connection, 'author_audit', self::auditRow('buffered'), 100);
+        });
+        $driver->addFlusher(static function (): never {
+            throw new \RuntimeException('audit failed');
+        });
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+
+        try {
+            $em->flush();
+            $this->fail('The flush must fail with the flusher.');
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertSame('audit failed', $runtimeException->getMessage());
+        }
+
+        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+
+        // the failed flush closed the entity manager
+        $connection->beginTransaction();
+        $connection->commit();
+
+        $this->assertSame(0, (int) $connection->fetchOne("SELECT COUNT(*) FROM author_audit WHERE object_id = 'buffered'"), 'The discarded audit entries are not written with the next commit.');
+    }
+
+    public function testARollbackDiscardsTheBufferedAuditEntries(): void
+    {
+        $connection = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager()->getConnection();
+        $driver = $this->auditorDriver($connection);
+        $driver->getInsertBuffer()->add($connection, 'author_audit', self::auditRow('buffered'), 100);
+
+        $connection->beginTransaction();
+        $connection->rollBack();
+
+        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+    }
+
     private function configureEntities(): void
     {
         $this->provider->getConfiguration()->setEntities([
             Author::class => ['enabled' => true],
         ]);
+    }
+
+    /**
+     * @param class-string<\Throwable> $class
+     */
+    private function assertCausedBy(string $class, \Throwable $throwable): void
+    {
+        for ($cause = $throwable; $cause instanceof \Throwable; $cause = $cause->getPrevious()) {
+            if ($cause instanceof $class) {
+                return;
+            }
+        }
+
+        $this->fail(\sprintf('"%s" is not caused by "%s".', $throwable::class, $class));
+    }
+
+    /**
+     * @return list<mixed>
+     */
+    private static function auditRow(string $objectId): array
+    {
+        return [2, 'insert', $objectId, null, '01JD0000000000000000000000', '{}', null, null, null, '2026-01-01 00:00:00'];
     }
 
     private function auditorDriver(Connection $connection): AuditorDriver
