@@ -195,8 +195,10 @@ $configuration = new Configuration([
 - **No `id` in the payload**: the `LifecycleEvent` payload of a buffered audit entry has no `id` key, since the entry is
   not written yet when it is persisted. With `batch_size: 0`, the provider adds the `id` of the inserted row to the
   payload once the entry is written.
-- **Failures fail the commit**: if the buffered audit entries cannot be written, the commit fails and the audited
-  transaction is rolled back, so that no change is committed without its audit entries. This includes audit entries
+- **Failures fail the commit**: if an audit entry cannot be buffered (e.g. the storage mapper throws) or the buffered
+  audit entries cannot be written, the commit fails with the first of these failures and the audited transaction is
+  rolled back, so that no change is committed without its audit entries (with `batch_size: 0`, such a failure is
+  ignored and the audit entry is lost). This includes audit entries
   stored on another connection (see [Multi-Database Configuration](multi-database.md)): those already written by an
   early batch are deleted when the audited transaction is rolled back, as they are with `batch_size: 0`.
 - **Outside of a commit**: `DoctrineProvider::persist()` called directly, outside of the commit of an audited
