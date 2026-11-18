@@ -72,8 +72,11 @@ final class DoctrineSubscriber implements ResetInterface
         if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
             $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $driver): void {
                 try {
+                    // with a positive `batch_size`, audit entries are written by the driver when the transaction is committed
+                    $this->provider->useInsertBuffer($driver->getInsertBuffer());
                     $this->provider->getTransactionManager()->process($transaction);
                 } finally {
+                    $this->provider->useInsertBuffer(null);
                     $this->addRollbackHandler($driver, $entityManager, $transaction);
                     $transaction->reset();
                 }
