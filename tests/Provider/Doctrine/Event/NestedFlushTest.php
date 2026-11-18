@@ -251,6 +251,133 @@ final class NestedFlushTest extends TestCase
         $this->assertCount(3, new Reader($this->provider)->createQuery(Author::class)->execute());
     }
 
+    /**
+     * DBAL rolls a nested transaction back to its savepoint: the audit entries of the flushes it contains must not
+     * be written when the outer transaction is committed.
+     */
+    public function testAFlushOfARolledBackNestedTransactionIsNotAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+        $em->flush();
+
+        $connection->rollBack();
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
+        $this->assertCount(1, $audits, 'The audit entries of the rolled-back nested transaction must not be written.');
+    }
+
+    /**
+     * EntityManager::wrapInTransaction() run inside an outer transaction rolls its nested transaction back when the
+     * callback fails after a successful flush.
+     */
+    public function testAFlushOfAFailedNestedWrapInTransactionIsNotAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        try {
+            $em->wrapInTransaction(static function () use ($em): never {
+                $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+                $em->flush();
+
+                throw new \RuntimeException('business failure');
+            });
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertSame('business failure', $runtimeException->getMessage());
+        }
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $this->assertCount(1, new Reader($this->provider)->createQuery(Author::class)->execute());
+    }
+
+    /**
+     * DBAL names the savepoint of a nested transaction after its nesting level: a committed nested transaction
+     * followed by a rolled-back one at the same level reuse the same savepoint name.
+     */
+    public function testOnlyTheRolledBackNestedTransactionOfALevelIsDiscarded(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $connection->beginTransaction();
+
+        $jane = new Author()->setFullname('Jane Doe')->setEmail('jane@example.com');
+        $em->persist($jane);
+        $em->flush();
+
+        $connection->rollBack();
+        // the row is gone: its identifier may be assigned again
+        $em->detach($jane);
+
+        $em->persist(new Author()->setFullname('Jim Doe')->setEmail('jim@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe', 'Jim Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author ORDER BY id'));
+        $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
+        $this->assertCount(2, $audits);
+        $this->assertSame($audits[0]->transactionId, $audits[1]->transactionId);
+    }
+
+    /**
+     * Rolling a nested transaction back also discards the nested transactions it contains, committed or not.
+     */
+    public function testRollingBackANestedTransactionDiscardsTheNestedTransactionsItContains(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jim Doe')->setEmail('jim@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $connection->rollBack();
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $this->assertCount(1, new Reader($this->provider)->createQuery(Author::class)->execute());
+    }
+
     private function configureEntities(): void
     {
         $this->provider->getConfiguration()->setEntities([

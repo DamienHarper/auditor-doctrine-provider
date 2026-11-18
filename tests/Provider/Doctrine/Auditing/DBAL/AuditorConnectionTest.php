@@ -13,6 +13,14 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Driver;
 use Doctrine\DBAL\Driver\Connection as DriverConnection;
 use Doctrine\DBAL\Driver\Middleware\AbstractDriverMiddleware;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Platforms\MariaDB1060Platform;
+use Doctrine\DBAL\Platforms\MySQL80Platform;
+use Doctrine\DBAL\Platforms\OraclePlatform;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
+use Doctrine\DBAL\Platforms\SQLServerPlatform;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -160,6 +168,102 @@ final class AuditorConnectionTest extends TestCase
         $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
         $this->assertCount(2, $audits);
         $this->assertSame($audits[0]->transactionId, $audits[1]->transactionId);
+    }
+
+    /**
+     * DBAL creates, releases and rolls back savepoints through Driver\Connection::exec(), with the syntax of the
+     * platform: the driver tracks them to discard the audit entries of a rolled-back nested transaction.
+     */
+    #[DataProvider('provideTheSavepointsAreTrackedWithTheSyntaxOfEachPlatformCases')]
+    public function testTheSavepointsAreTrackedWithTheSyntaxOfEachPlatform(AbstractPlatform $platform): void
+    {
+        $driver = $this->stubbedAuditorDriver();
+        $connection = $driver->connect([]);
+
+        $connection->exec($platform->createSavePoint('DOCTRINE_2'));
+
+        $outer = $driver->getCurrentSavepoint();
+        $this->assertSame('DOCTRINE_2', $outer?->name);
+
+        $connection->exec($platform->createSavePoint('DOCTRINE_3'));
+        $inner = $driver->getCurrentSavepoint();
+        $this->assertSame('DOCTRINE_3', $inner?->name);
+        $this->assertSame($outer, $inner->parent);
+
+        $connection->exec($platform->rollbackSavePoint('DOCTRINE_2'));
+        $this->assertTrue($outer->isRolledBack());
+        $this->assertTrue($inner->isRolledBack(), 'The savepoints created after the one rolled back to are rolled back too.');
+
+        // the savepoint rolled back to is still established: the changes made after the rollback are not rolled back
+        $current = $driver->getCurrentSavepoint();
+        $this->assertSame('DOCTRINE_2', $current?->name);
+        $this->assertFalse($current->isRolledBack());
+        $this->assertNull($current->parent);
+
+        $connection->commit();
+        $this->assertNull($driver->getCurrentSavepoint(), 'The savepoints are over with the transaction.');
+    }
+
+    /**
+     * @return iterable<string, array{AbstractPlatform}>
+     */
+    public static function provideTheSavepointsAreTrackedWithTheSyntaxOfEachPlatformCases(): iterable
+    {
+        yield 'SQLite' => [new SQLitePlatform()];
+
+        yield 'MySQL' => [new MySQL80Platform()];
+
+        yield 'MariaDB' => [new MariaDB1060Platform()];
+
+        yield 'PostgreSQL' => [new PostgreSQLPlatform()];
+
+        yield 'SQL Server' => [new SQLServerPlatform()];
+
+        yield 'Oracle' => [new OraclePlatform()];
+    }
+
+    public function testAReleasedSavepointHandsItsChangesToItsParent(): void
+    {
+        $driver = $this->stubbedAuditorDriver();
+        $connection = $driver->connect([]);
+
+        $connection->exec('SAVEPOINT DOCTRINE_2');
+
+        $outer = $driver->getCurrentSavepoint();
+        $connection->exec('SAVEPOINT DOCTRINE_3');
+        $inner = $driver->getCurrentSavepoint();
+        $connection->exec('RELEASE SAVEPOINT DOCTRINE_3');
+
+        $this->assertSame($outer, $driver->getCurrentSavepoint());
+        $this->assertFalse($inner?->isRolledBack());
+
+        $connection->exec('ROLLBACK TO SAVEPOINT DOCTRINE_2');
+        $this->assertTrue($inner?->isRolledBack(), 'The changes of a released savepoint belong to its parent.');
+    }
+
+    public function testOtherStatementsAndUnknownSavepointsAreIgnored(): void
+    {
+        $driver = $this->stubbedAuditorDriver();
+        $connection = $driver->connect([]);
+
+        $connection->exec('CREATE TABLE savepoint (id INT)');
+        $connection->exec('RELEASE SAVEPOINT UNKNOWN');
+        $connection->exec('ROLLBACK TO SAVEPOINT UNKNOWN');
+        $this->assertNull($driver->getCurrentSavepoint());
+
+        $connection->exec('SAVEPOINT DOCTRINE_2');
+        $connection->rollBack();
+        $this->assertNull($driver->getCurrentSavepoint(), 'The savepoints are over with the transaction.');
+    }
+
+    private function stubbedAuditorDriver(): AuditorDriver
+    {
+        $wrappedConnection = $this->createStub(DriverConnection::class);
+        $wrappedConnection->method('exec')->willReturn(0);
+        $wrappedDriver = $this->createStub(Driver::class);
+        $wrappedDriver->method('connect')->willReturn($wrappedConnection);
+
+        return new AuditorDriver($wrappedDriver);
     }
 
     private function configureEntities(): void
