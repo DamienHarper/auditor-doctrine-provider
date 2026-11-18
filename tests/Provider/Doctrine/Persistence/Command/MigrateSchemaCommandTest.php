@@ -126,7 +126,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'First post', 'old' => null],
@@ -144,7 +144,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '7', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'title' => ['new' => 'Untitled', 'old' => null],
@@ -166,7 +166,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'First post', 'old' => null],
@@ -193,8 +193,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        // MySQL and PostgreSQL JSON columns do not keep the order of object keys.
-        $this->assertSame($this->sortKeys([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'title' => ['new' => 'Second title', 'old' => 'First title'],
@@ -205,7 +204,7 @@ final class MigrateSchemaCommandTest extends TestCase
                 ],
             ],
             'deep_diffs' => ['settings'],
-        ]), $this->sortKeys($this->fetchConvertedDiffs('post_audit', $id)));
+        ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
     /**
@@ -223,7 +222,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'label' => ['new' => 'label', 'old' => null],
@@ -245,7 +244,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'json_array' => ['new' => ['new' => 2, 'old' => 1]],
@@ -266,7 +265,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'json_array' => ['new' => ['new' => 1], 'old' => 'scalar'],
@@ -287,7 +286,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'author' => ['new' => $author, 'old' => null],
@@ -304,7 +303,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [],
         ], $this->fetchConvertedDiffs('post_audit', $id));
@@ -423,15 +422,27 @@ final class MigrateSchemaCommandTest extends TestCase
     }
 
     /**
+     * Compares converted diffs regardless of key order: JSON columns on MySQL and PostgreSQL (jsonb)
+     * do not preserve the order of object keys.
+     *
+     * @param array<array-key, mixed> $expected
+     * @param array<array-key, mixed> $actual
+     */
+    private function assertSameDiffs(array $expected, array $actual): void
+    {
+        $this->assertSame($this->sortKeysRecursively($expected), $this->sortKeysRecursively($actual));
+    }
+
+    /**
      * @param array<array-key, mixed> $array
      *
      * @return array<array-key, mixed>
      */
-    private function sortKeys(array $array): array
+    private function sortKeysRecursively(array $array): array
     {
         ksort($array);
 
-        return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeys($value) : $value, $array);
+        return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeysRecursively($value) : $value, $array);
     }
 
     private function auditConnection(): Connection
