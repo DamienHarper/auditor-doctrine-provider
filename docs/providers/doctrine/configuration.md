@@ -187,7 +187,11 @@ $configuration = new Configuration([
   fewer statements, but the more memory the buffer holds for a large transaction.
 - **Per-statement limit**: whatever `batch_size`, a single statement holds at most 99 rows on SQLite (bound parameter
   limit of older SQLite versions) and 500 rows on MySQL, MariaDB and PostgreSQL. Other platforms are limited to 99 rows
-  per statement and must support the multi-row `INSERT INTO … VALUES (…), (…)` syntax.
+  per statement and must support the multi-row `INSERT INTO … VALUES (…), (…)` syntax. A statement is also closed
+  before its string values (diffs, extra data, blame…) exceed 1 MiB, a larger audit entry being written alone: MySQL
+  and MariaDB reject a statement larger than their `max_allowed_packet` setting (64 MiB by default since MySQL 8.0,
+  as low as 1 MiB on older or tuned servers). Keep `max_allowed_packet` comfortably above 1 MiB, and above the size
+  of your largest audit entry (as with `batch_size: 0`).
 - **No `id` in the payload**: the `LifecycleEvent` payload of a buffered audit entry has no `id` key, since the entry is
   not written yet when it is persisted. With `batch_size: 0`, the provider adds the `id` of the inserted row to the
   payload once the entry is written.

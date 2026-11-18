@@ -229,6 +229,65 @@ final class AuditInsertBufferTest extends TestCase
         $this->assertSame(['2'], $this->objectIds('author_audit'));
     }
 
+    /**
+     * MySQL and MariaDB reject a statement larger than max_allowed_packet (64 MiB by default since MySQL 8.0, as
+     * low as 1 MiB on older or tuned servers).
+     */
+    public function testStatementsAreSplitWhenTheirValuesExceedTheByteCap(): void
+    {
+        $statements = [];
+        $connection = $this->createStub(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn(new MySQLPlatform());
+        $connection->method('executeStatement')->willReturnCallback(static function (string $sql, array $params) use (&$statements): int {
+            $statements[] = $params;
+
+            return 1;
+        });
+
+        $buffer = new AuditInsertBuffer();
+        $large = str_repeat('x', 400 * 1_024);
+        $huge = str_repeat('x', 2 * 1_024 * 1_024);
+        foreach ([$large, $large, $large, $huge, 'small'] as $i => $diffs) {
+            $row = $this->row((string) $i);
+            $row[5] = $diffs;
+            $buffer->add($connection, 'author_audit', $row, 10_000);
+        }
+
+        $buffer->flush();
+
+        $columns = \count(AuditInsertBuffer::COLUMNS);
+        $this->assertSame(
+            [2 * $columns, $columns, $columns, $columns],
+            array_map(\count(...), $statements),
+            'A statement closes before its values exceed 1 MiB, a larger row is written alone.',
+        );
+    }
+
+    public function testTheByteCapCountsBytesNotCharacters(): void
+    {
+        $statements = 0;
+        $connection = $this->createStub(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn(new MySQLPlatform());
+        $connection->method('executeStatement')->willReturnCallback(static function () use (&$statements): int {
+            ++$statements;
+
+            return 1;
+        });
+
+        $buffer = new AuditInsertBuffer();
+        // 600 KiB, 300 Ki characters
+        $multibyte = str_repeat('é', 300 * 1_024);
+        foreach ([$multibyte, $multibyte] as $i => $diffs) {
+            $row = $this->row((string) $i);
+            $row[5] = $diffs;
+            $buffer->add($connection, 'author_audit', $row, 10_000);
+        }
+
+        $buffer->flush();
+
+        $this->assertSame(2, $statements);
+    }
+
     #[DataProvider('provideStatementsFollowThePlatformCases')]
     public function testStatementsFollowThePlatform(AbstractPlatform $platform, int $maxRows, string $jsonPlaceholder): void
     {

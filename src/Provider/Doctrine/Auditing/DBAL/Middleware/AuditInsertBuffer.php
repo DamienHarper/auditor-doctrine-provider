@@ -63,6 +63,12 @@ final class AuditInsertBuffer implements \Countable
     private const int DEFAULT_MAX_ROWS = 99;
 
     /**
+     * Bytes of string values per statement, a row larger than that being written alone: MySQL and MariaDB reject
+     * a statement larger than max_allowed_packet (as low as 1 MiB on older or tuned servers).
+     */
+    private const int MAX_BYTES = 1_024 * 1_024;
+
+    /**
      * Buffered rows grouped by connection and audit table, in the order of their first row.
      *
      * @var array<string, array{Connection, string, list<list<mixed>>}>
@@ -147,7 +153,7 @@ final class AuditInsertBuffer implements \Countable
             $maxRows = $this->maxRowsPerStatement($platform);
 
             $placeholders = $this->rowPlaceholders($platform);
-            foreach (array_chunk($rows, $maxRows) as $chunk) {
+            foreach ($this->chunks($rows, $maxRows) as $chunk) {
                 $connection->executeStatement(
                     \sprintf(
                         'INSERT INTO %s (%s) VALUES %s',
@@ -161,6 +167,45 @@ final class AuditInsertBuffer implements \Countable
         }
     }
 
+    /**
+     * Splits the rows into chunks of at most $maxRows rows and MAX_BYTES bytes of string values.
+     *
+     * @param list<list<mixed>> $rows
+     * @param positive-int      $maxRows
+     *
+     * @return iterable<non-empty-list<list<mixed>>>
+     */
+    private function chunks(array $rows, int $maxRows): iterable
+    {
+        $chunk = [];
+        $bytes = 0;
+        foreach ($rows as $row) {
+            $rowBytes = 0;
+            foreach ($row as $value) {
+                if (\is_string($value)) {
+                    $rowBytes += mb_strlen($value, '8bit'); // bytes, not characters
+                }
+            }
+
+            if ([] !== $chunk && (\count($chunk) >= $maxRows || $bytes + $rowBytes > self::MAX_BYTES)) {
+                yield $chunk;
+
+                $chunk = [];
+                $bytes = 0;
+            }
+
+            $chunk[] = $row;
+            $bytes += $rowBytes;
+        }
+
+        if ([] !== $chunk) {
+            yield $chunk;
+        }
+    }
+
+    /**
+     * @return positive-int
+     */
     private function maxRowsPerStatement(AbstractPlatform $platform): int
     {
         return match (true) {
