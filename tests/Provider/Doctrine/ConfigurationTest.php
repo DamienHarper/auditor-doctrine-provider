@@ -39,6 +39,16 @@ final class ConfigurationTest extends TestCase
         $this->assertNotInstanceOf(DoctrineProvider::class, $configuration->getProvider(), 'provider is null by default.');
     }
 
+    public function testCompressionIsDisabledByDefault(): void
+    {
+        $this->assertFalse($this->createProviderConfiguration()->isCompressionEnabled(), '"compression" is disabled by default.');
+    }
+
+    public function testCompressionCanBeEnabled(): void
+    {
+        $this->assertTrue($this->createProviderConfiguration(['compression' => true])->isCompressionEnabled());
+    }
+
     public function testDefaultTablePrefix(): void
     {
         $configuration = $this->createProviderConfiguration();
