@@ -251,7 +251,7 @@ final class BatchInsertTest extends TestCase
         $event = $this->event('1');
         $provider->persist($event);
 
-        $this->assertTrue($buffer->isEmpty());
+        $this->assertCount(0, $buffer);
         $this->assertSame(['1'], $this->auditedObjectIds(Author::class));
         $this->assertSame($this->lastAuditId(Author::class), $event->getPayload()['id'] ?? null);
     }

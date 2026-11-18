@@ -55,7 +55,7 @@ final class MultiConnectionBatchInsertTest extends TestCase
         $connection->commit();
 
         $this->assertSame([1, 2], $buffered, 'The audit entries of both entity managers are written together.');
-        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $driver->getInsertBuffer());
         $this->assertSame(1, $this->countAuditEntries(Author::class));
         $this->assertSame(1, $this->countAuditEntries(Cat::class));
     }
@@ -76,7 +76,7 @@ final class MultiConnectionBatchInsertTest extends TestCase
         $carEntityManager->flush();
 
         $this->assertSame([[0, 1]], $buffered);
-        $this->assertTrue($carDriver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $carDriver->getInsertBuffer());
         $this->assertSame(1, $this->countAuditEntries(Car::class), 'The audit entries are written on the storage connection.');
     }
 

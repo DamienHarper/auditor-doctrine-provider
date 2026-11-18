@@ -180,7 +180,7 @@ final class AuditorConnectionTest extends TestCase
 
         $this->assertSame(0, $buffered, 'A buffered audit entry is not written by the flusher.');
         $this->assertSame(1, (int) $connection->fetchOne("SELECT COUNT(*) FROM author_audit WHERE object_id = 'buffered'"));
-        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $driver->getInsertBuffer());
     }
 
     public function testAFailingBufferFlushFailsTheCommit(): void
@@ -211,7 +211,7 @@ final class AuditorConnectionTest extends TestCase
         $this->assertFalse($connection->isTransactionActive());
         $this->assertTrue($rolledBack, 'The rollback handlers run.');
         $this->assertSame([], $driver->getFlusherList());
-        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $driver->getInsertBuffer());
         $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
         $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author_audit'), 'No audit entry is left.');
     }
@@ -265,7 +265,7 @@ final class AuditorConnectionTest extends TestCase
             $this->assertSame('audit failed', $runtimeException->getMessage());
         }
 
-        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $driver->getInsertBuffer());
 
         // the failed flush closed the entity manager
         $connection->beginTransaction();
@@ -283,7 +283,7 @@ final class AuditorConnectionTest extends TestCase
         $connection->beginTransaction();
         $connection->rollBack();
 
-        $this->assertTrue($driver->getInsertBuffer()->isEmpty());
+        $this->assertCount(0, $driver->getInsertBuffer());
     }
 
     private function configureEntities(): void

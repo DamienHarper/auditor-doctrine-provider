@@ -23,7 +23,7 @@ use Doctrine\DBAL\Platforms\SQLitePlatform;
  *
  * @see AuditInsertBufferTest
  */
-final class AuditInsertBuffer
+final class AuditInsertBuffer implements \Countable
 {
     /**
      * Columns of an audit table written for each audit entry, in the order of the values of a buffered row.
@@ -52,6 +52,9 @@ final class AuditInsertBuffer
      */
     private const int SQLITE_MAX_ROWS = 99;
 
+    /**
+     * Rows per statement on MySQL, MariaDB and PostgreSQL: 5000 bound parameters, far below their limit of 65535.
+     */
     private const int MAX_ROWS = 500;
 
     /**
@@ -68,15 +71,14 @@ final class AuditInsertBuffer
 
     private int $count = 0;
 
-    private int $batchSize = 0;
-
     private ?\Throwable $failure = null;
 
     /**
      * Buffers a row of $auditTable (a table name as it appears in SQL, possibly schema-qualified and quoted),
      * whose values are ordered like COLUMNS, and writes every buffered row once $batchSize rows are buffered.
      *
-     * @param list<mixed> $row
+     * @param list<mixed>  $row
+     * @param positive-int $batchSize
      */
     public function add(Connection $connection, string $auditTable, array $row, int $batchSize): void
     {
@@ -89,7 +91,6 @@ final class AuditInsertBuffer
         $this->groups[$key] ??= [$connection, $auditTable, []];
         $this->groups[$key][2][] = $row;
         ++$this->count;
-        $this->batchSize = $batchSize;
 
         if ($this->count >= $batchSize) {
             try {
@@ -126,11 +127,10 @@ final class AuditInsertBuffer
         $this->failure = null;
     }
 
-    public function isEmpty(): bool
-    {
-        return 0 === $this->count;
-    }
-
+    /**
+     * Number of buffered rows. A failure memorised by an early flush is not counted: an empty buffer may still have
+     * a failure to report, flush() must always be called when the transaction is committed.
+     */
     public function count(): int
     {
         return $this->count;
@@ -139,16 +139,12 @@ final class AuditInsertBuffer
     private function write(): void
     {
         $groups = $this->groups;
-        $batchSize = $this->batchSize;
         $this->groups = [];
         $this->count = 0;
 
         foreach ($groups as [$connection, $auditTable, $rows]) {
             $platform = $connection->getDatabasePlatform();
             $maxRows = $this->maxRowsPerStatement($platform);
-            if ($batchSize > 0) {
-                $maxRows = min($maxRows, $batchSize);
-            }
 
             $placeholders = $this->rowPlaceholders($platform);
             foreach (array_chunk($rows, $maxRows) as $chunk) {

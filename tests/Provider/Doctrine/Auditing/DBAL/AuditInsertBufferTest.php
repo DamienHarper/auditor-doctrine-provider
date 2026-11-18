@@ -119,7 +119,7 @@ final class AuditInsertBufferTest extends TestCase
         $buffer->add($this->connection, 'author_audit', $this->row('1'), 100);
         $buffer->flush();
 
-        $this->assertTrue($buffer->isEmpty());
+        $this->assertCount(0, $buffer);
         $this->assertSame(0, $buffer->count());
 
         $this->logger->clear();
@@ -142,7 +142,7 @@ final class AuditInsertBufferTest extends TestCase
         $buffer->add($this->connection, 'author_audit', $this->row('1'), 100);
         $buffer->discard();
 
-        $this->assertTrue($buffer->isEmpty());
+        $this->assertCount(0, $buffer);
 
         $buffer->flush();
 
@@ -159,7 +159,7 @@ final class AuditInsertBufferTest extends TestCase
 
         $buffer->add($this->connection, 'author_audit', $this->row('3'), 3);
 
-        $this->assertTrue($buffer->isEmpty(), 'The batch size counts the rows of every audit table.');
+        $this->assertCount(0, $buffer, 'The batch size counts the rows of every audit table.');
         $this->assertSame(['1', '3'], $this->objectIds('author_audit'));
         $this->assertSame(['2'], $this->objectIds('post_audit'));
 
@@ -181,7 +181,7 @@ final class AuditInsertBufferTest extends TestCase
         } catch (TableNotFoundException) {
         }
 
-        $this->assertTrue($buffer->isEmpty());
+        $this->assertCount(0, $buffer);
         $buffer->flush();
     }
 
@@ -193,12 +193,12 @@ final class AuditInsertBufferTest extends TestCase
         // the early flush runs while the audit entry is persisted, where the auditor ignores exceptions
         $buffer->add($this->connection, 'missing_audit', $this->row('2'), 2);
 
-        $this->assertTrue($buffer->isEmpty());
+        $this->assertCount(0, $buffer);
 
         $buffer->add($this->connection, 'author_audit', $this->row('3'), 2);
         $buffer->add($this->connection, 'author_audit', $this->row('4'), 2);
 
-        $this->assertTrue($buffer->isEmpty(), 'Rows added after a failure are ignored.');
+        $this->assertCount(0, $buffer, 'Rows added after a failure are ignored.');
 
         try {
             $buffer->flush();

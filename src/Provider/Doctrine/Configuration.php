@@ -183,11 +183,12 @@ final class Configuration implements ConfigurationInterface
     }
 
     /**
-     * Number of audit entries written by a single multi-row INSERT when a database transaction is committed.
+     * Number of buffered audit entries that triggers writing them with multi-row INSERT statements.
      *
      * 0 (the default) writes each audit entry with its own INSERT, as soon as it is produced. A positive value
-     * buffers the audit entries of the transaction being committed and writes them in batches of at most this
-     * many rows (and at most the per-platform limit of rows per statement), right before the COMMIT.
+     * buffers the audit entries of the transaction being committed and writes them with multi-row INSERT statements
+     * right before the COMMIT, or as soon as this many entries are buffered; a statement holds at most the
+     * per-platform limit of rows.
      */
     public function getBatchSize(): int
     {
