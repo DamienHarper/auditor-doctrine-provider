@@ -408,6 +408,25 @@ final class MigrateSchemaCommandTest extends TestCase
         }
     }
 
+    public function testConvertDiffsConvertsABatchEntirelyOrNotAtAll(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $first = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Old', 'new' => 'New']]);
+        $broken = $this->insertLegacyRow('post_audit', 'update', '2', []);
+        $this->auditConnection()->update('post_audit', ['diffs' => '{not json'], ['id' => $broken]);
+
+        $commandTester = new CommandTester($this->createCommand());
+
+        try {
+            $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
+            $this->fail('The conversion of an invalid diffs value must fail.');
+        } catch (\JsonException) {
+        }
+
+        // the row before the invalid one belongs to the same batch: it is left unconverted, for the next run
+        $this->assertSame(1, (int) $this->auditConnection()->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$first]));
+    }
+
     public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void
     {
         $this->simulateLegacySchema('post_audit');

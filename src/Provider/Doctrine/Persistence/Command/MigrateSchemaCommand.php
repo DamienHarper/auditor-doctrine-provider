@@ -644,15 +644,19 @@ final class MigrateSchemaCommand extends Command
             }
 
             $tableRows = 0;
-            foreach ($hashMap as $hash => $ulid) {
-                $affected = $connection->executeStatement(
-                    \sprintf(
-                        'UPDATE %s SET transaction_id = ? WHERE transaction_hash = ? AND transaction_id IS NULL',
-                        $tableName,
-                    ),
-                    [$ulid, $hash],
-                );
-                $tableRows += (int) $affected;
+            $sql = \sprintf('UPDATE %s SET transaction_id = ? WHERE transaction_hash = ? AND transaction_id IS NULL', $tableName);
+
+            // One database transaction per BATCH_SIZE hashes: in autocommit mode, each UPDATE would be
+            // committed (and its log flushed to disk) on its own, which dominates the duration of the conversion.
+            foreach (array_chunk($hashMap, self::BATCH_SIZE, true) as $chunk) {
+                $tableRows += $connection->transactional(static function (Connection $connection) use ($chunk, $sql): int {
+                    $affected = 0;
+                    foreach ($chunk as $hash => $ulid) {
+                        $affected += (int) $connection->executeStatement($sql, [$ulid, $hash]);
+                    }
+
+                    return $affected;
+                });
             }
 
             if ($tableRows > 0) {
@@ -796,6 +800,9 @@ final class MigrateSchemaCommand extends Command
      * conversion of a large table would cost (rows / BATCH_SIZE) × rows row reads.
      * No OFFSET is used and every run starts from the first unconverted row, so the operation is
      * safe to resume after an interruption.
+     * Each batch is written in one database transaction: in autocommit mode, each UPDATE would be committed
+     * (and its log flushed to disk) on its own, which dominates the duration of the conversion. A failing row
+     * rolls its whole batch back, and the next run converts it again.
      *
      * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
@@ -835,16 +842,22 @@ final class MigrateSchemaCommand extends Command
                 break;
             }
 
+            $updates = [];
             foreach ($rows as $row) {
-                $newDiffs = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
-                $connection->update(
-                    $tableName,
-                    ['diffs' => json_encode($newDiffs, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'schema_version' => 2],
-                    ['id' => $row['id']],
-                );
-                ++$converted;
-                $lastId = $row['id'];
+                $updates[] = [
+                    'id' => $row['id'],
+                    'diffs' => json_encode($this->convertLegacyDiffs($row, $jsonFields, $auditedEntity), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                ];
             }
+
+            $connection->transactional(static function (Connection $connection) use ($tableName, $updates): void {
+                foreach ($updates as $update) {
+                    $connection->update($tableName, ['diffs' => $update['diffs'], 'schema_version' => 2], ['id' => $update['id']]);
+                }
+            });
+
+            $converted += \count($updates);
+            $lastId = $updates[\count($updates) - 1]['id'];
 
             if (\count($rows) < $batchLimit) {
                 break;
