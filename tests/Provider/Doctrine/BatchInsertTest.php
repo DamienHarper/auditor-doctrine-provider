@@ -9,6 +9,7 @@ use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditInsertBuffer;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
+use DH\Auditor\Provider\Service\StorageServiceInterface;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -18,6 +19,7 @@ use DH\Auditor\User\User;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -190,6 +192,27 @@ final class BatchInsertTest extends TestCase
         sort($expected);
         sort($objectIds);
         $this->assertSame($expected, $objectIds);
+    }
+
+    /**
+     * The auditor ignores the exceptions thrown while an audit entry is persisted: a failure before the entry
+     * reaches the buffer must fail the commit, not lose the entry.
+     */
+    public function testAFailureBeforeTheAuditEntryIsBufferedFailsTheCommit(): void
+    {
+        $em = $this->entityManager();
+        $this->provider->registerStorageService(new StorageService('other', $em));
+        $this->provider->setStorageMapper(static function (): never {
+            throw new \RuntimeException('no storage');
+        });
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+
+        $this->assertFlushFailsWith('no storage');
+
+        $this->provider->setStorageMapper(static fn (string $entity, array $storageServices): StorageServiceInterface => $storageServices['default']);
+        $this->assertSame(0, (int) $this->storageConnection()->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame([], $this->auditedObjectIds(Author::class));
     }
 
     public function testPersistWithoutAnActiveBufferInsertsImmediately(): void
@@ -371,6 +394,29 @@ final class BatchInsertTest extends TestCase
         }
 
         return $snapshot;
+    }
+
+    /**
+     * Flushes the entity manager, expecting a failure caused by an exception with the given message.
+     */
+    private function assertFlushFailsWith(string $message): void
+    {
+        try {
+            $this->entityManager()->flush();
+        } catch (AssertionFailedError $assertionFailedError) {
+            throw $assertionFailedError;
+        } catch (\Throwable $throwable) {
+            $messages = [];
+            for ($cause = $throwable; $cause instanceof \Throwable; $cause = $cause->getPrevious()) {
+                $messages[] = $cause->getMessage();
+            }
+
+            $this->assertContains($message, $messages, 'The original failure must be reported.');
+
+            return;
+        }
+
+        $this->fail('The flush must fail.');
     }
 
     private function entityManager(): EntityManagerInterface

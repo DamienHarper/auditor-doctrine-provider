@@ -215,6 +215,27 @@ final class AuditInsertBufferTest extends TestCase
         $this->assertSame(['1', '5'], $this->objectIds('author_audit'));
     }
 
+    public function testFailDropsTheRowsAndKeepsTheFirstFailure(): void
+    {
+        $first = new \RuntimeException('first');
+        $buffer = new AuditInsertBuffer();
+        $buffer->add($this->connection, 'author_audit', $this->row('1'), 100);
+        $buffer->fail($first);
+        $buffer->fail(new \RuntimeException('second'));
+        $buffer->add($this->connection, 'author_audit', $this->row('2'), 100);
+
+        $this->assertCount(0, $buffer);
+
+        try {
+            $buffer->flush();
+            $this->fail('The flush must rethrow the first failure.');
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertSame($first, $runtimeException);
+        }
+
+        $this->assertSame([], $this->objectIds('author_audit'));
+    }
+
     public function testDiscardForgetsAFailingEarlyFlush(): void
     {
         $buffer = new AuditInsertBuffer();

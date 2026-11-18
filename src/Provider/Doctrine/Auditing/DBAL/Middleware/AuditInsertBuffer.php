@@ -102,9 +102,20 @@ final class AuditInsertBuffer implements \Countable
             try {
                 $this->write();
             } catch (\Throwable $throwable) {
-                $this->failure = $throwable;
+                $this->fail($throwable);
             }
         }
+    }
+
+    /**
+     * Memorises a failure to report by the next flush() (only the first one: it is the probable cause of the next
+     * ones) and drops the buffered rows: the commit is going to fail, they will never be written.
+     */
+    public function fail(\Throwable $throwable): void
+    {
+        $this->failure ??= $throwable;
+        $this->groups = [];
+        $this->count = 0;
     }
 
     /**

@@ -195,17 +195,24 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $entity = $payload['entity'];
         unset($payload['table'], $payload['entity']);
 
-        $storageService = $this->getStorageServiceForEntity($entity);
-        $connection = $storageService->getEntityManager()->getConnection();
-
         \assert($this->configuration instanceof Configuration);   // helps PHPStan
         $batchSize = $this->configuration->getBatchSize();
-        if ($batchSize > 0 && $this->activeBuffer instanceof AuditInsertBuffer) {
+        $buffer = $this->activeBuffer;
+        if ($batchSize > 0 && $buffer instanceof AuditInsertBuffer) {
             // written when the database transaction is committed: the id of the audit entry is not known yet
-            $this->activeBuffer->add($connection, $auditTable, $this->row($payload), $batchSize);
+            try {
+                $connection = $this->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+                $buffer->add($connection, $auditTable, $this->row($payload), $batchSize);
+            } catch (\Throwable $throwable) {
+                // the auditor ignores this exception: the buffer reports it when the transaction is committed
+                $buffer->fail($throwable);
+            }
 
             return;
         }
+
+        $storageService = $this->getStorageServiceForEntity($entity);
+        $connection = $storageService->getEntityManager()->getConnection();
 
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
 
@@ -389,7 +396,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $row = [];
         foreach (AuditInsertBuffer::COLUMNS as $column) {
             if (!\array_key_exists($column, $payload)) {
-                // cannot happen with a valid LifecycleEvent payload: guards against a column added to the audit table only
+                // LifecycleEvent requires every column it knows of: guards against a column it does not require yet
                 throw new \LogicException(\sprintf('The audit entry has no "%s" value.', $column));
             }
 
