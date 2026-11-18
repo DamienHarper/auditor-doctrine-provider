@@ -11,6 +11,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
+use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use PHPUnit\Framework\Attributes\Depends;
@@ -113,6 +114,58 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->assertStringContainsString('--dump-sql', $output);
     }
 
+    public function testConvertDiffsReusesLegacyInsertSource(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'insert', '90', [
+            '@source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'title' => ['new' => 'First post'],
+            'author_id' => ['new' => ['id' => 1, 'class' => Author::class, 'label' => 'John', 'table' => 'author']],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'First post', 'old' => null],
+                'author_id' => ['new' => ['id' => 1, 'class' => Author::class, 'label' => 'John', 'table' => 'author'], 'old' => null],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsFallsBackWhenLegacyInsertHasNoSource(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'insert', '7', [
+            'title' => ['new' => 'Untitled'],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '7', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'title' => ['new' => 'Untitled', 'old' => null],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyRemoveSummaryAsSource(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'remove', '90', [
+            'id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post',
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'changes' => [],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
     /**
      * Manipulates the first audit table to look like a v1 schema:
      * drops schema_version, adds transaction_hash (VARCHAR 40).
@@ -127,16 +180,22 @@ final class MigrateSchemaCommandTest extends TestCase
         ]);
     }
 
-    private function simulateLegacySchema(): void
+    /**
+     * @param ?string $tableName Audit table to downgrade (null = the first audit table found)
+     */
+    private function simulateLegacySchema(?string $tableName = null): void
     {
-        $storageService = array_values($this->provider->getStorageServices())[0];
-        $connection = $storageService->getEntityManager()->getConnection();
+        $connection = $this->auditConnection();
         $schemaManager = $connection->createSchemaManager();
         $schema = $schemaManager->introspectSchema();
 
         foreach ($schema->getTables() as $table) {
             $name = $table->getName();
             if (!str_ends_with((string) $name, '_audit')) {
+                continue;
+            }
+
+            if (null !== $tableName && $tableName !== (string) $name) {
                 continue;
             }
 
@@ -169,6 +228,60 @@ final class MigrateSchemaCommandTest extends TestCase
                 return; // Only do this for the first audit table
             }
         }
+    }
+
+    /**
+     * Inserts a row in the v1 format into a table downgraded by simulateLegacySchema().
+     *
+     * @param array<string, mixed> $diffs legacy diffs payload
+     */
+    private function insertLegacyRow(string $tableName, string $type, string $objectId, array $diffs): int
+    {
+        $connection = $this->auditConnection();
+        $connection->insert($tableName, [
+            'type' => $type,
+            'object_id' => $objectId,
+            'diffs' => json_encode($diffs, JSON_THROW_ON_ERROR),
+            'transaction_hash' => sha1($tableName.$type.$objectId),
+            'created_at' => '2024-01-01 00:00:00',
+        ]);
+
+        return (int) $connection->lastInsertId();
+    }
+
+    private function executeConvertDiffs(): void
+    {
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
+
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchConvertedDiffs(string $tableName, int $id): array
+    {
+        $row = $this->auditConnection()->fetchAssociative(
+            \sprintf('SELECT schema_version, diffs FROM %s WHERE id = ?', $tableName),
+            [$id],
+        );
+
+        $this->assertIsArray($row);
+        $this->assertSame(2, (int) $row['schema_version']);
+
+        $diffs = json_decode((string) $row['diffs'], true, 512, JSON_THROW_ON_ERROR);
+        $this->assertIsArray($diffs);
+
+        /** @var array<string, mixed> $diffs */
+        return $diffs;
+    }
+
+    private function auditConnection(): Connection
+    {
+        $storageService = array_values($this->provider->getStorageServices())[0];
+
+        return $storageService->getEntityManager()->getConnection();
     }
 
     private function createCommand(): MigrateSchemaCommand
