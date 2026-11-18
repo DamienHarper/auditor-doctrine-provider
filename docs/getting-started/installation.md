@@ -14,7 +14,7 @@
 | symfony/cache             | >= 8.0   |
 | symfony/lock              | >= 8.0   |
 | symfony/event-dispatcher  | >= 8.0   |
-| damienharper/auditor      | >= 4.0   |
+| damienharper/auditor      | >= 4.1   |
 
 ## 📦 Install via Composer
 
