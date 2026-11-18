@@ -306,6 +306,8 @@ class AuditBench
             'table_suffix'    => '_audit',
             'ignored_columns' => [],
             'entities'        => [],
+            // BENCH_BATCH_SIZE=500 measures the multi-row INSERT of audit entries
+            'batch_size'      => max(0, (int) (getenv('BENCH_BATCH_SIZE') ?: 0)),
         ]);
         $this->provider = new DoctrineProvider($providerConfig);
         $auditor->registerProvider($this->provider);
