@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute;
 
+use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DiffLabelEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
+use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\Retention\InvalidRetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\EntityManagerInterfaceTrait;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -45,7 +48,7 @@ final class AttributeLoaderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(3, $loaded);
+        $this->assertCount(4, $loaded);
     }
 
     public function testDiffLabelResolversAreLoaded(): void
@@ -86,5 +89,61 @@ final class AttributeLoaderTest extends TestCase
                 $this->assertSame([], $config['diff_label_resolvers'], $entityClass.' must have empty diff_label_resolvers');
             }
         }
+    }
+
+    public function testRetentionAttributesAreLoaded(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+        $attributeLoader = new AttributeLoader($entityManager);
+        $loaded = $attributeLoader->load();
+
+        $this->assertArrayHasKey(RetentionEntity::class, $loaded);
+        $this->assertSame('P7Y', $loaded[RetentionEntity::class]['max_age']);
+        $this->assertSame(1_000, $loaded[RetentionEntity::class]['max_entries']);
+    }
+
+    public function testEntitiesWithoutRetentionHaveNullValues(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+        $attributeLoader = new AttributeLoader($entityManager);
+        $loaded = $attributeLoader->load();
+
+        foreach ($loaded as $entityClass => $config) {
+            if (RetentionEntity::class !== $entityClass) {
+                $this->assertArrayHasKey('max_age', $config, $entityClass.' must have max_age key');
+                $this->assertArrayHasKey('max_entries', $config, $entityClass.' must have max_entries key');
+                $this->assertNull($config['max_age'], $entityClass.' must have null max_age');
+                $this->assertNull($config['max_entries'], $entityClass.' must have null max_entries');
+            }
+        }
+    }
+
+    public function testInvalidRetentionAttributeFailsWithTheEntityName(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../InvalidFixtures/Retention',
+            ],
+            'default'
+        );
+        $attributeLoader = new AttributeLoader($entityManager);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(\sprintf('Invalid #[Auditable] attribute on "%s": Invalid retention "maxEntries" value 0', InvalidRetentionEntity::class));
+
+        $attributeLoader->load();
     }
 }

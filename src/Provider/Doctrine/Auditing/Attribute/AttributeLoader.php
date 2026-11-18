@@ -8,6 +8,7 @@ use DH\Auditor\Attribute\Auditable;
 use DH\Auditor\Attribute\DiffLabel;
 use DH\Auditor\Attribute\Ignore;
 use DH\Auditor\Attribute\Security;
+use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute\AttributeLoaderTest;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\Entity;
@@ -55,7 +56,11 @@ final readonly class AttributeLoader
         // Check that we have an Auditable attribute (accepts both core and legacy Doctrine namespace)
         $attributes = $reflection->getAttributes(Auditable::class, \ReflectionAttribute::IS_INSTANCEOF);
         if ([] !== $attributes) {
-            $auditableAttribute = $attributes[0]->newInstance();
+            try {
+                $auditableAttribute = $attributes[0]->newInstance();
+            } catch (InvalidArgumentException $exception) {
+                throw new InvalidArgumentException(\sprintf('Invalid #[Auditable] attribute on "%s": %s', $metadata->getName(), $exception->getMessage()), 0, $exception);
+            }
         }
 
         if (!$auditableAttribute instanceof Auditable) {
@@ -81,6 +86,8 @@ final readonly class AttributeLoader
             'enabled' => $auditableAttribute->enabled,
             'roles' => $roles,
             'diff_label_resolvers' => $diffLabelResolvers,
+            'max_age' => $auditableAttribute->maxAge,
+            'max_entries' => $auditableAttribute->maxEntries,
         ];
     }
 

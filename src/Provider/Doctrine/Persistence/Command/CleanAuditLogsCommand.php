@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Auditor;
-use DH\Auditor\Provider\Doctrine\Configuration;
+use DH\Auditor\Exception\InvalidArgumentException;
+use DH\Auditor\Model\RetentionPolicy;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
-use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
-use DH\Auditor\Provider\Doctrine\Service\StorageService;
+use DH\Auditor\Provider\Doctrine\Persistence\Retention\RetentionPruner;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommandTest;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -31,8 +31,6 @@ final class CleanAuditLogsCommand extends Command
 {
     use LockableTrait;
 
-    private const string UNTIL_DATE_FORMAT = 'Y-m-d H:i:s';
-
     private Auditor $auditor;
 
     public function setAuditor(Auditor $auditor): self
@@ -50,8 +48,8 @@ final class CleanAuditLogsCommand extends Command
             ->addOption('dump-sql', null, InputOption::VALUE_NONE, 'Prints SQL related queries.')
             ->addOption('exclude', 'x', InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Entities to exclude from cleaning')
             ->addOption('include', 'i', InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Entities to include in cleaning')
-            ->addOption('date', 'd', InputOption::VALUE_REQUIRED, 'Specify a custom date to clean audits until (must be expressed as an ISO 8601 date, e.g. 2023-04-24).')
-            ->addArgument('keep', InputArgument::OPTIONAL, 'Audits retention period (must be expressed as an ISO 8601 date interval, e.g. P12M to keep the last 12 months or P7D to keep the last 7 days).', 'P12M')
+            ->addOption('date', 'd', InputOption::VALUE_REQUIRED, 'Specify a custom date to clean audits until (must be expressed as an ISO 8601 date, e.g. 2023-04-24). Entities with a "max_age" retention policy use their own cutoff instead.')
+            ->addArgument('keep', InputArgument::OPTIONAL, 'Audits retention period (must be expressed as an ISO 8601 date interval, e.g. P12M to keep the last 12 months or P7D to keep the last 7 days). Entities with a "max_age" retention policy use their own period instead.', 'P12M')
         ;
     }
 
@@ -65,6 +63,10 @@ final class CleanAuditLogsCommand extends Command
 
         $io = new SymfonyStyle($input, $output);
 
+        /** @var DoctrineProvider $provider */
+        $provider = $this->auditor->getProvider(DoctrineProvider::class);
+        $pruner = new RetentionPruner($provider);
+
         $keep = $input->getArgument('keep');
         $keep = (\is_array($keep) ? $keep[0] : $keep);
 
@@ -73,62 +75,60 @@ final class CleanAuditLogsCommand extends Command
         $until = null;
 
         if (null !== $date) {
-            // Use custom date if provided
+            // Use custom date if provided (interpreted in the timezone audit entries are written in)
             try {
-                $until = new \DateTimeImmutable($date);
+                $until = new \DateTimeImmutable($date, $pruner->getTimezone())->setTimezone($pruner->getTimezone());
             } catch (\Exception) {
                 $io->error(\sprintf('Invalid date format provided: %s', $date));
             }
         } else {
             // Fall back to default retention period
-            $until = $this->validateKeepArgument($keep, $io);
+            $until = $this->validateKeepArgument($keep, $pruner, $io);
         }
 
         if (!$until instanceof \DateTimeImmutable) {
-            return Command::SUCCESS;
+            $this->release();
+
+            return Command::FAILURE;
         }
-
-        /** @var DoctrineProvider $provider */
-        $provider = $this->auditor->getProvider(DoctrineProvider::class);
-        $schemaManager = new SchemaManager($provider);
-
-        /** @var StorageService[] $storageServices */
-        $storageServices = $provider->getStorageServices();
-
-        // auditable classes by storage entity manager
-        $count = 0;
 
         // Collect auditable classes from auditing storage managers
         $rawExcludeValues = $input->getOption('exclude') ?? [];
         $rawIncludeValues = $input->getOption('include') ?? [];
         $excludeEntities = \is_array($rawExcludeValues) ? $rawExcludeValues : [$rawExcludeValues];
         $includeEntities = \is_array($rawIncludeValues) ? $rawIncludeValues : [$rawIncludeValues];
-        $repository = $schemaManager->collectAuditableEntities();
-        $filteredRepository = [];
+        $entities = array_values(array_filter(
+            $pruner->getAuditableEntities(),
+            static fn (string $entity): bool => !\in_array($entity, $excludeEntities, true)
+                && ([] === $includeEntities || \in_array($entity, $includeEntities, true)),
+        ));
+        $count = \count($entities);
 
-        foreach ($repository as $name => $entityClasses) {
-            foreach ($entityClasses as $entityClass => $table) {
-                if (
-                    !\in_array($entityClass, $excludeEntities, true)
-                    && (
-                        [] === $includeEntities
-                        || \in_array($entityClass, $includeEntities, true)
-                    )
-                ) {
-                    $filteredRepository[$name][$entityClass] = $table;
-                }
-            }
+        // Per-entity retention policies are all validated before anything is deleted.
+        try {
+            $policies = $pruner->getPolicies($entities);
+        } catch (InvalidArgumentException $invalidArgumentException) {
+            $io->error(explode("\n", $invalidArgumentException->getMessage()));
+            $this->release();
+
+            return Command::FAILURE;
         }
 
-        $repository = $filteredRepository;
-
-        foreach ($repository as $entities) {
-            $count += \count($entities);
+        if ([] !== $policies) {
+            $io->writeln('Per-entity retention policies (they override the global cutoff for these entities):');
+            $io->table(
+                ['Entity', 'Max age', 'Max entries'],
+                array_map(
+                    static fn (string $entity, RetentionPolicy $policy): array => [$entity, $policy->maxAge ?? '-', $policy->maxEntries ?? '-'],
+                    array_keys($policies),
+                    $policies,
+                ),
+            );
         }
 
         $message = \sprintf(
             "You are about to clean audits created before <comment>%s</comment>: %d classes involved.\n Do you want to proceed?",
-            $until->format(self::UNTIL_DATE_FORMAT),
+            $until->format(RetentionPruner::DATE_FORMAT),
             $count
         );
 
@@ -137,9 +137,6 @@ final class CleanAuditLogsCommand extends Command
         $dumpSQL = (bool) $input->getOption('dump-sql');
 
         if ($confirm) {
-            /** @var Configuration $configuration */
-            $configuration = $provider->getConfiguration();
-
             $progressBar = new ProgressBar($output, $count);
             $progressBar->setBarWidth(70);
             $progressBar->setFormat("%message%\n".$progressBar->getFormatDefinition('debug'));
@@ -149,35 +146,12 @@ final class CleanAuditLogsCommand extends Command
 
             $queries = [];
 
-            /**
-             * @var string                $name
-             * @var array<string, string> $classes
-             */
-            foreach ($repository as $name => $classes) {
-                foreach (array_keys($classes) as $entity) {
-                    $connection = $storageServices[$name]->getEntityManager()->getConnection();
+            foreach ($entities as $entity) {
+                $statements = $pruner->pruneEntity($entity, $policies[$entity] ?? null, $until, $dryRun);
+                array_push($queries, ...$statements);
 
-                    /** @var string $auditTable */
-                    $auditTable = $schemaManager->resolveAuditTableName($entity, $configuration);
-
-                    $queryBuilder = $connection->createQueryBuilder();
-                    $queryBuilder
-                        ->delete($auditTable)
-                        ->where('created_at < :until')
-                        ->setParameter('until', $until->format(self::UNTIL_DATE_FORMAT))
-                    ;
-
-                    if ($dumpSQL) {
-                        $queries[] = str_replace(':until', "'".$until->format(self::UNTIL_DATE_FORMAT)."'", $queryBuilder->getSQL());
-                    }
-
-                    if (!$dryRun) {
-                        $queryBuilder->executeStatement();
-                    }
-
-                    $progressBar->setMessage(\sprintf('Cleaning audit tables... (<info>%s</info>)', $auditTable));
-                    $progressBar->advance();
-                }
+                $progressBar->setMessage(\sprintf('Cleaning audit tables... (<info>%s</info>)', $entity));
+                $progressBar->advance();
             }
 
             $progressBar->setMessage('Cleaning audit tables... (<info>done</info>)');
@@ -205,17 +179,16 @@ final class CleanAuditLogsCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function validateKeepArgument(string $keep, SymfonyStyle $io): ?\DateTimeImmutable
+    private function validateKeepArgument(string $keep, RetentionPruner $pruner, SymfonyStyle $io): ?\DateTimeImmutable
     {
         try {
             $dateInterval = new \DateInterval($keep);
         } catch (\Exception) {
             $io->error(\sprintf("'keep' argument must be a valid ISO 8601 date interval, '%s' given.", $keep));
-            $this->release();
 
             return null;
         }
 
-        return new \DateTimeImmutable()->sub($dateInterval);
+        return $pruner->now()->sub($dateInterval);
     }
 }
