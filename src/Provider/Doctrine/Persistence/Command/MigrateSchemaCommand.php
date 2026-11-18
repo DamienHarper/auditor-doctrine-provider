@@ -773,10 +773,12 @@ final class MigrateSchemaCommand extends Command
      * Converts a single legacy diffs value to the new {source, changes} envelope.
      *
      * Legacy formats per operation type:
-     *  INSERT: {'field': {'new': value}, ...}
-     *  UPDATE: {'@source': {id,class,label,table}, 'field': {'new': v, 'old': v}, ...}
+     *  INSERT: {'@source': {id,class,label,table}, 'field': {'new': value}, ...}
+     *  UPDATE: {'field': {'new': v, 'old': v}, ...} ('@source' was stripped before persisting)
      *  REMOVE: {'class': ..., 'id': ..., 'label': ..., 'table': ...}
      *  ASSOCIATE/DISSOCIATE: {'source': {...}, 'target': {...}, 'is_owning_side': bool, 'table': 'join_table'}
+     *
+     * '@source' is reused whenever present; otherwise a minimal source is built from the row.
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
      */
@@ -801,12 +803,8 @@ final class MigrateSchemaCommand extends Command
      */
     private function convertInsertDiffs(array $diffs, array $row): array
     {
-        $source = [
-            'id' => $row['object_id'],
-            'class' => $row['discriminator'] ?? '',
-            'label' => '',
-            'table' => '',
-        ];
+        $source = $this->extractLegacySource($diffs, $row);
+        unset($diffs['@source']);
 
         $changes = [];
         foreach ($diffs as $field => $diff) {
@@ -823,12 +821,7 @@ final class MigrateSchemaCommand extends Command
      */
     private function convertUpdateDiffs(array $diffs, array $row): array
     {
-        $source = $diffs['@source'] ?? [
-            'id' => $row['object_id'],
-            'class' => $row['discriminator'] ?? '',
-            'label' => '',
-            'table' => '',
-        ];
+        $source = $this->extractLegacySource($diffs, $row);
         unset($diffs['@source']);
 
         $changes = [];
@@ -852,6 +845,25 @@ final class MigrateSchemaCommand extends Command
         }
 
         return ['source' => $source, 'changes' => []];
+    }
+
+    /**
+     * Returns the legacy '@source' summary when present, otherwise a minimal source built from the row.
+     *
+     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     */
+    private function extractLegacySource(array $diffs, array $row): array
+    {
+        if (isset($diffs['@source']) && \is_array($diffs['@source']) && [] !== $diffs['@source']) {
+            return $diffs['@source'];
+        }
+
+        return [
+            'id' => $row['object_id'],
+            'class' => $row['discriminator'] ?? '',
+            'label' => '',
+            'table' => '',
+        ];
     }
 
     private function convertAssociateDiffs(array $diffs): array
