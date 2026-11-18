@@ -193,7 +193,8 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        // MySQL and PostgreSQL JSON columns do not keep the order of object keys.
+        $this->assertSame($this->sortKeys([
             'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'title' => ['new' => 'Second title', 'old' => 'First title'],
@@ -204,7 +205,7 @@ final class MigrateSchemaCommandTest extends TestCase
                 ],
             ],
             'deep_diffs' => ['settings'],
-        ], $this->fetchConvertedDiffs('post_audit', $id));
+        ]), $this->sortKeys($this->fetchConvertedDiffs('post_audit', $id)));
     }
 
     /**
@@ -419,6 +420,18 @@ final class MigrateSchemaCommandTest extends TestCase
 
         /** @var array<string, mixed> $diffs */
         return $diffs;
+    }
+
+    /**
+     * @param array<array-key, mixed> $array
+     *
+     * @return array<array-key, mixed>
+     */
+    private function sortKeys(array $array): array
+    {
+        ksort($array);
+
+        return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeys($value) : $value, $array);
     }
 
     private function auditConnection(): Connection
