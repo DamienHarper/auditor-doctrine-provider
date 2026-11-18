@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Auditing\Event;
 
 use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditorDriver;
+use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\Savepoint;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\AuditTrait;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
@@ -42,12 +43,20 @@ final class DoctrineSubscriber implements ResetInterface
     private array $pendingTransactions = [];
 
     /**
-     * Entries of the flushes run while the flusher of an entity manager writes the audit entries (e.g. from a listener
-     * of the audit events), written by that flusher once it is done with the previous ones. Set while the flusher runs.
+     * Entries of the flushes run inside an outer database transaction and confirmed by postFlush, with the savepoint
+     * current when they were confirmed: they are not written if the database transaction is rolled back to that
+     * savepoint, or to one of its parents, before it is committed.
      *
-     * @var array<int, list<Transaction>>
+     * @var array<int, list<array{Transaction, ?Savepoint}>>
      */
-    private array $followUpTransactions = [];
+    private array $confirmedTransactions = [];
+
+    /**
+     * Entity managers whose flusher is running.
+     *
+     * @var array<int, true>
+     */
+    private array $runningFlushers = [];
 
     /**
      * Audit tables stored on another connection than each entity manager's one, grouped by connection.
@@ -79,17 +88,17 @@ final class DoctrineSubscriber implements ResetInterface
         // A single flusher per database transaction processes everything populated until the commit.
         if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
             $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $entityManagerId, $driver): void {
-                $this->followUpTransactions[$entityManagerId] = [];
+                $this->runningFlushers[$entityManagerId] = true;
                 $hasEntries = false;
 
                 try {
                     // a listener of the audit events may flush again: its entries are written in the same pass
-                    for ($batch = $transaction; $batch instanceof Transaction; $batch = array_shift($this->followUpTransactions[$entityManagerId])) {
+                    for ($batch = $transaction; $batch instanceof Transaction; $batch = $this->nextConfirmedTransaction($entityManagerId)) {
                         $hasEntries = $hasEntries || !$this->isEmpty($batch);
                         $this->provider->getTransactionManager()->process($batch);
                     }
                 } finally {
-                    unset($this->followUpTransactions[$entityManagerId], $this->flushers[$entityManagerId]);
+                    unset($this->runningFlushers[$entityManagerId], $this->confirmedTransactions[$entityManagerId], $this->flushers[$entityManagerId]);
                     if ($hasEntries) {
                         $this->addRollbackHandler($driver, $entityManager, $transaction->getTransactionHash());
                     }
@@ -103,8 +112,8 @@ final class DoctrineSubscriber implements ResetInterface
 
     /**
      * It is called at the end of a successful EntityManager#flush(): the entries of a flush run inside an outer
-     * database transaction join the ones that will be written when that transaction is committed, or the ones the
-     * running flusher of the entity manager writes next.
+     * database transaction join the ones that will be written when that transaction is committed (or by the running
+     * flusher of the entity manager), unless the transaction is rolled back to a savepoint created before the flush.
      *
      * @see https://www.doctrine-project.org/projects/doctrine-orm/en/latest/reference/events.html#postflush
      */
@@ -119,12 +128,9 @@ final class DoctrineSubscriber implements ResetInterface
         [$pending] = $this->pendingTransactions[$entityManagerId];
         unset($this->pendingTransactions[$entityManagerId]);
 
-        $transaction = $this->transaction($entityManager, $this->auditorDriver($entityManager));
-        if (isset($this->followUpTransactions[$entityManagerId])) {
-            $followUp = new Transaction($entityManager, $transaction->getTransactionHash());
-            $this->followUpTransactions[$entityManagerId][] = $followUp;
-            $transaction = $followUp;
-        }
+        $driver = $this->auditorDriver($entityManager);
+        $transaction = new Transaction($entityManager, $this->transaction($entityManager, $driver)->getTransactionHash());
+        $this->confirmedTransactions[$entityManagerId][] = [$transaction, $driver?->getCurrentSavepoint()];
 
         foreach ($pending->getInserted() as $dto) {
             $transaction->insert($dto->source, $dto->getChangeset());
@@ -173,7 +179,8 @@ final class DoctrineSubscriber implements ResetInterface
         $this->transactions = [];
         $this->flushers = [];
         $this->pendingTransactions = [];
-        $this->followUpTransactions = [];
+        $this->confirmedTransactions = [];
+        $this->runningFlushers = [];
         $this->remoteAuditTables = [];
     }
 
@@ -231,10 +238,10 @@ final class DoctrineSubscriber implements ResetInterface
 
         $flusher = $this->flushers[$entityManagerId] ?? null;
         if ($flusher instanceof \Closure
-            && !isset($this->followUpTransactions[$entityManagerId])
+            && !isset($this->runningFlushers[$entityManagerId])
             && !\in_array($flusher, $driver?->getFlusherList() ?? [], true)
         ) {
-            unset($this->flushers[$entityManagerId]);
+            unset($this->flushers[$entityManagerId], $this->confirmedTransactions[$entityManagerId]);
             $transaction->reset();
         }
 
@@ -290,6 +297,22 @@ final class DoctrineSubscriber implements ResetInterface
                 }
             }
         });
+    }
+
+    /**
+     * Returns the next entries confirmed by postFlush whose changes were not rolled back to a savepoint.
+     */
+    private function nextConfirmedTransaction(int $entityManagerId): ?Transaction
+    {
+        while ([] !== ($this->confirmedTransactions[$entityManagerId] ?? [])) {
+            $confirmed = array_shift($this->confirmedTransactions[$entityManagerId]);
+            [$transaction, $savepoint] = $confirmed;
+            if (!$savepoint instanceof Savepoint || !$savepoint->isRolledBack()) {
+                return $transaction;
+            }
+        }
+
+        return null;
     }
 
     private function isEmpty(Transaction $transaction): bool
