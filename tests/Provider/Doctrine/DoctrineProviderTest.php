@@ -29,6 +29,8 @@ use DH\Auditor\User\UserProviderInterface;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
@@ -53,6 +55,16 @@ final class DoctrineProviderTest extends TestCase
 
         $this->expectException(ProviderException::class);
         $provider->registerAuditingService(new AuditingService('auditingEM_1', $this->createEntityManager()));
+    }
+
+    public function testTheLoggerDiscardsTheRecordsUntilOneIsSet(): void
+    {
+        $provider = new DoctrineProvider($this->createProviderConfiguration());
+        $this->assertInstanceOf(NullLogger::class, $provider->getLogger());
+
+        $logger = $this->createStub(LoggerInterface::class);
+        $provider->setLogger($logger);
+        $this->assertSame($logger, $provider->getLogger());
     }
 
     public function testRegisterStorageEntityManager(): void

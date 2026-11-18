@@ -286,13 +286,20 @@ final class DoctrineSubscriber implements ResetInterface
             return;
         }
 
-        $driver->addRollbackHandler(static function () use ($remoteAuditTables, $transactionId): void {
+        $logger = $this->provider->getLogger();
+        $driver->addRollbackHandler(static function () use ($remoteAuditTables, $transactionId, $logger): void {
             foreach ($remoteAuditTables as [$connection, $auditTables]) {
                 foreach ($auditTables as $auditTable) {
                     try {
                         $connection->executeStatement(\sprintf('DELETE FROM %s WHERE transaction_id = ?', $auditTable), [$transactionId]);
-                    } catch (\Throwable) {
-                        // best effort: the other audit tables are still cleaned up
+                    } catch (\Throwable $throwable) {
+                        // The rollback is being reported: the failure is logged, not thrown, and the other audit
+                        // tables are still cleaned up. The transaction id identifies the entries left behind.
+                        $logger->error('The audit entries of the rolled-back transaction {transaction_id} could not be deleted from {table}.', [
+                            'transaction_id' => $transactionId,
+                            'table' => $auditTable,
+                            'exception' => $throwable,
+                        ]);
                     }
                 }
             }
