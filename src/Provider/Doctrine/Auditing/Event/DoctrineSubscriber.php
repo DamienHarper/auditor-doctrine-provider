@@ -42,6 +42,14 @@ final class DoctrineSubscriber implements ResetInterface
     private array $pendingTransactions = [];
 
     /**
+     * Entries of the flushes run while the flusher of an entity manager writes the audit entries (e.g. from a listener
+     * of the audit events), written by that flusher once it is done with the previous ones. Set while the flusher runs.
+     *
+     * @var array<int, list<Transaction>>
+     */
+    private array $followUpTransactions = [];
+
+    /**
      * Audit tables stored on another connection than each entity manager's one, grouped by connection.
      *
      * @var array<int, list<array{Connection, list<string>}>>
@@ -70,11 +78,22 @@ final class DoctrineSubscriber implements ResetInterface
 
         // A single flusher per database transaction processes everything populated until the commit.
         if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
-            $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $driver): void {
+            $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $entityManagerId, $driver): void {
+                $this->followUpTransactions[$entityManagerId] = [];
+                $hasEntries = false;
+
                 try {
-                    $this->provider->getTransactionManager()->process($transaction);
+                    // a listener of the audit events may flush again: its entries are written in the same pass
+                    for ($batch = $transaction; $batch instanceof Transaction; $batch = array_shift($this->followUpTransactions[$entityManagerId])) {
+                        $hasEntries = $hasEntries || !$this->isEmpty($batch);
+                        $this->provider->getTransactionManager()->process($batch);
+                    }
                 } finally {
-                    $this->addRollbackHandler($driver, $entityManager, $transaction);
+                    unset($this->followUpTransactions[$entityManagerId], $this->flushers[$entityManagerId]);
+                    if ($hasEntries) {
+                        $this->addRollbackHandler($driver, $entityManager, $transaction->getTransactionId());
+                    }
+
                     $transaction->reset();
                 }
             };
@@ -84,7 +103,8 @@ final class DoctrineSubscriber implements ResetInterface
 
     /**
      * It is called at the end of a successful EntityManager#flush(): the entries of a flush run inside an outer
-     * database transaction join the ones that will be written when that transaction is committed.
+     * database transaction join the ones that will be written when that transaction is committed, or the ones the
+     * running flusher of the entity manager writes next.
      *
      * @see https://www.doctrine-project.org/projects/doctrine-orm/en/latest/reference/events.html#postflush
      */
@@ -100,6 +120,12 @@ final class DoctrineSubscriber implements ResetInterface
         unset($this->pendingTransactions[$entityManagerId]);
 
         $transaction = $this->transaction($entityManager, $this->auditorDriver($entityManager));
+        if (isset($this->followUpTransactions[$entityManagerId])) {
+            $followUp = new Transaction($entityManager, $transaction->getTransactionId());
+            $this->followUpTransactions[$entityManagerId][] = $followUp;
+            $transaction = $followUp;
+        }
+
         foreach ($pending->getInserted() as $dto) {
             $transaction->insert($dto->source, $dto->getChangeset());
         }
@@ -147,6 +173,7 @@ final class DoctrineSubscriber implements ResetInterface
         $this->transactions = [];
         $this->flushers = [];
         $this->pendingTransactions = [];
+        $this->followUpTransactions = [];
         $this->remoteAuditTables = [];
     }
 
@@ -193,9 +220,9 @@ final class DoctrineSubscriber implements ResetInterface
     /**
      * Returns the cached transaction model of the entity manager (one per entity manager).
      *
-     * Once the entity manager's flusher has left the driver's list, it either ran or was dropped because
-     * its database transaction was rolled back or failed to commit: in both cases, the entries left in the
-     * transaction model must not be written with the next commit.
+     * A flusher that ran forgets itself. One that left the driver's list without running was dropped because its
+     * database transaction was rolled back or failed to commit: the entries left in the transaction model must not
+     * be written with the next commit. A running flusher has left the list too.
      */
     private function transaction(EntityManagerInterface $entityManager, ?AuditorDriver $driver): Transaction
     {
@@ -203,7 +230,10 @@ final class DoctrineSubscriber implements ResetInterface
         $transaction = ($this->transactions[$entityManagerId] ??= new Transaction($entityManager));
 
         $flusher = $this->flushers[$entityManagerId] ?? null;
-        if ($flusher instanceof \Closure && !\in_array($flusher, $driver?->getFlusherList() ?? [], true)) {
+        if ($flusher instanceof \Closure
+            && !isset($this->followUpTransactions[$entityManagerId])
+            && !\in_array($flusher, $driver?->getFlusherList() ?? [], true)
+        ) {
             unset($this->flushers[$entityManagerId]);
             $transaction->reset();
         }
@@ -242,23 +272,13 @@ final class DoctrineSubscriber implements ResetInterface
      * Audit entries stored on another connection are written outside of the audited database transaction: they
      * are deleted if that transaction turns out to be rolled back after they were written.
      */
-    private function addRollbackHandler(AuditorDriver $driver, EntityManagerInterface $entityManager, Transaction $transaction): void
+    private function addRollbackHandler(AuditorDriver $driver, EntityManagerInterface $entityManager, string $transactionId): void
     {
-        if ([] === $transaction->getInserted()
-            && [] === $transaction->getUpdated()
-            && [] === $transaction->getRemoved()
-            && [] === $transaction->getAssociated()
-            && [] === $transaction->getDissociated()
-        ) {
-            return;
-        }
-
         $remoteAuditTables = $this->remoteAuditTables($entityManager);
         if ([] === $remoteAuditTables) {
             return;
         }
 
-        $transactionId = $transaction->getTransactionId();
         $driver->addRollbackHandler(static function () use ($remoteAuditTables, $transactionId): void {
             foreach ($remoteAuditTables as [$connection, $auditTables]) {
                 foreach ($auditTables as $auditTable) {
@@ -270,6 +290,15 @@ final class DoctrineSubscriber implements ResetInterface
                 }
             }
         });
+    }
+
+    private function isEmpty(Transaction $transaction): bool
+    {
+        return [] === $transaction->getInserted()
+            && [] === $transaction->getUpdated()
+            && [] === $transaction->getRemoved()
+            && [] === $transaction->getAssociated()
+            && [] === $transaction->getDissociated();
     }
 
     /**

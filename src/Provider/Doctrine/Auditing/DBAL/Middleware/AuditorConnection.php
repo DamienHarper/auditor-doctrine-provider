@@ -28,11 +28,14 @@ final class AuditorConnection extends AbstractConnectionMiddleware
     #[\Override]
     public function commit(): void
     {
-        $flusherList = $this->auditorDriver->getFlusherList();
-
         try {
-            foreach ($flusherList as $flusher) {
-                ($flusher)();
+            // A flusher may register another one, e.g. when a listener of the audit events flushes another entity
+            // manager sharing this connection: it runs in the same pass, before the COMMIT.
+            while ([] !== ($flusherList = $this->auditorDriver->getFlusherList())) {
+                $this->auditorDriver->resetFlusherList();
+                foreach ($flusherList as $flusher) {
+                    ($flusher)();
+                }
             }
         } catch (\Throwable $throwable) {
             // DBAL counts the transaction as finished even though commit() threw, so nobody calls
@@ -51,8 +54,6 @@ final class AuditorConnection extends AbstractConnectionMiddleware
 
             throw $throwable;
         }
-
-        $this->auditorDriver->resetFlusherList();
 
         try {
             parent::commit();
