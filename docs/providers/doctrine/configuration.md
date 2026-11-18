@@ -19,6 +19,7 @@ $configuration = new Configuration([
     'viewer'          => true,
     'storage_mapper'  => null,
     'utf8_convert'    => false,
+    'compression'     => false,
 ]);
 ```
 
@@ -33,6 +34,7 @@ $configuration = new Configuration([
 | `viewer`         | `bool\|array`     | `true`     | Enable/configure the audit viewer                |
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
+| `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
 
 ## 📛 Table Naming
 
@@ -158,6 +160,41 @@ $configuration = new Configuration([
 ]);
 ```
 
+## 🗜️ Compression
+
+On MySQL and MariaDB, audit tables can become the largest tables of a database: almost all of their size is the
+`diffs` column (and `extra_data` when used). The `compression` option stores these two columns compressed:
+
+```php
+$configuration = new Configuration([
+    'compression' => true,
+]);
+```
+
+| Platform   | Effect                                                                                       |
+|------------|----------------------------------------------------------------------------------------------|
+| MariaDB    | `diffs` and `extra_data` are declared `JSON COMPRESSED` (transparent column compression)      |
+| PostgreSQL | None: large `JSONB` values are already compressed by PostgreSQL (TOAST)                      |
+| MySQL      | None: MySQL has no column compression (see [Schema Management](schema.md#mysql--mariadb))     |
+| SQLite     | None                                                                                          |
+
+MariaDB compresses and decompresses the values transparently: reading audit entries, `JsonFilter` and JSON functions in
+SQL work unchanged. Values shorter than `column_compression_threshold` (100 bytes by default) are stored as is.
+
+New audit tables are created with compressed columns. Existing audit tables are converted by
+`audit:schema:update --force` (or by a migration containing the SQL shown by `audit:schema:update --dump-sql`):
+altering the columns rewrites the table and compresses existing entries. Disabling the option and running
+`audit:schema:update` again converts the columns back, without losing data.
+
+> [!NOTE]
+> The schema comparator of Doctrine DBAL does not see the `COMPRESSED` attribute, so `doctrine:schema:update` and
+> `doctrine:migrations:diff` neither report nor change the compression of existing audit tables: use
+> `audit:schema:update` for that. Conversely, they never report a difference for compressed columns.
+
+> [!WARNING]
+> Converting existing tables rewrites them (`ALTER TABLE ... MODIFY`), which takes time and locks writes to the audit
+> table on large tables. Plan it like any other large schema migration.
+
 ## 🗄️ Storage Mapper
 
 When using multiple storage EntityManagers, the storage mapper determines where to store audits for each entity.
@@ -275,6 +312,8 @@ $configuration = new Configuration([
     ],
 
     'storage_mapper' => null,  // Single database, no mapper needed
+
+    'compression' => true,     // MariaDB only, ignored on other platforms
 ]);
 ```
 

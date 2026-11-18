@@ -31,6 +31,7 @@ use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Depends;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -280,6 +281,32 @@ final class SchemaManagerTest extends TestCase
                 $this->assertTrue($authorAuditTable->hasIndex($options['name']), 'audit table has an index named "'.$name.'".');
             }
         }
+    }
+
+    /**
+     * Audit tables built by the ORM schema tool with the mutable schema API (doctrine:schema:update,
+     * doctrine:migrations:diff) and by audit:schema:update with the schema editor API must be identical:
+     * otherwise both commands keep altering the same columns back and forth (e.g. transaction_id CHAR/VARCHAR).
+     */
+    #[IgnoreDeprecations]
+    public function testAuditTablesBuiltWithBothSchemaApisAreIdentical(): void
+    {
+        $this->doConfigureEntities();
+        $updater = new SchemaManager($this->provider);
+        $connection = $this->provider->getStorageServiceForEntity(Author::class)->getEntityManager()->getConnection();
+
+        $mutableSchema = new Schema();
+        $updater->addAuditTableToSchema(Author::class, $mutableSchema);
+        $legacyTable = $mutableSchema->getTable('author_audit');
+
+        $editorTable = $updater->createAuditTable(Author::class, new Schema())->getTable('author_audit');
+
+        $this->assertTrue($legacyTable->getColumn('transaction_id')->getFixed(), 'transaction_id is a fixed length column.');
+        $this->assertTrue($editorTable->getColumn('transaction_id')->getFixed(), 'transaction_id is a fixed length column.');
+        $this->assertTrue(
+            $connection->createSchemaManager()->createComparator()->compareTables($legacyTable, $editorTable)->isEmpty(),
+            'Both schema APIs build the same audit table.'
+        );
     }
 
     #[DataProvider('provideComputeAuditTableNameCases')]

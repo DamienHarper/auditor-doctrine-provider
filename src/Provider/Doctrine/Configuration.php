@@ -39,6 +39,8 @@ final class Configuration implements ConfigurationInterface
 
     private readonly bool $fullSnapshotOnRemove;
 
+    private readonly bool $compression;
+
     private bool $initialized = false;
 
     /**
@@ -69,6 +71,7 @@ final class Configuration implements ConfigurationInterface
         $this->viewerPageSize = self::getViewerPageSizeFromConfig($config['viewer']);
         $this->utf8Convert = $config['utf8_convert'];
         $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
+        $this->compression = $config['compression'];
         $this->storageMapper = $config['storage_mapper'];
     }
 
@@ -177,6 +180,18 @@ final class Configuration implements ConfigurationInterface
     public function isFullSnapshotOnRemoveEnabled(): bool
     {
         return $this->fullSnapshotOnRemove;
+    }
+
+    /**
+     * Whether the large JSON columns of audit tables (diffs, extra_data) are stored compressed.
+     *
+     * Only effective on MariaDB, where these columns are declared with the COMPRESSED attribute
+     * (transparent column compression). Ignored on other platforms: PostgreSQL already compresses
+     * large JSONB values (TOAST), MySQL and SQLite have no column-level compression.
+     */
+    public function isCompressionEnabled(): bool
+    {
+        return $this->compression;
     }
 
     /**
@@ -353,6 +368,7 @@ final class Configuration implements ConfigurationInterface
                 'storage_mapper' => null,
                 'utf8_convert' => false,
                 'full_snapshot_on_remove' => false,
+                'compression' => false,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -364,6 +380,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('storage_mapper', ['null', 'string', 'callable'])
             ->setAllowedTypes('utf8_convert', 'bool')
             ->setAllowedTypes('full_snapshot_on_remove', 'bool')
+            ->setAllowedTypes('compression', 'bool')
         ;
     }
 }

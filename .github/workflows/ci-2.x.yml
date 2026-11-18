@@ -54,6 +54,19 @@ jobs:
           --health-timeout=5s
           --health-retries=3
 
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: auditor
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
       postgres:
         image: postgres:15
         env:
@@ -76,6 +89,7 @@ jobs:
         db:
           - 'sqlite'
           - 'mysql'
+          - 'mariadb'
           - 'pgsql'
       fail-fast: false
 
@@ -86,6 +100,8 @@ jobs:
             echo "DATABASE_URL=sqlite:///:memory:" >> $GITHUB_ENV
           elif [ "${{ matrix.db }}" = "mysql" ]; then
             echo "DATABASE_URL=mysql://root:password@127.0.0.1/auditor?serverVersion=8&charset=utf8mb4" >> $GITHUB_ENV
+          elif [ "${{ matrix.db }}" = "mariadb" ]; then
+            echo "DATABASE_URL=mysql://root:password@127.0.0.1:3307/auditor?serverVersion=11.8.2-MariaDB&charset=utf8mb4" >> $GITHUB_ENV
           elif [ "${{ matrix.db }}" = "pgsql" ]; then
             echo "DATABASE_URL=pgsql://postgres:password@localhost/auditor?serverVersion=15&charset=utf8" >> $GITHUB_ENV
           fi

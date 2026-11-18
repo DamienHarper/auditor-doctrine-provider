@@ -16,6 +16,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Schema\SchemaManagerTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Schema\Column;
+use Doctrine\DBAL\Schema\ColumnDiff;
 use Doctrine\DBAL\Schema\ComparatorConfig;
 use Doctrine\DBAL\Schema\Index;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
@@ -25,6 +26,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaConfig;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
+use Doctrine\DBAL\Schema\TableDiff;
 use Doctrine\DBAL\Schema\TableEditor;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
@@ -176,6 +178,11 @@ final readonly class SchemaManager
             $schemaConfig = $storageSchemaManager->createSchemaConfig();
             $comparator = $storageSchemaManager->createComparator(new ComparatorConfig()->withReportModifiedIndexes(false));
 
+            $isCompressionEnabled = $this->isCompressionEnabled($connection);
+
+            /** @var array<string, array<string, array<string, true>>> $compressedColumns compressed columns by table, by schema */
+            $compressedColumns = [];
+
             $createdNamespaces = [];
             $createdTables = [];
             $alterSqls = [];
@@ -204,6 +211,24 @@ final readonly class SchemaManager
                     $tableDiff = $comparator->compareTables($currentTable, $expectedTable);
                     if (!$tableDiff->isEmpty()) {
                         array_push($alterSqls, ...$platform->getAlterTableSQL($tableDiff));
+                    }
+
+                    if (PlatformHelper::supportsColumnCompression($connection)) {
+                        // DBAL does not introspect the COMPRESSED attribute: read it from information_schema, once per schema
+                        $tableName = $currentTable->getObjectName();
+                        $schemaName = $tableName->getQualifier()?->getValue() ?? (string) $connection->getDatabase();
+                        $compressedColumns[$schemaName] ??= $this->getCompressedColumns($connection, $schemaName);
+
+                        $sql = $this->getColumnCompressionSql(
+                            $connection,
+                            $expectedTable,
+                            $tableDiff,
+                            $isCompressionEnabled,
+                            $compressedColumns[$schemaName][mb_strtolower($tableName->getUnqualifiedName()->getValue())] ?? [],
+                        );
+                        if (null !== $sql) {
+                            $alterSqls[] = $sql;
+                        }
                     }
                 } else {
                     // Audit table does not exist, let's create it
@@ -405,6 +430,102 @@ final readonly class SchemaManager
     }
 
     /**
+     * Whether the compressible columns of audit tables stored through the given connection are compressed.
+     */
+    private function isCompressionEnabled(Connection $connection): bool
+    {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+
+        return $configuration->isCompressionEnabled() && PlatformHelper::supportsColumnCompression($connection);
+    }
+
+    /**
+     * Returns the column declared as compressed if it is a compressible column and compression is enabled,
+     * the column itself otherwise.
+     *
+     * The DBAL schema comparator ignores column definitions and does not introspect the COMPRESSED attribute:
+     * declaring it does not make schema diffs (doctrine:schema:update, doctrine:migrations:diff,
+     * audit:schema:update) unstable. The compression of existing columns is handled by getColumnCompressionSql().
+     */
+    private function compressColumn(Column $column, Connection $connection, bool $isCompressionEnabled): Column
+    {
+        if (!$isCompressionEnabled || !\in_array($column->getObjectName()->getIdentifier()->getValue(), SchemaHelper::getCompressibleColumns(), true)) {
+            return $column;
+        }
+
+        return $column->edit()
+            ->setColumnDefinition(SchemaHelper::getCompressibleColumnDeclarationSQL($column, $connection, true))
+            ->create()
+        ;
+    }
+
+    /**
+     * Returns the statement that compresses (or decompresses) the compressible columns of an existing audit
+     * table whose compression does not match the configuration, if any.
+     *
+     * DBAL does not introspect the COMPRESSED attribute (columns are compared by data type), so the actual
+     * compression of columns is read from information_schema. Columns already altered by the table diff are
+     * skipped: their new declaration already reflects the configuration. Altering a column rewrites the table,
+     * which (de)compresses existing rows.
+     *
+     * @param array<string, true> $compressedColumns currently compressed columns of the table (lowercased names)
+     */
+    private function getColumnCompressionSql(Connection $connection, Table $expectedTable, TableDiff $tableDiff, bool $isCompressionEnabled, array $compressedColumns): ?string
+    {
+        $platform = $connection->getDatabasePlatform();
+
+        $alteredColumns = array_map(
+            static fn (Column $column): string => mb_strtolower($column->getObjectName()->getIdentifier()->getValue()),
+            [
+                ...$tableDiff->getAddedColumns(),
+                ...array_map(static fn (ColumnDiff $diff): Column => $diff->getNewColumn(), $tableDiff->getChangedColumns()),
+            ],
+        );
+
+        $modifications = [];
+        foreach (SchemaHelper::getCompressibleColumns() as $columnName) {
+            if (!$expectedTable->hasColumn($columnName) || \in_array($columnName, $alteredColumns, true)) {
+                continue;
+            }
+
+            if ($isCompressionEnabled === isset($compressedColumns[$columnName])) {
+                continue;
+            }
+
+            $column = $expectedTable->getColumn($columnName);
+            $modifications[] = 'MODIFY '.$column->getObjectName()->toSQL($platform).' '
+                .SchemaHelper::getCompressibleColumnDeclarationSQL($column, $connection, $isCompressionEnabled);
+        }
+
+        if ([] === $modifications) {
+            return null;
+        }
+
+        return 'ALTER TABLE '.$expectedTable->getObjectName()->toSQL($platform).' '.implode(', ', $modifications);
+    }
+
+    /**
+     * Returns the compressed columns of the tables of a schema (MariaDB only).
+     *
+     * @return array<string, array<string, true>> lowercased column names, by lowercased table name
+     */
+    private function getCompressedColumns(Connection $connection, string $schemaName): array
+    {
+        $rows = $connection->fetchAllNumeric(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND COLUMN_TYPE LIKE '%COMPRESSED%'",
+            [$schemaName],
+        );
+
+        $compressed = [];
+        foreach ($rows as [$table, $column]) {
+            $compressed[mb_strtolower((string) $table)][mb_strtolower((string) $column)] = true;
+        }
+
+        return $compressed;
+    }
+
+    /**
      * Returns the type of an audit table column: JSON columns fall back to TEXT when the platform does not
      * support JSON.
      */
@@ -433,8 +554,13 @@ final readonly class SchemaManager
         ;
 
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+        $isCompressionEnabled = $this->isCompressionEnabled($connection);
         foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
-            $editor->addColumn(SchemaHelper::buildColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']));
+            $editor->addColumn($this->compressColumn(
+                SchemaHelper::buildColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']),
+                $connection,
+                $isCompressionEnabled,
+            ));
         }
 
         $this->addAuditTableIndices($editor, null, SchemaHelper::getAuditTableIndices($auditTablename), $connection);
@@ -455,6 +581,7 @@ final readonly class SchemaManager
     {
         $editor = $table->edit();
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+        $isCompressionEnabled = $this->isCompressionEnabled($connection);
 
         $processed = [];
         foreach ($table->getColumns() as $column) {
@@ -464,12 +591,12 @@ final readonly class SchemaManager
             // column is part of expected columns: re-add it with its expected definition,
             // otherwise it has to be removed
             if (\array_key_exists($columnName, $expectedColumns)) {
-                $editor->addColumn(SchemaHelper::buildColumn(
+                $editor->addColumn($this->compressColumn(SchemaHelper::buildColumn(
                     $columnName,
                     $this->resolveColumnType($expectedColumns[$columnName]['type'], $isJsonSupported),
                     $expectedColumns[$columnName]['options'],
                     $column,
-                ));
+                ), $connection, $isCompressionEnabled));
             }
 
             $processed[] = $columnName;
@@ -477,7 +604,11 @@ final readonly class SchemaManager
 
         foreach ($expectedColumns as $columnName => $struct) {
             if (!\in_array($columnName, $processed, true)) {
-                $editor->addColumn(SchemaHelper::buildColumn($columnName, $struct['type'], $struct['options']));
+                $editor->addColumn($this->compressColumn(
+                    SchemaHelper::buildColumn($columnName, $struct['type'], $struct['options']),
+                    $connection,
+                    $isCompressionEnabled,
+                ));
             }
         }
 
@@ -550,9 +681,17 @@ final readonly class SchemaManager
     {
         // Add columns to audit table
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
+        $isCompressionEnabled = $this->isCompressionEnabled($connection);
         foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
+            $type = $this->resolveColumnType($struct['type'], $isJsonSupported);
+            $options = $struct['options'];
+            $columnDefinition = $this->compressColumn(SchemaHelper::buildColumn($columnName, $type, $options), $connection, $isCompressionEnabled)->getColumnDefinition();
+            if (null !== $columnDefinition) {
+                $options['columnDefinition'] = $columnDefinition;
+            }
+
             // @phpstan-ignore method.deprecated (mutable schema of an ORM not using the schema editor API)
-            $auditTable->addColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']);
+            $auditTable->addColumn($columnName, $type, $options);
         }
 
         // Add indices to audit table
