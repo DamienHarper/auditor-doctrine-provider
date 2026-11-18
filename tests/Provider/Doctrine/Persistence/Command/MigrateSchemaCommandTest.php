@@ -125,7 +125,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'First post', 'old' => null],
@@ -143,10 +143,63 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '7', 'class' => '', 'label' => '', 'table' => ''],
             'changes' => [
                 'title' => ['new' => 'Untitled', 'old' => null],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyInsertJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'insert', '90', [
+            '@source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'title' => ['new' => 'First post'],
+            'settings' => [
+                'theme' => ['new' => 'dark'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'First post', 'old' => null],
+                'settings' => [
+                    'theme' => ['new' => 'dark'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyUpdateJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'update', '90', [
+            'title' => ['new' => 'Second title', 'old' => 'First title'],
+            'settings' => [
+                'theme' => ['new' => 'dark', 'old' => 'light'],
+                'lang' => ['old' => 'fr'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'title' => ['new' => 'Second title', 'old' => 'First title'],
+                'settings' => [
+                    'theme' => ['new' => 'dark', 'old' => 'light'],
+                    'lang' => ['old' => 'fr'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
             ],
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
@@ -160,7 +213,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [],
         ], $this->fetchConvertedDiffs('post_audit', $id));
@@ -275,6 +328,30 @@ final class MigrateSchemaCommandTest extends TestCase
 
         /** @var array<string, mixed> $diffs */
         return $diffs;
+    }
+
+    /**
+     * Compares converted diffs regardless of key order: JSON columns on MySQL and PostgreSQL (jsonb)
+     * do not preserve the order of object keys.
+     *
+     * @param array<array-key, mixed> $expected
+     * @param array<array-key, mixed> $actual
+     */
+    private function assertSameDiffs(array $expected, array $actual): void
+    {
+        $this->assertSame($this->sortKeysRecursively($expected), $this->sortKeysRecursively($actual));
+    }
+
+    /**
+     * @param array<array-key, mixed> $array
+     *
+     * @return array<array-key, mixed>
+     */
+    private function sortKeysRecursively(array $array): array
+    {
+        ksort($array);
+
+        return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeysRecursively($value) : $value, $array);
     }
 
     private function auditConnection(): Connection

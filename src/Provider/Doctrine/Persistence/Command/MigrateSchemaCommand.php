@@ -775,6 +775,7 @@ final class MigrateSchemaCommand extends Command
      * Legacy formats per operation type:
      *  INSERT: {'@source': {id,class,label,table}, 'field': {'new': value}, ...}
      *  UPDATE: {'field': {'new': v, 'old': v}, ...} ('@source' was stripped before persisting)
+     *  JSON fields (INSERT/UPDATE): nested deep diff, e.g. {'settings': {'theme': {'new': v, 'old': v}}}
      *  REMOVE: {'class': ..., 'id': ..., 'label': ..., 'table': ...}
      *  ASSOCIATE/DISSOCIATE: {'source': {...}, 'target': {...}, 'is_owning_side': bool, 'table': 'join_table'}
      *
@@ -790,8 +791,7 @@ final class MigrateSchemaCommand extends Command
         }
 
         return match ($row['type']) {
-            'insert' => $this->convertInsertDiffs($rawDiffs, $row),
-            'update' => $this->convertUpdateDiffs($rawDiffs, $row),
+            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row),
             'remove' => $this->convertRemoveDiffs($rawDiffs, $row),
             'associate', 'dissociate' => $this->convertAssociateDiffs($rawDiffs),
             default => $rawDiffs,
@@ -799,39 +799,38 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
+     * Converts INSERT and UPDATE diffs.
+     *
+     * Scalar and association diffs ({'new': v} and/or {'old': v}) are normalized to {'new': v, 'old': v}.
+     * Any other array is a JSON deep diff: it already has the v2 shape and is carried over unchanged.
+     *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
      */
-    private function convertInsertDiffs(array $diffs, array $row): array
+    private function convertChangeDiffs(array $diffs, array $row): array
     {
         $source = $this->extractLegacySource($diffs, $row);
         unset($diffs['@source']);
 
         $changes = [];
         foreach ($diffs as $field => $diff) {
-            if (\is_array($diff) && \array_key_exists('new', $diff)) {
-                $changes[$field] = ['new' => $diff['new'], 'old' => $diff['old'] ?? null];
+            if (!\is_array($diff)) {
+                continue;
             }
+
+            $changes[$field] = $this->isLeafDiff($diff)
+                ? ['new' => $diff['new'] ?? null, 'old' => $diff['old'] ?? null]
+                : $diff;
         }
 
         return ['source' => $source, 'changes' => $changes];
     }
 
     /**
-     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * Tells a field diff ({'new': v} and/or {'old': v}) apart from a JSON deep diff.
      */
-    private function convertUpdateDiffs(array $diffs, array $row): array
+    private function isLeafDiff(array $diff): bool
     {
-        $source = $this->extractLegacySource($diffs, $row);
-        unset($diffs['@source']);
-
-        $changes = [];
-        foreach ($diffs as $field => $diff) {
-            if (\is_array($diff)) {
-                $changes[$field] = ['new' => $diff['new'] ?? null, 'old' => $diff['old'] ?? null];
-            }
-        }
-
-        return ['source' => $source, 'changes' => $changes];
+        return [] !== $diff && [] === array_diff(array_keys($diff), ['new', 'old']);
     }
 
     /**
