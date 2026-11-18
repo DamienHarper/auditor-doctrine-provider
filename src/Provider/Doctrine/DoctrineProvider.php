@@ -29,12 +29,15 @@ use Doctrine\ORM\Tools\ToolEvents;
 use Gedmo\SoftDeleteable\SoftDeleteableListener;
 use Psr\Cache\CacheItemPoolInterface;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
  * @see DoctrineProviderTest
  */
-final class DoctrineProvider extends AbstractProvider implements ResetInterface
+final class DoctrineProvider extends AbstractProvider implements LoggerAwareInterface, ResetInterface
 {
     /**
      * Retention options that, when given in the configuration, take precedence over the #[Auditable] ones.
@@ -75,9 +78,12 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
 
     private ?ContainerInterface $diffLabelResolverLocator = null;
 
+    private LoggerInterface $logger;
+
     public function __construct(ConfigurationInterface $configuration)
     {
         $this->configuration = $configuration;
+        $this->logger = new NullLogger();
         $this->transactionManager = new TransactionManager($this);
 
         \assert($this->configuration instanceof Configuration);    // helps PHPStan
@@ -87,6 +93,20 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     public function getTransactionManager(): TransactionManager
     {
         return $this->transactionManager;
+    }
+
+    /**
+     * Reports the failures that cannot be thrown without hiding the original one, e.g. audit entries stored on
+     * another connection that could not be deleted after their transaction was rolled back.
+     */
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
+    }
+
+    public function getLogger(): LoggerInterface
+    {
+        return $this->logger;
     }
 
     public function setDiffLabelResolverLocator(ContainerInterface $locator): void
