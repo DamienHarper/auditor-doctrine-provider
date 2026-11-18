@@ -259,9 +259,9 @@ $configuration = new Configuration([
             'roles' => ['view' => ['ROLE_SUPER_ADMIN']],
         ],
 
-        // Add additional ignored columns on top of attribute-defined ones
+        // Add additional ignored properties on top of attribute-defined ones
         Post::class => [
-            'ignored_columns' => ['view_count'],
+            'ignored_columns' => ['viewCount'],
         ],
 
         // Completely disable auditing despite #[Auditable]

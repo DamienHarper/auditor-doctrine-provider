@@ -61,7 +61,7 @@ use DH\Auditor\Provider\Doctrine\Service\StorageService;
 $providerConfiguration = new DoctrineConfiguration([
     'table_prefix'    => '',
     'table_suffix'    => '_audit',
-    'ignored_columns' => [],       // Columns to ignore globally
+    'ignored_columns' => [],       // Properties to ignore globally
     'entities'        => [
         // Entities configuration (alternative to / merged with attributes)
         App\Entity\Post::class => [

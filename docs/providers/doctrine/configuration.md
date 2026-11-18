@@ -28,7 +28,7 @@ $configuration = new Configuration([
 |------------------|-------------------|------------|--------------------------------------------------|
 | `table_prefix`   | `string`          | `''`       | Prefix for audit table names                     |
 | `table_suffix`   | `string`          | `'_audit'` | Suffix for audit table names                     |
-| `ignored_columns`| `array`           | `[]`       | Columns to ignore globally across all entities   |
+| `ignored_columns`| `array`           | `[]`       | Properties to ignore globally across all entities |
 | `entities`       | `array`           | `[]`       | Entity-specific configuration                    |
 | `viewer`         | `bool\|array`     | `true`     | Enable/configure the audit viewer                |
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
@@ -63,24 +63,28 @@ $configuration = new Configuration([
 ]);
 ```
 
-## 🚫 Ignored Columns
+## 🚫 Ignored Properties
 
-### Global Ignored Columns
+> [!NOTE]
+> `ignored_columns` expects mapped **PHP property names** (e.g. `createdAt`), not SQL column names (e.g. `created_at`).
+> A column name that differs from its property name is silently not ignored.
 
-Columns that should never be audited across all entities:
+### Global Ignored Properties
+
+Properties that should never be audited across all entities:
 
 ```php
 $configuration = new Configuration([
     'ignored_columns' => [
-        'created_at',
-        'updated_at',
+        'createdAt',
+        'updatedAt',
     ],
 ]);
 ```
 
-### Per-Entity Ignored Columns
+### Per-Entity Ignored Properties
 
-Override ignored columns for specific entities:
+Ignore additional properties for specific entities (combined with the global list):
 
 ```php
 $configuration = new Configuration([
@@ -121,7 +125,7 @@ $configuration = new Configuration([
 | Option            | Type       | Default | Description                                     |
 |-------------------|------------|---------|-------------------------------------------------|
 | `enabled`         | `bool`     | `true`  | Whether auditing is enabled for this entity     |
-| `ignored_columns` | `array`    | `[]`    | Columns to ignore for this entity               |
+| `ignored_columns` | `array`    | `[]`    | Properties to ignore for this entity            |
 | `roles`           | `array`    | `null`  | View permissions (`['view' => ['ROLE_X']]`)     |
 
 ## 👁️ Viewer Configuration
@@ -216,7 +220,7 @@ class Post
 
 // And this programmatic config:
 $configuration = new Configuration([
-    'ignored_columns' => ['updated_at'],
+    'ignored_columns' => ['updatedAt'],
     'entities' => [
         Post::class => [
             'ignored_columns' => ['slug'],
@@ -226,7 +230,7 @@ $configuration = new Configuration([
 ]);
 
 // Final configuration for Post:
-// - ignored_columns: ['cached', 'slug', 'updated_at']
+// - ignored_columns: ['cached', 'slug', 'updatedAt']
 // - roles: ['view' => ['ROLE_ADMIN']]
 ```
 
@@ -243,8 +247,8 @@ $configuration = new Configuration([
     'table_suffix' => '_audit',
 
     'ignored_columns' => [
-        'created_at',
-        'updated_at',
+        'createdAt',
+        'updatedAt',
     ],
 
     'entities' => [
