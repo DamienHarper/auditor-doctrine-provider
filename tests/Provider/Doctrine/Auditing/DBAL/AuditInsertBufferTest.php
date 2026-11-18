@@ -47,7 +47,7 @@ final class AuditInsertBufferTest extends TestCase
         $buffer->add($this->connection, 'author_audit', $this->row('2'), 100);
         $buffer->add($this->connection, 'author_audit', $this->row('3'), 100);
 
-        $this->assertSame(3, $buffer->count());
+        $this->assertCount(3, $buffer);
         $this->assertSame([], $this->logger->statementsStartingWith('INSERT'), 'Nothing is written before the flush.');
 
         $buffer->flush();
@@ -120,7 +120,6 @@ final class AuditInsertBufferTest extends TestCase
         $buffer->flush();
 
         $this->assertCount(0, $buffer);
-        $this->assertSame(0, $buffer->count());
 
         $this->logger->clear();
         $buffer->flush();

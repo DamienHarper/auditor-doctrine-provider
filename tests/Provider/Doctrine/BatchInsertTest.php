@@ -314,7 +314,7 @@ final class BatchInsertTest extends TestCase
 
         $this->assertSame([], $this->auditedObjectIds(Author::class));
         $this->assertArrayNotHasKey('id', $event->getPayload(), 'The id of a buffered audit entry is unknown.');
-        $this->assertSame(1, $buffer->count());
+        $this->assertCount(1, $buffer);
 
         $buffer->flush();
 
