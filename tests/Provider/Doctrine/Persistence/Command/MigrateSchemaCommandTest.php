@@ -6,6 +6,9 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Bike;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Car;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Vehicle;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -134,7 +137,7 @@ final class MigrateSchemaCommandTest extends TestCase
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
-    public function testConvertDiffsFallsBackWhenLegacyInsertHasNoSource(): void
+    public function testConvertDiffsBuildsSourceFromEntityWhenLegacyInsertHasNoSource(): void
     {
         $this->simulateLegacySchema('post_audit');
         $id = $this->insertLegacyRow('post_audit', 'insert', '7', [
@@ -144,11 +147,62 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->executeConvertDiffs();
 
         $this->assertSame([
-            'source' => ['id' => '7', 'class' => '', 'label' => '', 'table' => ''],
+            'source' => ['id' => '7', 'class' => Post::class, 'label' => Post::class.'#7', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'Untitled', 'old' => null],
             ],
         ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsBuildsSourceFromEntityForLegacyUpdate(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'update', '12', [
+            'title' => ['old' => 'Draft', 'new' => 'Final'],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '12', 'class' => Post::class, 'label' => Post::class.'#12', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'Final', 'old' => 'Draft'],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsUsesDiscriminatorAsClassForSingleTableInheritance(): void
+    {
+        $this->simulateLegacySchema('vehicle_audit');
+        $id = $this->insertLegacyRow('vehicle_audit', 'update', '3', [
+            'wheels' => ['old' => 4, 'new' => 3],
+        ], Car::class);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '3', 'class' => Car::class, 'label' => Car::class.'#3', 'table' => 'vehicle'],
+            'changes' => [
+                'wheels' => ['new' => 3, 'old' => 4],
+            ],
+        ], $this->fetchConvertedDiffs('vehicle_audit', $id));
+    }
+
+    public function testConvertDiffsLeavesClassEmptyWhenSeveralEntitiesShareTheAuditTable(): void
+    {
+        $this->simulateLegacySchema('vehicle_audit');
+        $id = $this->insertLegacyRow('vehicle_audit', 'update', '3', [
+            'wheels' => ['old' => 4, 'new' => 3],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '3', 'class' => '', 'label' => '', 'table' => 'vehicle'],
+            'changes' => [
+                'wheels' => ['new' => 3, 'old' => 4],
+            ],
+        ], $this->fetchConvertedDiffs('vehicle_audit', $id));
     }
 
     public function testConvertDiffsKeepsLegacyRemoveSummaryAsSource(): void
@@ -166,6 +220,19 @@ final class MigrateSchemaCommandTest extends TestCase
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
+    public function testConvertDiffsBuildsSourceFromEntityWhenLegacyRemoveIsEmpty(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'remove', '90', []);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => Post::class, 'label' => Post::class.'#90', 'table' => 'post'],
+            'changes' => [],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
     /**
      * Manipulates the first audit table to look like a v1 schema:
      * drops schema_version, adds transaction_hash (VARCHAR 40).
@@ -177,6 +244,9 @@ final class MigrateSchemaCommandTest extends TestCase
             Post::class => ['enabled' => true],
             Comment::class => ['enabled' => true],
             Tag::class => ['enabled' => true],
+            Vehicle::class => ['enabled' => true],
+            Car::class => ['enabled' => true],
+            Bike::class => ['enabled' => true],
         ]);
     }
 
@@ -233,14 +303,16 @@ final class MigrateSchemaCommandTest extends TestCase
     /**
      * Inserts a row in the v1 format into a table downgraded by simulateLegacySchema().
      *
-     * @param array<string, mixed> $diffs legacy diffs payload
+     * @param array<string, mixed> $diffs         legacy diffs payload
+     * @param ?string              $discriminator class of the audited entity (single table inheritance only)
      */
-    private function insertLegacyRow(string $tableName, string $type, string $objectId, array $diffs): int
+    private function insertLegacyRow(string $tableName, string $type, string $objectId, array $diffs, ?string $discriminator = null): int
     {
         $connection = $this->auditConnection();
         $connection->insert($tableName, [
             'type' => $type,
             'object_id' => $objectId,
+            'discriminator' => $discriminator,
             'diffs' => json_encode($diffs, JSON_THROW_ON_ERROR),
             'transaction_hash' => sha1($tableName.$type.$objectId),
             'created_at' => '2024-01-01 00:00:00',

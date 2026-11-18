@@ -153,6 +153,7 @@ final class MigrateSchemaCommand extends Command
 
         // Tables to use for diffs conversion: DDL tables + diffs-only tables (already migrated DDL).
         $allDiffsTables = array_merge($tables, $diffsOnlyTables);
+        $auditedEntities = $this->collectAuditedEntities($provider, $schemaManager);
 
         $hasAdditive = [] !== array_filter(array_column($allDdlSqls, 'additive'));
         $hasDestructive = [] !== array_filter(array_column($allDdlSqls, 'destructive'));
@@ -241,7 +242,7 @@ final class MigrateSchemaCommand extends Command
         if ($convertDiffs) {
             $io->newLine();
             $io->text('<comment>Converting legacy diffs...</comment>');
-            $this->convertDiffsAcrossTables($allDiffsTables, $limit, $io);
+            $this->convertDiffsAcrossTables($allDiffsTables, $auditedEntities, $limit, $io);
         }
 
         // Phase 2: destructive DDL — drop legacy columns
@@ -339,6 +340,31 @@ final class MigrateSchemaCommand extends Command
         }
 
         return $legacyTables;
+    }
+
+    /**
+     * Returns, per audit table, the table of the audited entities and the classes stored in it.
+     * Several classes share an audit table under single table inheritance.
+     *
+     * @return array<string, array{table: string, classes: list<string>}> keyed by audit table name
+     */
+    private function collectAuditedEntities(DoctrineProvider $provider, SchemaManager $schemaManager): array
+    {
+        /** @var Configuration $configuration */
+        $configuration = $provider->getConfiguration();
+        $auditedEntities = [];
+
+        foreach ($configuration->getEntities() as $entity => $options) {
+            $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
+            if (null === $auditTableName) {
+                continue;
+            }
+
+            $auditedEntities[$auditTableName]['table'] = $options['table_name'];
+            $auditedEntities[$auditTableName]['classes'][] = $entity;
+        }
+
+        return $auditedEntities;
     }
 
     /**
@@ -650,9 +676,10 @@ final class MigrateSchemaCommand extends Command
     /**
      * Converts legacy diffs JSON across all tables, respecting an optional global row limit.
      *
-     * @param array<string, Connection> $tables
+     * @param array<string, Connection>                                  $tables
+     * @param array<string, array{table: string, classes: list<string>}> $auditedEntities
      */
-    private function convertDiffsAcrossTables(array $tables, ?int $limit, SymfonyStyle $io): void
+    private function convertDiffsAcrossTables(array $tables, array $auditedEntities, ?int $limit, SymfonyStyle $io): void
     {
         // Count total rows to convert across all tables for estimation
         $totalRows = 0;
@@ -680,7 +707,8 @@ final class MigrateSchemaCommand extends Command
                 break;
             }
 
-            $convertedInTable = $this->convertDiffsForTable($tableName, $connection, $io, $remaining);
+            $auditedEntity = $auditedEntities[$tableName] ?? ['table' => '', 'classes' => []];
+            $convertedInTable = $this->convertDiffsForTable($tableName, $connection, $auditedEntity, $io, $remaining);
             $convertedTotal += $convertedInTable;
 
             if (null !== $remaining) {
@@ -716,11 +744,12 @@ final class MigrateSchemaCommand extends Command
      * by the WHERE clause, so the query always returns the next unconverted batch from offset 0.
      * This makes the operation safe to resume after an interruption.
      *
-     * @param ?int $limit Maximum number of rows to convert (null = no limit)
+     * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
+     * @param ?int                                        $limit         Maximum number of rows to convert (null = no limit)
      *
      * @return int Number of rows converted
      */
-    private function convertDiffsForTable(string $tableName, Connection $connection, SymfonyStyle $io, ?int $limit): int
+    private function convertDiffsForTable(string $tableName, Connection $connection, array $auditedEntity, SymfonyStyle $io, ?int $limit): int
     {
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
@@ -750,7 +779,7 @@ final class MigrateSchemaCommand extends Command
             }
 
             foreach ($rows as $row) {
-                $newDiffs = $this->convertLegacyDiffs($row);
+                $newDiffs = $this->convertLegacyDiffs($row, $auditedEntity);
                 $connection->update(
                     $tableName,
                     ['diffs' => json_encode($newDiffs, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'schema_version' => 2],
@@ -778,11 +807,12 @@ final class MigrateSchemaCommand extends Command
      *  REMOVE: {'class': ..., 'id': ..., 'label': ..., 'table': ...}
      *  ASSOCIATE/DISSOCIATE: {'source': {...}, 'target': {...}, 'is_owning_side': bool, 'table': 'join_table'}
      *
-     * '@source' is reused whenever present; otherwise a minimal source is built from the row.
+     * '@source' is reused whenever present; otherwise the source is built from the row and the audited entity.
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
      */
-    private function convertLegacyDiffs(array $row): array
+    private function convertLegacyDiffs(array $row, array $auditedEntity): array
     {
         $rawDiffs = json_decode((string) ($row['diffs'] ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
         if (!\is_array($rawDiffs)) {
@@ -790,9 +820,9 @@ final class MigrateSchemaCommand extends Command
         }
 
         return match ($row['type']) {
-            'insert' => $this->convertInsertDiffs($rawDiffs, $row),
-            'update' => $this->convertUpdateDiffs($rawDiffs, $row),
-            'remove' => $this->convertRemoveDiffs($rawDiffs, $row),
+            'insert' => $this->convertInsertDiffs($rawDiffs, $row, $auditedEntity),
+            'update' => $this->convertUpdateDiffs($rawDiffs, $row, $auditedEntity),
+            'remove' => $this->convertRemoveDiffs($rawDiffs, $row, $auditedEntity),
             'associate', 'dissociate' => $this->convertAssociateDiffs($rawDiffs),
             default => $rawDiffs,
         };
@@ -800,10 +830,11 @@ final class MigrateSchemaCommand extends Command
 
     /**
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
      */
-    private function convertInsertDiffs(array $diffs, array $row): array
+    private function convertInsertDiffs(array $diffs, array $row, array $auditedEntity): array
     {
-        $source = $this->extractLegacySource($diffs, $row);
+        $source = $this->extractLegacySource($diffs, $row, $auditedEntity);
         unset($diffs['@source']);
 
         $changes = [];
@@ -818,10 +849,11 @@ final class MigrateSchemaCommand extends Command
 
     /**
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
      */
-    private function convertUpdateDiffs(array $diffs, array $row): array
+    private function convertUpdateDiffs(array $diffs, array $row, array $auditedEntity): array
     {
-        $source = $this->extractLegacySource($diffs, $row);
+        $source = $this->extractLegacySource($diffs, $row, $auditedEntity);
         unset($diffs['@source']);
 
         $changes = [];
@@ -836,33 +868,54 @@ final class MigrateSchemaCommand extends Command
 
     /**
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
      */
-    private function convertRemoveDiffs(array $diffs, array $row): array
+    private function convertRemoveDiffs(array $diffs, array $row, array $auditedEntity): array
     {
-        $source = $diffs;
-        if ([] === $source) {
-            $source = ['id' => $row['object_id'], 'class' => '', 'label' => '', 'table' => ''];
-        }
+        $source = [] === $diffs ? $this->buildSource($row, $auditedEntity) : $diffs;
 
         return ['source' => $source, 'changes' => []];
     }
 
     /**
-     * Returns the legacy '@source' summary when present, otherwise a minimal source built from the row.
+     * Returns the legacy '@source' summary when present, otherwise a source built from the row and the audited entity.
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
      */
-    private function extractLegacySource(array $diffs, array $row): array
+    private function extractLegacySource(array $diffs, array $row, array $auditedEntity): array
     {
         if (isset($diffs['@source']) && \is_array($diffs['@source']) && [] !== $diffs['@source']) {
             return $diffs['@source'];
         }
 
+        return $this->buildSource($row, $auditedEntity);
+    }
+
+    /**
+     * Builds the source of a legacy entry that carries no summary of the audited entity.
+     *
+     * The class is the discriminator (single table inheritance), else the only class audited in the
+     * table; it stays empty when several classes share the table without a discriminator. The label
+     * follows the "Class#id" fallback of the auditing service: __toString() cannot be replayed here.
+     *
+     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity
+     *
+     * @return array{id: string, class: string, label: string, table: string}
+     */
+    private function buildSource(array $row, array $auditedEntity): array
+    {
+        $class = $row['discriminator'] ?? '';
+        if ('' === $class && 1 === \count($auditedEntity['classes'])) {
+            $class = $auditedEntity['classes'][0];
+        }
+
         return [
             'id' => $row['object_id'],
-            'class' => $row['discriminator'] ?? '',
-            'label' => '',
-            'table' => '',
+            'class' => $class,
+            'label' => '' === $class ? '' : $class.'#'.$row['object_id'],
+            'table' => $auditedEntity['table'],
         ];
     }
 
