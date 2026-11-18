@@ -32,3 +32,6 @@ bin/console
 bin/phpunit
 config/
 ###< symfony/flex recipes (generated, not for libraries) ###
+
+# Git worktrees (make wt-create)
+.claude/worktrees/
