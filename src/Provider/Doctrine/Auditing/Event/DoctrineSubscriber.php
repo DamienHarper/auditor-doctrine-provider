@@ -90,6 +90,8 @@ final class DoctrineSubscriber implements ResetInterface
             $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $entityManagerId, $driver): void {
                 $this->runningFlushers[$entityManagerId] = true;
                 $hasEntries = false;
+                // with a positive `batch_size`, audit entries are written by the driver when the transaction is committed
+                $previousBuffer = $this->provider->useInsertBuffer($driver->getInsertBuffer());
 
                 try {
                     // a listener of the audit events may flush again: its entries are written in the same pass
@@ -98,6 +100,8 @@ final class DoctrineSubscriber implements ResetInterface
                         $this->provider->getTransactionManager()->process($batch);
                     }
                 } finally {
+                    // a listener may have committed another transaction while this one is processed
+                    $this->provider->useInsertBuffer($previousBuffer);
                     unset($this->runningFlushers[$entityManagerId], $this->confirmedTransactions[$entityManagerId], $this->flushers[$entityManagerId]);
                     if ($hasEntries) {
                         $this->addRollbackHandler($driver, $entityManager, $transaction->getTransactionId());

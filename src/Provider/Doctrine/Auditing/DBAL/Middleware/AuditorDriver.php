@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware;
 
+use Doctrine\DBAL\Driver;
 use Doctrine\DBAL\Driver\Middleware\AbstractDriverMiddleware;
 
 /**
@@ -27,10 +28,27 @@ final class AuditorDriver extends AbstractDriverMiddleware
      */
     private ?Savepoint $currentSavepoint = null;
 
+    /**
+     * Audit entries of the commit in progress written with multi-row INSERT statements (`batch_size` option).
+     */
+    private readonly AuditInsertBuffer $insertBuffer;
+
+    public function __construct(Driver $wrappedDriver)
+    {
+        parent::__construct($wrappedDriver);
+
+        $this->insertBuffer = new AuditInsertBuffer();
+    }
+
     #[\Override]
     public function connect(array $params): AuditorConnection
     {
         return new AuditorConnection(parent::connect($params), $this);
+    }
+
+    public function getInsertBuffer(): AuditInsertBuffer
+    {
+        return $this->insertBuffer;
     }
 
     public function addFlusher(callable $flusher): void

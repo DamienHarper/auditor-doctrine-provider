@@ -14,6 +14,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ProviderConfigurationTrait;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\OptionsResolver\Exception\InvalidOptionsException;
 
 /**
  * @internal
@@ -115,6 +116,40 @@ final class ConfigurationTest extends TestCase
         ]);
 
         $this->assertSame(self::IGNORED, $configuration->getIgnoredColumns(), '"ignored_columns" are honored.');
+    }
+
+    public function testBatchSizeIsDisabledByDefault(): void
+    {
+        $configuration = $this->createProviderConfiguration();
+
+        $this->assertSame(0, $configuration->getBatchSize(), '"batch_size" is 0 (one INSERT per audit entry) by default.');
+    }
+
+    public function testCustomBatchSize(): void
+    {
+        $configuration = $this->createProviderConfiguration([
+            'batch_size' => 500,
+        ]);
+
+        $this->assertSame(500, $configuration->getBatchSize(), 'Custom "batch_size" is 500.');
+    }
+
+    public function testNegativeBatchSizeIsRejected(): void
+    {
+        $this->expectException(InvalidOptionsException::class);
+
+        $this->createProviderConfiguration([
+            'batch_size' => -1,
+        ]);
+    }
+
+    public function testNonIntegerBatchSizeIsRejected(): void
+    {
+        $this->expectException(InvalidOptionsException::class);
+
+        $this->createProviderConfiguration([
+            'batch_size' => '100',
+        ]);
     }
 
     public function testGetEntities(): void

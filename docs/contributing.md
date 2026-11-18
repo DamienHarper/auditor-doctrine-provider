@@ -216,6 +216,17 @@ BENCH_N=1000 XDEBUG_MODE=off composer bench:html
 > [!TIP]
 > Pass `XDEBUG_MODE=off` to disable the xdebug overhead and get production-representative timings.
 
+Two more environment variables shape the measured setup:
+
+- `BENCH_DATABASE_URL` runs the benchmarks on a database server instead of an in-memory SQLite database, e.g. `pdo-mysql://auditor:password@127.0.0.1:3361/auditor` or `pdo-pgsql://postgres:password@127.0.0.1:5433/auditor`. Every table of that database is dropped first: use a disposable one.
+- `BENCH_BATCH_SIZE` sets the `batch_size` provider option (default: `0`, one `INSERT` per audit entry).
+
+```bash
+# Measure the batched audit entries on PostgreSQL, back to back with the default
+BENCH_N=500 BENCH_DATABASE_URL=pdo-pgsql://postgres:password@127.0.0.1:5433/auditor XDEBUG_MODE=off composer bench
+BENCH_N=500 BENCH_DATABASE_URL=pdo-pgsql://postgres:password@127.0.0.1:5433/auditor BENCH_BATCH_SIZE=500 XDEBUG_MODE=off composer bench
+```
+
 Extra PHPBench arguments can be appended after `--`:
 
 ```bash

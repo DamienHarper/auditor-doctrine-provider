@@ -18,6 +18,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\User\User;
 use Doctrine\DBAL\Configuration as DBALConfiguration;
 use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Tools\DsnParser;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Events;
@@ -45,7 +46,6 @@ use Symfony\Component\EventDispatcher\EventDispatcher;
  */
 #[Bench\Iterations(5)]
 #[Bench\Revs(1)]
-#[Bench\Warmup(1)]
 class AuditBench
 {
     private int $n;
@@ -241,7 +241,9 @@ class AuditBench
 
     public function tearDownBase(): void
     {
-        // In-memory SQLite: releasing the EM/connection drops the DB automatically
+        // In-memory SQLite: releasing the EM/connection drops the DB automatically.
+        // A real server is emptied by the next buildSchema(); close the connection to avoid piling them up.
+        $this->em->getConnection()->close();
         $this->authors = [];
         $this->posts   = [];
         $this->tags    = [];
@@ -304,6 +306,8 @@ class AuditBench
             'table_suffix'    => '_audit',
             'ignored_columns' => [],
             'entities'        => [],
+            // BENCH_BATCH_SIZE=500 measures the multi-row INSERT of audit entries
+            'batch_size'      => max(0, (int) (getenv('BENCH_BATCH_SIZE') ?: 0)),
         ]);
         $this->provider = new DoctrineProvider($providerConfig);
         $auditor->registerProvider($this->provider);
@@ -341,10 +345,14 @@ class AuditBench
         $dbalConfig = new DBALConfiguration();
         $dbalConfig->setMiddlewares([new AuditorMiddleware()]);
 
-        $connection = DriverManager::getConnection(
-            ['driver' => 'pdo_sqlite', 'memory' => true],
-            $dbalConfig
-        );
+        // BENCH_DATABASE_URL targets a real server (e.g. "pdo-mysql://auditor:password@127.0.0.1:3361/auditor");
+        // without it, the benchmark runs on an in-memory SQLite database.
+        $databaseUrl = getenv('BENCH_DATABASE_URL');
+        $params = \is_string($databaseUrl) && '' !== $databaseUrl
+            ? new DsnParser()->parse($databaseUrl)
+            : ['driver' => 'pdo_sqlite', 'memory' => true];
+
+        $connection = DriverManager::getConnection($params, $dbalConfig);
 
         $em  = new EntityManager($connection, $ormConfig);
         $evm = $em->getEventManager();
@@ -355,6 +363,12 @@ class AuditBench
 
     private function buildSchema(): void
     {
+        // A real server keeps the tables of the previous iteration: start from an empty database.
+        $connection = $this->em->getConnection();
+        foreach ($connection->createSchemaManager()->introspectSchema()->toDropSql($connection->getDatabasePlatform()) as $sql) {
+            $connection->executeStatement($sql);
+        }
+
         $schemaTool = new SchemaTool($this->em);
         $classes    = $this->em->getMetadataFactory()->getAllMetadata();
         $schemaTool->createSchema($classes);

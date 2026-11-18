@@ -11,6 +11,7 @@ use DH\Auditor\Exception\ProviderException;
 use DH\Auditor\Provider\AbstractProvider;
 use DH\Auditor\Provider\ConfigurationInterface;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
+use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditInsertBuffer;
 use DH\Auditor\Provider\Doctrine\Auditing\Event\DoctrineSubscriber;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\TransactionManager;
 use DH\Auditor\Provider\Doctrine\Persistence\Event\CreateSchemaListener;
@@ -45,24 +46,8 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
     private const array RETENTION_OPTIONS = ['max_age', 'max_entries'];
 
     /**
-     * @var array<string, string>
-     */
-    private const array FIELDS = [
-        'schema_version' => '?',
-        'type' => '?',
-        'object_id' => '?',
-        'discriminator' => '?',
-        'transaction_id' => '?',
-        'diffs' => '?',
-        'extra_data' => '?',
-        'blame_id' => '?',
-        'blame' => '?',
-        'created_at' => '?',
-    ];
-
-    /**
-     * Maps each field name to its 1-based bind position for prepared statements.
-     * Computed once from FIELDS and cached for the process lifetime.
+     * Maps each column name to its 1-based bind position for prepared statements.
+     * Computed once from AuditInsertBuffer::COLUMNS and cached for the process lifetime.
      *
      * @var null|array<string, int>
      */
@@ -79,6 +64,12 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
     private ?ContainerInterface $diffLabelResolverLocator = null;
 
     private LoggerInterface $logger;
+
+    /**
+     * Buffer of the database transaction being committed, if any: with a positive `batch_size`, audit entries are
+     * buffered instead of being inserted one by one.
+     */
+    private ?AuditInsertBuffer $activeBuffer = null;
 
     public function __construct(ConfigurationInterface $configuration)
     {
@@ -153,6 +144,8 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
      */
     public function reset(): void
     {
+        // The buffer of a commit in progress is left in use: it is restored by the flusher processing that commit,
+        // and without it an INSERT failure would be ignored by the auditor instead of failing the commit.
         $this->preparedStatements = [];
 
         foreach ($this->subscribers as $subscriber) {
@@ -206,6 +199,20 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         return $storageMapper($entity, $this->getStorageServices());
     }
 
+    /**
+     * Sets the buffer of the database transaction being committed (null when no commit is in progress) and returns
+     * the previous one, to restore once that commit is processed: a commit may happen while another one is processed.
+     *
+     * @internal
+     */
+    public function useInsertBuffer(?AuditInsertBuffer $buffer): ?AuditInsertBuffer
+    {
+        $previous = $this->activeBuffer;
+        $this->activeBuffer = $buffer;
+
+        return $previous;
+    }
+
     public function persist(LifecycleEvent $event): void
     {
         $payload = $event->getPayload();
@@ -213,17 +220,34 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         $entity = $payload['entity'];
         unset($payload['table'], $payload['entity']);
 
+        \assert($this->configuration instanceof Configuration);   // helps PHPStan
+        $batchSize = $this->configuration->getBatchSize();
+        $buffer = $this->activeBuffer;
+        if ($batchSize > 0 && $buffer instanceof AuditInsertBuffer) {
+            // written when the database transaction is committed: the id of the audit entry is not known yet
+            try {
+                $connection = $this->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+                $buffer->add($connection, $auditTable, $this->row($payload), $batchSize);
+            } catch (\Throwable $throwable) {
+                // the auditor ignores this exception: the buffer reports it when the transaction is committed
+                $buffer->fail($throwable);
+            }
+
+            return;
+        }
+
         $storageService = $this->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
+
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
 
         if (!isset($this->preparedStatements[$cacheKey])) {
             // PostgreSQL requires an explicit ::jsonb cast for jsonb columns in prepared statements
             // (the driver otherwise infers the placeholder type as text, causing a type mismatch).
             $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
-            $keys = array_keys(self::FIELDS);
+            $keys = AuditInsertBuffer::COLUMNS;
             $placeholders = array_map(
-                static fn (string $col): string => \in_array($col, ['diffs', 'extra_data', 'blame'], true)
+                static fn (string $col): string => \in_array($col, AuditInsertBuffer::JSON_COLUMNS, true)
                     ? '?'.$jsonCast
                     : '?',
                 $keys
@@ -241,7 +265,7 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
         $fieldIndex = self::$fieldIndex ??= array_map(
             static fn (int $i): int => $i + 1,
-            array_flip(array_keys(self::FIELDS))
+            array_flip(AuditInsertBuffer::COLUMNS)
         );
 
         foreach ($payload as $key => $value) {
@@ -383,6 +407,28 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         $this->configuration->setEntities($merged);
 
         return $this;
+    }
+
+    /**
+     * Values of the audit entry, ordered like AuditInsertBuffer::COLUMNS.
+     *
+     * @param array<array-key, mixed> $payload
+     *
+     * @return list<mixed>
+     */
+    private function row(array $payload): array
+    {
+        $row = [];
+        foreach (AuditInsertBuffer::COLUMNS as $column) {
+            if (!\array_key_exists($column, $payload)) {
+                // LifecycleEvent requires every column it knows of: guards against a column it does not require yet
+                throw new \LogicException(\sprintf('The audit entry has no "%s" value.', $column));
+            }
+
+            $row[] = $payload[$column];
+        }
+
+        return $row;
     }
 
     private function checkStorageMapper(): self

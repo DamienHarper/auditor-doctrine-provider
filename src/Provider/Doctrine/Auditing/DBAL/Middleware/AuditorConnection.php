@@ -55,6 +55,8 @@ final class AuditorConnection extends AbstractConnectionMiddleware
     #[\Override]
     public function commit(): void
     {
+        $insertBuffer = $this->auditorDriver->getInsertBuffer();
+
         try {
             // A flusher may register another one, e.g. when a listener of the audit events flushes another entity
             // manager sharing this connection: it runs in the same pass, before the COMMIT.
@@ -64,11 +66,20 @@ final class AuditorConnection extends AbstractConnectionMiddleware
                     ($flusher)();
                 }
             }
+
+            // audit entries buffered by the flushers (`batch_size` option), written before the COMMIT so that
+            // a failure fails the commit
+            $insertBuffer->flush();
         } catch (\Throwable $throwable) {
             // DBAL counts the transaction as finished even though commit() threw, so nobody calls
             // rollBack() afterwards: the flusher would stay in the list and fail every later commit
             // on this connection, and the server-side transaction would stay open.
             $this->auditorDriver->resetFlusherList();
+
+            // A failed early batch happened first and is the probable cause of $throwable: e.g. on PostgreSQL, every
+            // query following a failed INSERT fails because the transaction is aborted.
+            $failure = $insertBuffer->takeFailure() ?? $throwable;
+            $insertBuffer->discard();
 
             try {
                 parent::rollBack();
@@ -80,7 +91,7 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             $this->auditorDriver->resetSavepoints();
             $this->runRollbackHandlers();
 
-            throw $throwable;
+            throw $failure;
         }
 
         try {
@@ -104,6 +115,7 @@ final class AuditorConnection extends AbstractConnectionMiddleware
     public function rollBack(): void
     {
         $this->auditorDriver->resetFlusherList();
+        $this->auditorDriver->getInsertBuffer()->discard();
         $this->auditorDriver->resetRollbackHandlerList();
         $this->auditorDriver->resetSavepoints();
 

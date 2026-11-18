@@ -19,6 +19,7 @@ $configuration = new Configuration([
     'viewer'          => true,
     'storage_mapper'  => null,
     'utf8_convert'    => false,
+    'batch_size'      => 0,
 ]);
 ```
 
@@ -33,6 +34,7 @@ $configuration = new Configuration([
 | `viewer`         | `bool\|array`     | `true`     | Enable/configure the audit viewer                |
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
+| `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
 
 ## 📛 Table Naming
 
@@ -167,6 +169,40 @@ $configuration = new Configuration([
     'utf8_convert' => true,
 ]);
 ```
+
+## 📦 Batch INSERT
+
+By default (`batch_size: 0`), each audit entry is written with its own `INSERT` statement as soon as it is produced.
+A positive `batch_size` buffers the audit entries of the database transaction being committed and writes them with
+multi-row `INSERT` statements, which saves round trips to the database when a transaction changes many entities:
+
+```php
+$configuration = new Configuration([
+    'batch_size' => 500,
+]);
+```
+
+- **When**: the buffered audit entries are written right before the `COMMIT` of the audited transaction, or as soon
+  as `batch_size` entries are buffered. Values between `100` and `1000` are a good start: the larger the value, the
+  fewer statements, but the more memory the buffer holds for a large transaction.
+- **Per-statement limit**: whatever `batch_size`, a single statement holds at most 99 rows on SQLite (bound parameter
+  limit of older SQLite versions) and 500 rows on MySQL, MariaDB and PostgreSQL. Other platforms are limited to 99 rows
+  per statement and must support the multi-row `INSERT INTO … VALUES (…), (…)` syntax. A statement is also closed
+  before its string values (diffs, extra data, blame…) exceed 1 MiB, a larger audit entry being written alone: MySQL
+  and MariaDB reject a statement larger than their `max_allowed_packet` setting (64 MiB by default since MySQL 8.0,
+  as low as 1 MiB on older or tuned servers). Keep `max_allowed_packet` comfortably above 1 MiB, and above the size
+  of your largest audit entry (as with `batch_size: 0`).
+- **No `id` in the payload**: the `LifecycleEvent` payload of a buffered audit entry has no `id` key, since the entry is
+  not written yet when it is persisted. With `batch_size: 0`, the provider adds the `id` of the inserted row to the
+  payload once the entry is written.
+- **Failures fail the commit**: if an audit entry cannot be buffered (e.g. the storage mapper throws) or the buffered
+  audit entries cannot be written, the commit fails with the first of these failures and the audited transaction is
+  rolled back, so that no change is committed without its audit entries (with `batch_size: 0`, such a failure is
+  ignored and the audit entry is lost). This includes audit entries
+  stored on another connection (see [Multi-Database Configuration](multi-database.md)): those already written by an
+  early batch are deleted when the audited transaction is rolled back, as they are with `batch_size: 0`.
+- **Outside of a commit**: `DoctrineProvider::persist()` called directly, outside of the commit of an audited
+  transaction, still writes the audit entry immediately.
 
 ## 🗄️ Storage Mapper
 
