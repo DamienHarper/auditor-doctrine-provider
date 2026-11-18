@@ -13,6 +13,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\DummyEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
@@ -128,7 +129,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'First post', 'old' => null],
@@ -146,10 +147,152 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '7', 'class' => Post::class, 'label' => Post::class.'#7', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'Untitled', 'old' => null],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyInsertJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'insert', '90', [
+            '@source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'title' => ['new' => 'First post'],
+            'settings' => [
+                'theme' => ['new' => 'dark'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'First post', 'old' => null],
+                'settings' => [
+                    'theme' => ['new' => 'dark'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
+            ],
+            'deep_diffs' => ['settings'],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyUpdateJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'update', '90', [
+            'title' => ['new' => 'Second title', 'old' => 'First title'],
+            'settings' => [
+                'theme' => ['new' => 'dark', 'old' => 'light'],
+                'lang' => ['old' => 'fr'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => Post::class, 'label' => Post::class.'#90', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'Second title', 'old' => 'First title'],
+                'settings' => [
+                    'theme' => ['new' => 'dark', 'old' => 'light'],
+                    'lang' => ['old' => 'fr'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
+            ],
+            'deep_diffs' => ['settings'],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    /**
+     * A JSON value whose root only has a "new" key ({"new": "dark"}) yields the deep diff
+     * {"new": {"new": "dark"}}, shaped like the field diff of an association ({"new": summary}).
+     * The entity metadata tells them apart.
+     */
+    public function testConvertDiffsKeepsLegacyInsertJsonDeepDiffWithNewKeyAtRoot(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'insert', '90', [
+            'label' => ['new' => 'label'],
+            'json_array' => ['new' => ['new' => 'dark']],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'label' => ['new' => 'label', 'old' => null],
+                'json_array' => ['new' => ['new' => 'dark']],
+            ],
+            'deep_diffs' => ['json_array'],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * {"new": 1} updated to {"new": 2} yields the deep diff {"new": {"new": 2, "old": 1}}.
+     */
+    public function testConvertDiffsKeepsLegacyUpdateJsonDeepDiffWithNewKeyAtRoot(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['new' => ['new' => 2, 'old' => 1]],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'json_array' => ['new' => ['new' => 2, 'old' => 1]],
+            ],
+            'deep_diffs' => ['json_array'],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * A JSON field whose value went from a scalar to an array got a field diff: it stays one.
+     */
+    public function testConvertDiffsNormalizesLegacyJsonFieldDiff(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['old' => 'scalar', 'new' => ['new' => 1]],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'json_array' => ['new' => ['new' => 1], 'old' => 'scalar'],
+            ],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * The field diff of an association ({"new": summary}) only holds arrays: it stays a field diff.
+     */
+    public function testConvertDiffsNormalizesLegacyAssociationFieldDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $author = ['id' => 1, 'class' => Author::class, 'label' => 'An author', 'table' => 'author'];
+        $id = $this->insertLegacyRow('post_audit', 'update', '90', [
+            'author' => ['new' => $author],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => Post::class, 'label' => Post::class.'#90', 'table' => 'post'],
+            'changes' => [
+                'author' => ['new' => $author, 'old' => null],
             ],
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
@@ -163,7 +306,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '12', 'class' => Post::class, 'label' => Post::class.'#12', 'table' => 'post'],
             'changes' => [
                 'title' => ['new' => 'Final', 'old' => 'Draft'],
@@ -180,7 +323,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '3', 'class' => Car::class, 'label' => Car::class.'#3', 'table' => 'vehicle'],
             'changes' => [
                 'wheels' => ['new' => 3, 'old' => 4],
@@ -197,7 +340,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '3', 'class' => '', 'label' => '', 'table' => 'vehicle'],
             'changes' => [
                 'wheels' => ['new' => 3, 'old' => 4],
@@ -214,7 +357,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
             'changes' => [],
         ], $this->fetchConvertedDiffs('post_audit', $id));
@@ -227,7 +370,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $this->executeConvertDiffs();
 
-        $this->assertSame([
+        $this->assertSameDiffs([
             'source' => ['id' => '90', 'class' => Post::class, 'label' => Post::class.'#90', 'table' => 'post'],
             'changes' => [],
         ], $this->fetchConvertedDiffs('post_audit', $id));
@@ -244,6 +387,7 @@ final class MigrateSchemaCommandTest extends TestCase
             Post::class => ['enabled' => true],
             Comment::class => ['enabled' => true],
             Tag::class => ['enabled' => true],
+            DummyEntity::class => ['enabled' => true],
             Vehicle::class => ['enabled' => true],
             Car::class => ['enabled' => true],
             Bike::class => ['enabled' => true],
@@ -260,7 +404,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $schema = $schemaManager->introspectSchema();
 
         foreach ($schema->getTables() as $table) {
-            $name = $table->getName();
+            $name = $table->getObjectName()->getUnqualifiedName()->getValue();
             if (!str_ends_with((string) $name, '_audit')) {
                 continue;
             }
@@ -347,6 +491,30 @@ final class MigrateSchemaCommandTest extends TestCase
 
         /** @var array<string, mixed> $diffs */
         return $diffs;
+    }
+
+    /**
+     * Compares converted diffs regardless of key order: JSON columns on MySQL and PostgreSQL (jsonb)
+     * do not preserve the order of object keys.
+     *
+     * @param array<array-key, mixed> $expected
+     * @param array<array-key, mixed> $actual
+     */
+    private function assertSameDiffs(array $expected, array $actual): void
+    {
+        $this->assertSame($this->sortKeysRecursively($expected), $this->sortKeysRecursively($actual));
+    }
+
+    /**
+     * @param array<array-key, mixed> $array
+     *
+     * @return array<array-key, mixed>
+     */
+    private function sortKeysRecursively(array $array): array
+    {
+        ksort($array);
+
+        return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeysRecursively($value) : $value, $array);
     }
 
     private function auditConnection(): Connection

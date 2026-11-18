@@ -7,6 +7,7 @@ namespace DH\Auditor\Provider\Doctrine\Persistence\Command;
 use DH\Auditor\Auditor;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
@@ -18,6 +19,7 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\ComparatorConfig;
 use Doctrine\DBAL\Schema\TableEditor;
+use Doctrine\ORM\Mapping\FieldMapping;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Command\LockableTrait;
@@ -153,7 +155,6 @@ final class MigrateSchemaCommand extends Command
 
         // Tables to use for diffs conversion: DDL tables + diffs-only tables (already migrated DDL).
         $allDiffsTables = array_merge($tables, $diffsOnlyTables);
-        $auditedEntities = $this->collectAuditedEntities($provider, $schemaManager);
 
         $hasAdditive = [] !== array_filter(array_column($allDdlSqls, 'additive'));
         $hasDestructive = [] !== array_filter(array_column($allDdlSqls, 'destructive'));
@@ -242,7 +243,13 @@ final class MigrateSchemaCommand extends Command
         if ($convertDiffs) {
             $io->newLine();
             $io->text('<comment>Converting legacy diffs...</comment>');
-            $this->convertDiffsAcrossTables($allDiffsTables, $auditedEntities, $limit, $io);
+            $this->convertDiffsAcrossTables(
+                $allDiffsTables,
+                $this->collectJsonFields($provider, $schemaManager),
+                $this->collectAuditedEntities($provider, $schemaManager),
+                $limit,
+                $io,
+            );
         }
 
         // Phase 2: destructive DDL — drop legacy columns
@@ -674,12 +681,52 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
+     * Lists, per audit table, the fields of the audited entities that are mapped to a JSON type.
+     * Entities that share an audit table (single table inheritance) add up their fields.
+     *
+     * @return array<string, array<string, true>> field names as keys, keyed by audit table name
+     */
+    private function collectJsonFields(DoctrineProvider $provider, SchemaManager $schemaManager): array
+    {
+        /** @var Configuration $configuration */
+        $configuration = $provider->getConfiguration();
+        $jsonFields = [];
+
+        foreach (array_keys($configuration->getEntities()) as $entity) {
+            $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
+            if (null === $auditTableName) {
+                continue;
+            }
+
+            try {
+                $entityManager = $provider->getAuditingServiceForEntity($entity)->getEntityManager();
+            } catch (\InvalidArgumentException) {
+                // Not managed by any auditing entity manager: its JSON fields cannot be told apart.
+                continue;
+            }
+
+            $connection = $entityManager->getConnection();
+            $jsonTypes = DoctrineHelper::jsonTypes($connection);
+
+            foreach ($entityManager->getClassMetadata($entity)->fieldMappings as $fieldName => $mapping) {
+                $type = $mapping instanceof FieldMapping ? $mapping->type : $mapping['type'];
+                if (\in_array(DoctrineHelper::getType($connection, $type), $jsonTypes, true)) {
+                    $jsonFields[$auditTableName][$fieldName] = true;
+                }
+            }
+        }
+
+        return $jsonFields;
+    }
+
+    /**
      * Converts legacy diffs JSON across all tables, respecting an optional global row limit.
      *
      * @param array<string, Connection>                                  $tables
-     * @param array<string, array{table: string, classes: list<string>}> $auditedEntities
+     * @param array<string, array<string, true>>                         $jsonFields      JSON fields per audit table (see collectJsonFields())
+     * @param array<string, array{table: string, classes: list<string>}> $auditedEntities audited entities per audit table (see collectAuditedEntities())
      */
-    private function convertDiffsAcrossTables(array $tables, array $auditedEntities, ?int $limit, SymfonyStyle $io): void
+    private function convertDiffsAcrossTables(array $tables, array $jsonFields, array $auditedEntities, ?int $limit, SymfonyStyle $io): void
     {
         // Count total rows to convert across all tables for estimation
         $totalRows = 0;
@@ -708,7 +755,7 @@ final class MigrateSchemaCommand extends Command
             }
 
             $auditedEntity = $auditedEntities[$tableName] ?? ['table' => '', 'classes' => []];
-            $convertedInTable = $this->convertDiffsForTable($tableName, $connection, $auditedEntity, $io, $remaining);
+            $convertedInTable = $this->convertDiffsForTable($tableName, $connection, $jsonFields[$tableName] ?? [], $auditedEntity, $io, $remaining);
             $convertedTotal += $convertedInTable;
 
             if (null !== $remaining) {
@@ -744,12 +791,13 @@ final class MigrateSchemaCommand extends Command
      * by the WHERE clause, so the query always returns the next unconverted batch from offset 0.
      * This makes the operation safe to resume after an interruption.
      *
+     * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
      * @param ?int                                        $limit         Maximum number of rows to convert (null = no limit)
      *
      * @return int Number of rows converted
      */
-    private function convertDiffsForTable(string $tableName, Connection $connection, array $auditedEntity, SymfonyStyle $io, ?int $limit): int
+    private function convertDiffsForTable(string $tableName, Connection $connection, array $jsonFields, array $auditedEntity, SymfonyStyle $io, ?int $limit): int
     {
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
@@ -779,7 +827,7 @@ final class MigrateSchemaCommand extends Command
             }
 
             foreach ($rows as $row) {
-                $newDiffs = $this->convertLegacyDiffs($row, $auditedEntity);
+                $newDiffs = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
                 $connection->update(
                     $tableName,
                     ['diffs' => json_encode($newDiffs, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'schema_version' => 2],
@@ -799,20 +847,22 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
-     * Converts a single legacy diffs value to the new {source, changes} envelope.
+     * Converts a single legacy diffs value to the new {source, changes, deep_diffs} envelope ('deep_diffs' only when not empty).
      *
      * Legacy formats per operation type:
      *  INSERT: {'@source': {id,class,label,table}, 'field': {'new': value}, ...}
      *  UPDATE: {'field': {'new': v, 'old': v}, ...} ('@source' was stripped before persisting)
+     *  JSON fields (INSERT/UPDATE): nested deep diff, e.g. {'settings': {'theme': {'new': v, 'old': v}}}
      *  REMOVE: {'class': ..., 'id': ..., 'label': ..., 'table': ...}
      *  ASSOCIATE/DISSOCIATE: {'source': {...}, 'target': {...}, 'is_owning_side': bool, 'table': 'join_table'}
      *
      * '@source' is reused whenever present; otherwise the source is built from the row and the audited entity.
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array{table: string, classes: list<string>}                                               $auditedEntity
+     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
-    private function convertLegacyDiffs(array $row, array $auditedEntity): array
+    private function convertLegacyDiffs(array $row, array $jsonFields, array $auditedEntity): array
     {
         $rawDiffs = json_decode((string) ($row['diffs'] ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
         if (!\is_array($rawDiffs)) {
@@ -820,8 +870,7 @@ final class MigrateSchemaCommand extends Command
         }
 
         return match ($row['type']) {
-            'insert' => $this->convertInsertDiffs($rawDiffs, $row, $auditedEntity),
-            'update' => $this->convertUpdateDiffs($rawDiffs, $row, $auditedEntity),
+            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row, $jsonFields, $auditedEntity),
             'remove' => $this->convertRemoveDiffs($rawDiffs, $row, $auditedEntity),
             'associate', 'dissociate' => $this->convertAssociateDiffs($rawDiffs),
             default => $rawDiffs,
@@ -829,41 +878,62 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
+     * Converts INSERT and UPDATE diffs.
+     *
+     * Field diffs ({'new': v} and/or {'old': v}) are normalized to {'new': v, 'old': v}.
+     * JSON deep diffs already have the v2 shape: they are carried over unchanged and listed in 'deep_diffs'.
+     *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array{table: string, classes: list<string>}                                               $auditedEntity
+     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
+     * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
-    private function convertInsertDiffs(array $diffs, array $row, array $auditedEntity): array
+    private function convertChangeDiffs(array $diffs, array $row, array $jsonFields, array $auditedEntity): array
     {
         $source = $this->extractLegacySource($diffs, $row, $auditedEntity);
         unset($diffs['@source']);
 
         $changes = [];
+        $deepDiffs = [];
         foreach ($diffs as $field => $diff) {
-            if (\is_array($diff) && \array_key_exists('new', $diff)) {
-                $changes[$field] = ['new' => $diff['new'], 'old' => $diff['old'] ?? null];
+            if (!\is_array($diff)) {
+                continue;
+            }
+
+            if ($this->isFieldDiff($diff, isset($jsonFields[$field]))) {
+                $changes[$field] = ['new' => $diff['new'] ?? null, 'old' => $diff['old'] ?? null];
+            } else {
+                $changes[$field] = $diff;
+                $deepDiffs[] = (string) $field;
             }
         }
 
-        return ['source' => $source, 'changes' => $changes];
+        $converted = ['source' => $source, 'changes' => $changes];
+        if ([] !== $deepDiffs) {
+            $converted['deep_diffs'] = $deepDiffs;
+        }
+
+        return $converted;
     }
 
     /**
-     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array{table: string, classes: list<string>}                                               $auditedEntity
+     * Tells a field diff ({'new': v} and/or {'old': v}) apart from a JSON deep diff.
+     *
+     * A field diff only has 'new'/'old' keys. So has the deep diff of a JSON object whose own keys are
+     * 'new'/'old', but the values of a deep diff are always nested diffs (arrays), whereas a JSON field
+     * only gets a field diff when one of its sides is a scalar. A field that is not a JSON field of the
+     * audited entity (or no longer exists) keeps the reading by keys only.
      */
-    private function convertUpdateDiffs(array $diffs, array $row, array $auditedEntity): array
+    private function isFieldDiff(array $diff, bool $isJsonField): bool
     {
-        $source = $this->extractLegacySource($diffs, $row, $auditedEntity);
-        unset($diffs['@source']);
-
-        $changes = [];
-        foreach ($diffs as $field => $diff) {
-            if (\is_array($diff)) {
-                $changes[$field] = ['new' => $diff['new'] ?? null, 'old' => $diff['old'] ?? null];
-            }
+        if ([] === $diff || [] !== array_diff(array_keys($diff), ['new', 'old'])) {
+            return false;
         }
 
-        return ['source' => $source, 'changes' => $changes];
+        if (!$isJsonField) {
+            return true;
+        }
+
+        return array_any($diff, static fn (mixed $value): bool => !\is_array($value));
     }
 
     /**

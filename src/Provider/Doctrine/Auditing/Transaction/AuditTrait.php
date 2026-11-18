@@ -170,9 +170,12 @@ trait AuditTrait
      *       'nested' => ['old' => $old, 'new' => $new],           // deep diff for JSON columns
      *     ],
      *   ],
+     *   'deep_diffs' => ['jsonField'],                             // only when at least one deep diff
      * ]
      *
-     * Both 'old' and 'new' keys are always present for every changed field.
+     * Both 'old' and 'new' keys are always present for every field diff. A deep diff only holds the
+     * keys that changed, so a JSON object whose own keys are 'new'/'old' gives a deep diff shaped like
+     * a field diff: 'deep_diffs' lists the fields whose change is a deep diff to tell them apart.
      *
      * @throws MappingException
      * @throws Exception
@@ -185,6 +188,7 @@ trait AuditTrait
         $connection = $entityManager->getConnection();
         $source = $this->summarize($entityManager, $entity, [], $meta);
         $changes = [];
+        $deepDiffs = [];
 
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
@@ -268,6 +272,7 @@ trait AuditTrait
                      * @var ?array $n
                      */
                     $changes[$fieldName] = $this->deepDiff($o, $n);
+                    $deepDiffs[] = $fieldName;
                 } else {
                     // Always include both old and new, even when null (e.g. INSERT has old=null)
                     $changes[$fieldName] = ['new' => $n, 'old' => $o];
@@ -275,10 +280,16 @@ trait AuditTrait
             }
         }
 
-        return [
+        $diff = [
             'source' => $source,
             'changes' => $changes,
         ];
+
+        if ([] !== $deepDiffs) {
+            $diff['deep_diffs'] = $deepDiffs;
+        }
+
+        return $diff;
     }
 
     /**
