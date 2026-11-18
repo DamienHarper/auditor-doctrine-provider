@@ -182,6 +182,11 @@ $configuration = new Configuration([
 ]);
 ```
 
+> [!TIP]
+> With 500 to 1,000 audited entities per flush, `batch_size: 500` made a flush 10 to 18 % faster on SQLite, 19 to
+> 51 % faster on MySQL and 44 to 67 % faster on PostgreSQL in our measurements: see [Performance](performance.md) for
+> the method, the full results and how to reproduce them.
+
 - **When**: the buffered audit entries are written right before the `COMMIT` of the audited transaction, or as soon
   as `batch_size` entries are buffered. Values between `100` and `1000` are a good start: the larger the value, the
   fewer statements, but the more memory the buffer holds for a large transaction.
@@ -331,3 +336,4 @@ $configuration = new Configuration([
 - 🏷️ [Attributes Reference](attributes.md)
 - 🗄️ [Multi-Database Setup](multi-database.md)
 - 🛠️ [Schema Management](schema.md)
+- 📊 [Performance](performance.md)
