@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing;
 
+use DH\Auditor\Model\Entry;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\DummyEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ReaderTrait;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
@@ -68,6 +69,7 @@ final class JsonTest extends TestCase
                 'old' => null,
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
+        $this->assertSame(['json_array'], $this->fetchRawDiffs($entry)['deep_diffs'] ?? null);
     }
 
     public function testJsonUpdateExistingField(): void
@@ -249,6 +251,87 @@ final class JsonTest extends TestCase
                 ],
             ],
         ], $entry->getDiffs(), 'audit entry diffs is ok.');
+    }
+
+    /**
+     * A JSON value whose root only has "new"/"old" keys yields a deep diff with the shape of a
+     * field diff: {"new": 1} updated to {"new": 2} is stored as {"new": {"new": 2, "old": 1}}.
+     * "deep_diffs" tells readers that it is a deep diff.
+     */
+    public function testJsonUpdateWithNewKeyAtRootIsListedAsDeepDiff(): void
+    {
+        $storageServices = [
+            DummyEntity::class => $this->provider->getStorageServiceForEntity(DummyEntity::class),
+        ];
+
+        $reader = $this->createReader();
+
+        $dummy = new DummyEntity();
+        $dummy->setLabel('label')->setJsonArray(['new' => 1]);
+
+        $storageServices[DummyEntity::class]->getEntityManager()->persist($dummy);
+        $this->flushAll($storageServices);
+
+        $dummy->setJsonArray(['new' => 2]);
+        $this->flushAll($storageServices);
+
+        $audits = $reader->createQuery(DummyEntity::class)->execute();
+        $this->assertCount(2, $audits, 'results count ok.');
+        [$update, $insert] = $audits;
+
+        $this->assertSame(['json_array' => ['new' => ['new' => 2, 'old' => 1]]], $update->getDiffs());
+        $this->assertSame(['json_array'], $this->fetchRawDiffs($update)['deep_diffs'] ?? null);
+
+        $this->assertSame([
+            'json_array' => ['new' => ['new' => 1]],
+            'label' => ['new' => 'label', 'old' => null],
+        ], $insert->getDiffs());
+        $this->assertSame(['json_array'], $this->fetchRawDiffs($insert)['deep_diffs'] ?? null);
+    }
+
+    /**
+     * A JSON field whose value goes from a scalar to an array gets a field diff, not a deep diff.
+     */
+    public function testJsonFieldDiffIsNotListedAsDeepDiff(): void
+    {
+        $storageServices = [
+            DummyEntity::class => $this->provider->getStorageServiceForEntity(DummyEntity::class),
+        ];
+
+        $reader = $this->createReader();
+
+        $dummy = new DummyEntity();
+        $dummy->setLabel('label')->setJsonArray('scalar');
+
+        $storageServices[DummyEntity::class]->getEntityManager()->persist($dummy);
+        $this->flushAll($storageServices);
+
+        $dummy->setJsonArray(['new' => 1]);
+        $this->flushAll($storageServices);
+
+        $audits = $reader->createQuery(DummyEntity::class)->execute();
+        $this->assertCount(2, $audits, 'results count ok.');
+        [$update, $insert] = $audits;
+
+        $this->assertSame(['json_array' => ['new' => ['new' => 1], 'old' => 'scalar']], $update->getDiffs());
+        $this->assertArrayNotHasKey('deep_diffs', $this->fetchRawDiffs($update));
+        $this->assertArrayNotHasKey('deep_diffs', $this->fetchRawDiffs($insert));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchRawDiffs(Entry $entry): array
+    {
+        $connection = $this->provider->getStorageServiceForEntity(DummyEntity::class)->getEntityManager()->getConnection();
+        $diffs = $connection->fetchOne('SELECT diffs FROM dummy_entity_audit WHERE id = ?', [$entry->id]);
+        $this->assertIsString($diffs);
+
+        $decoded = json_decode($diffs, true, 512, JSON_THROW_ON_ERROR);
+        $this->assertIsArray($decoded);
+
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
     }
 
     private function configureEntities(): void

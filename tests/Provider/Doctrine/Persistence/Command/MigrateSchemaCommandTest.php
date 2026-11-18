@@ -10,6 +10,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\DummyEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
@@ -174,6 +175,7 @@ final class MigrateSchemaCommandTest extends TestCase
                     'notifications' => ['email' => ['new' => true]],
                 ],
             ],
+            'deep_diffs' => ['settings'],
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
@@ -200,6 +202,94 @@ final class MigrateSchemaCommandTest extends TestCase
                     'lang' => ['old' => 'fr'],
                     'notifications' => ['email' => ['new' => true]],
                 ],
+            ],
+            'deep_diffs' => ['settings'],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    /**
+     * A JSON value whose root only has a "new" key ({"new": "dark"}) yields the deep diff
+     * {"new": {"new": "dark"}}, shaped like the field diff of an association ({"new": summary}).
+     * The entity metadata tells them apart.
+     */
+    public function testConvertDiffsKeepsLegacyInsertJsonDeepDiffWithNewKeyAtRoot(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'insert', '90', [
+            'label' => ['new' => 'label'],
+            'json_array' => ['new' => ['new' => 'dark']],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'label' => ['new' => 'label', 'old' => null],
+                'json_array' => ['new' => ['new' => 'dark']],
+            ],
+            'deep_diffs' => ['json_array'],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * {"new": 1} updated to {"new": 2} yields the deep diff {"new": {"new": 2, "old": 1}}.
+     */
+    public function testConvertDiffsKeepsLegacyUpdateJsonDeepDiffWithNewKeyAtRoot(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['new' => ['new' => 2, 'old' => 1]],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'json_array' => ['new' => ['new' => 2, 'old' => 1]],
+            ],
+            'deep_diffs' => ['json_array'],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * A JSON field whose value went from a scalar to an array got a field diff: it stays one.
+     */
+    public function testConvertDiffsNormalizesLegacyJsonFieldDiff(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['old' => 'scalar', 'new' => ['new' => 1]],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'json_array' => ['new' => ['new' => 1], 'old' => 'scalar'],
+            ],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * The field diff of an association ({"new": summary}) only holds arrays: it stays a field diff.
+     */
+    public function testConvertDiffsNormalizesLegacyAssociationFieldDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $author = ['id' => 1, 'class' => Author::class, 'label' => 'An author', 'table' => 'author'];
+        $id = $this->insertLegacyRow('post_audit', 'update', '90', [
+            'author' => ['new' => $author],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'author' => ['new' => $author, 'old' => null],
             ],
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
@@ -230,6 +320,7 @@ final class MigrateSchemaCommandTest extends TestCase
             Post::class => ['enabled' => true],
             Comment::class => ['enabled' => true],
             Tag::class => ['enabled' => true],
+            DummyEntity::class => ['enabled' => true],
         ]);
     }
 
