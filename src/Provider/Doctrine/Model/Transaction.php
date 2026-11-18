@@ -17,9 +17,21 @@ final class Transaction extends BaseTransaction
      */
     private \WeakMap $removedIds;
 
-    public function __construct(private readonly EntityManagerInterface $entityManager)
-    {
+    /**
+     * @param ?string $transactionId identifier shared with another transaction model written in the same database
+     *                               transaction, generated when null
+     */
+    public function __construct(
+        private readonly EntityManagerInterface $entityManager,
+        private readonly ?string $transactionId = null,
+    ) {
         $this->removedIds = new \WeakMap();
+    }
+
+    #[\Override]
+    public function getTransactionId(): string
+    {
+        return $this->transactionId ?? parent::getTransactionId();
     }
 
     public function getEntityManager(): EntityManagerInterface

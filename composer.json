@@ -17,6 +17,7 @@
     "damienharper/auditor": "^5.0@dev",
     "doctrine/dbal": "^4.6",
     "doctrine/orm": "^3.7",
+    "psr/log": "^1.1 || ^2.0 || ^3.0",
     "symfony/cache": "^8.0",
     "symfony/lock": "^8.0"
   },

@@ -24,6 +24,11 @@ final class AuditorDriver extends AbstractDriverMiddleware
     private array $rollbackHandlerList = [];
 
     /**
+     * Innermost savepoint of the database transaction in progress, tracked from the statements run by the connection.
+     */
+    private ?Savepoint $currentSavepoint = null;
+
+    /**
      * Audit entries of the commit in progress written with multi-row INSERT statements (`batch_size` option).
      */
     private readonly AuditInsertBuffer $insertBuffer;
@@ -77,5 +82,54 @@ final class AuditorDriver extends AbstractDriverMiddleware
     public function getRollbackHandlerList(): array
     {
         return $this->rollbackHandlerList;
+    }
+
+    public function getCurrentSavepoint(): ?Savepoint
+    {
+        return $this->currentSavepoint;
+    }
+
+    public function createSavepoint(string $name): void
+    {
+        $this->currentSavepoint = new Savepoint($name, $this->currentSavepoint);
+    }
+
+    /**
+     * Releasing a savepoint also releases the ones created after it: their changes now belong to its parent.
+     */
+    public function releaseSavepoint(string $name): void
+    {
+        $savepoint = $this->findSavepoint($name);
+        if ($savepoint instanceof Savepoint) {
+            $this->currentSavepoint = $savepoint->parent;
+        }
+    }
+
+    /**
+     * The savepoint rolled back to stays established: the changes made after the rollback start a new one.
+     */
+    public function rollbackSavepoint(string $name): void
+    {
+        $savepoint = $this->findSavepoint($name);
+        if ($savepoint instanceof Savepoint) {
+            $savepoint->rollBack();
+            $this->currentSavepoint = new Savepoint($savepoint->name, $savepoint->parent);
+        }
+    }
+
+    public function resetSavepoints(): void
+    {
+        $this->currentSavepoint = null;
+    }
+
+    private function findSavepoint(string $name): ?Savepoint
+    {
+        for ($savepoint = $this->currentSavepoint; $savepoint instanceof Savepoint; $savepoint = $savepoint->parent) {
+            if ($savepoint->name === $name) {
+                return $savepoint;
+            }
+        }
+
+        return null;
     }
 }

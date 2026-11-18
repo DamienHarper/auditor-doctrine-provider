@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Event;
 
+use DH\Auditor\Event\LifecycleEvent;
 use DH\Auditor\Provider\Doctrine\Auditing\Event\DoctrineSubscriber;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
+use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\Event\PostFlushEventArgs;
 use Doctrine\ORM\Event\PostPersistEventArgs;
 use Doctrine\ORM\Events;
@@ -163,5 +165,208 @@ trait NestedFlushTestsTrait
         $this->assertSame(2, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
         $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
         $this->assertCount(2, $audits, 'The audit entries of committed changes must not be lost.');
+    }
+
+    /**
+     * A listener of the audit events flushing the same entity manager runs while the audit entries are written:
+     * the entries of that flush must be written too, with the same transaction id.
+     */
+    public function testAFlushFromAnAuditEventListenerIsAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $existing = new Author()->setFullname('Existing')->setEmail('existing@example.com');
+        $em->persist($existing);
+        $em->flush();
+
+        $flushed = false;
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$flushed, $em, $existing): void {
+            if (!$flushed) {
+                $flushed = true;
+                $existing->setFullname('Existing changed');
+                $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+                $em->flush();
+            }
+        }, 10);
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $this->assertSame(3, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
+        $audits = new Reader($this->provider)->createQuery(Author::class, ['type' => ['insert', 'update']])->execute();
+        $transactionIds = [];
+        $entries = [];
+        foreach ($audits as $entry) {
+            if ('1' === $entry->objectId && 'insert' === $entry->type) {
+                continue; // the entry of the initial flush
+            }
+
+            $entries[] = $entry->type.':'.$entry->objectId;
+            $transactionIds[] = $entry->transactionId;
+        }
+
+        sort($entries);
+        $this->assertSame(['insert:2', 'insert:3', 'update:1'], $entries, 'The audit entries of the flush run from a listener must not be lost.');
+        $this->assertCount(1, array_unique($transactionIds), 'Both flushes are written in the same database transaction.');
+    }
+
+    /**
+     * A listener of the audit events flushing another entity manager sharing the connection registers a flusher
+     * while the flushers run: it must run before the commit.
+     */
+    public function testAFlushOfAnotherEntityManagerFromAnAuditEventListenerIsAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+        $otherEm = new EntityManager($connection, $em->getConfiguration(), $em->getEventManager());
+
+        $flushed = false;
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$flushed, $otherEm): void {
+            if (!$flushed) {
+                $flushed = true;
+                $otherEm->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+                $otherEm->flush();
+            }
+        }, 10);
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $this->assertSame(2, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
+        $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
+        $this->assertCount(2, $audits, 'The audit entries of the other entity manager must not be lost.');
+
+        // the other entity manager's next flush is audited on its own
+        $otherEm->persist(new Author()->setFullname('Jim Doe')->setEmail('jim@example.com'));
+        $otherEm->flush();
+
+        $this->assertCount(3, new Reader($this->provider)->createQuery(Author::class)->execute());
+    }
+
+    /**
+     * DBAL rolls a nested transaction back to its savepoint: the audit entries of the flushes it contains must not
+     * be written when the outer transaction is committed.
+     */
+    public function testAFlushOfARolledBackNestedTransactionIsNotAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+        $em->flush();
+
+        $connection->rollBack();
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
+        $this->assertCount(1, $audits, 'The audit entries of the rolled-back nested transaction must not be written.');
+    }
+
+    /**
+     * EntityManager::wrapInTransaction() run inside an outer transaction rolls its nested transaction back when the
+     * callback fails after a successful flush.
+     */
+    public function testAFlushOfAFailedNestedWrapInTransactionIsNotAudited(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        try {
+            $em->wrapInTransaction(static function () use ($em): never {
+                $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+                $em->flush();
+
+                throw new \RuntimeException('business failure');
+            });
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertSame('business failure', $runtimeException->getMessage());
+        }
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $this->assertCount(1, new Reader($this->provider)->createQuery(Author::class)->execute());
+    }
+
+    /**
+     * DBAL names the savepoint of a nested transaction after its nesting level: a committed nested transaction
+     * followed by a rolled-back one at the same level reuse the same savepoint name.
+     */
+    public function testOnlyTheRolledBackNestedTransactionOfALevelIsDiscarded(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $connection->beginTransaction();
+
+        $jane = new Author()->setFullname('Jane Doe')->setEmail('jane@example.com');
+        $em->persist($jane);
+        $em->flush();
+
+        $connection->rollBack();
+        // the row is gone: its identifier may be assigned again
+        $em->detach($jane);
+
+        $em->persist(new Author()->setFullname('Jim Doe')->setEmail('jim@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $this->assertSame(['John Doe', 'Jim Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author ORDER BY id'));
+        $audits = new Reader($this->provider)->createQuery(Author::class)->execute();
+        $this->assertCount(2, $audits);
+        $this->assertSame($audits[0]->transactionId, $audits[1]->transactionId);
+    }
+
+    /**
+     * Rolling a nested transaction back also discards the nested transactions it contains, committed or not.
+     */
+    public function testRollingBackANestedTransactionDiscardsTheNestedTransactionsItContains(): void
+    {
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $connection = $em->getConnection();
+
+        $connection->beginTransaction();
+
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+        $em->flush();
+
+        $connection->beginTransaction();
+        $em->persist(new Author()->setFullname('Jim Doe')->setEmail('jim@example.com'));
+        $em->flush();
+
+        $connection->commit();
+
+        $connection->rollBack();
+        $connection->commit();
+
+        $this->assertSame(['John Doe'], $connection->fetchFirstColumn('SELECT fullname FROM author'));
+        $this->assertCount(1, new Reader($this->provider)->createQuery(Author::class)->execute());
     }
 }

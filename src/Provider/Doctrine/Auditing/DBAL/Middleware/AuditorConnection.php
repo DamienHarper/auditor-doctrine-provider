@@ -20,21 +20,51 @@ final class AuditorConnection extends AbstractConnectionMiddleware
      */
     private const array ROLLED_BACK_SQLSTATES = ['40001', '40002', '40P01'];
 
+    /**
+     * Savepoint statements of the DBAL platforms: SAVEPOINT, RELEASE SAVEPOINT and ROLLBACK TO SAVEPOINT, or
+     * SAVE TRANSACTION and ROLLBACK TRANSACTION (SQL Server).
+     */
+    private const string SAVEPOINT_PATTERN = '/^\s*(SAVEPOINT|SAVE\s+TRANSACTION|RELEASE\s+SAVEPOINT|ROLLBACK\s+TO\s+SAVEPOINT|ROLLBACK\s+TRANSACTION)\s+(\S+?)\s*;?\s*$/i';
+
     public function __construct(ConnectionInterface $connection, private readonly AuditorDriver $auditorDriver)
     {
         parent::__construct($connection);
     }
 
+    /**
+     * DBAL runs the savepoint statements of the nested transactions through exec(): they are tracked so that the
+     * audit entries of a rolled-back nested transaction are not written.
+     */
+    #[\Override]
+    public function exec(string $sql): int|string
+    {
+        $result = parent::exec($sql);
+
+        $firstLetter = mb_strtoupper(mb_ltrim($sql)[0] ?? '');
+        if (('S' === $firstLetter || 'R' === $firstLetter) && 1 === preg_match(self::SAVEPOINT_PATTERN, $sql, $matches)) {
+            match (mb_strtoupper((string) preg_replace('/\s+/', ' ', $matches[1]))) {
+                'SAVEPOINT', 'SAVE TRANSACTION' => $this->auditorDriver->createSavepoint($matches[2]),
+                'RELEASE SAVEPOINT' => $this->auditorDriver->releaseSavepoint($matches[2]),
+                default => $this->auditorDriver->rollbackSavepoint($matches[2]),
+            };
+        }
+
+        return $result;
+    }
+
     #[\Override]
     public function commit(): void
     {
-        $flusherList = $this->auditorDriver->getFlusherList();
-
         $insertBuffer = $this->auditorDriver->getInsertBuffer();
 
         try {
-            foreach ($flusherList as $flusher) {
-                ($flusher)();
+            // A flusher may register another one, e.g. when a listener of the audit events flushes another entity
+            // manager sharing this connection: it runs in the same pass, before the COMMIT.
+            while ([] !== ($flusherList = $this->auditorDriver->getFlusherList())) {
+                $this->auditorDriver->resetFlusherList();
+                foreach ($flusherList as $flusher) {
+                    ($flusher)();
+                }
             }
 
             // audit entries buffered by the flushers (`batch_size` option), written before the COMMIT so that
@@ -58,12 +88,11 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             }
 
             // No COMMIT was sent: the transaction is not committed, whether the rollback succeeded or not.
+            $this->auditorDriver->resetSavepoints();
             $this->runRollbackHandlers();
 
             throw $failure;
         }
-
-        $this->auditorDriver->resetFlusherList();
 
         try {
             parent::commit();
@@ -77,6 +106,7 @@ final class AuditorConnection extends AbstractConnectionMiddleware
 
             throw $driverException;
         } finally {
+            $this->auditorDriver->resetSavepoints();
             $this->auditorDriver->resetRollbackHandlerList();
         }
     }
@@ -87,6 +117,7 @@ final class AuditorConnection extends AbstractConnectionMiddleware
         $this->auditorDriver->resetFlusherList();
         $this->auditorDriver->getInsertBuffer()->discard();
         $this->auditorDriver->resetRollbackHandlerList();
+        $this->auditorDriver->resetSavepoints();
 
         parent::rollBack();
     }
@@ -108,7 +139,8 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             try {
                 $handler();
             } catch (\Throwable) {
-                // best effort: the commit failure must not be hidden, the remaining handlers still run
+                // Last resort: a handler reports its own failures (the provider's ones log them), the commit failure
+                // must not be hidden and the remaining handlers still run.
             }
         }
     }

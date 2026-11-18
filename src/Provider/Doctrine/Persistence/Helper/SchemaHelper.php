@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Helper;
 
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\SchemaHelperTest;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\ColumnEditor;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Types;
 
+/**
+ * @see SchemaHelperTest
+ */
 abstract class SchemaHelper
 {
     /**
@@ -186,6 +190,10 @@ abstract class SchemaHelper
 
         if (\array_key_exists('length', $options)) {
             $editor->setLength($options['length']);
+        }
+
+        if (\array_key_exists('fixed', $options)) {
+            $editor->setFixed($options['fixed']);
         }
 
         if (\array_key_exists('notnull', $options)) {
