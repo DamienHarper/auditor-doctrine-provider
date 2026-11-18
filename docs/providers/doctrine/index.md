@@ -100,6 +100,7 @@ flowchart TB
 - [Services](services.md) — AuditingService and StorageService
 - [Schema Management](schema.md) — Audit table management
 - [Multi-Database](multi-database.md) — Store audits in a separate database
+- [Performance](performance.md) — Flush benchmarks and schema v2 migration duration
 
 ## 🚀 Basic Usage
 
