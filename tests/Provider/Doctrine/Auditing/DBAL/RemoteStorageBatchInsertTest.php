@@ -50,8 +50,11 @@ final class RemoteStorageBatchInsertTest extends TestCase
 
     public function testAuditEntriesOfEarlyBatchesAreWrittenWhenTheCommitSucceeds(): void
     {
+        $written = $this->recordWrittenAuditEntries();
+
         $this->flushAuthors('John Doe', 'Jane Doe', 'Luke Skywalker');
 
+        $this->assertSame([0, 2, 2], $written->getArrayCopy(), 'The first two audit entries are written early.');
         $this->assertSame(3, $this->countRows('author'));
         $this->assertSame(3, $this->countRows('author_audit', $this->storageConnection()));
     }
@@ -85,26 +88,48 @@ final class RemoteStorageBatchInsertTest extends TestCase
         $this->assertSame(0, $this->countRows('author'), 'Changes whose audit entries cannot be written must not be committed.');
     }
 
+    /**
+     * The early batch of the first two audit entries fails while they are persisted, where the auditor ignores
+     * exceptions: the commit must fail although the third entry alone could be written.
+     */
     public function testFailingToWriteAnEarlyBatchFailsTheCommit(): void
     {
-        $this->storageConnection()->executeStatement('DROP TABLE author_audit');
+        $this->invalidateAuditEntry(2);
 
         $this->assertFlushFails('John Doe', 'Jane Doe', 'Luke Skywalker');
 
         $this->assertSame(0, $this->countRows('author'), 'Changes whose audit entries cannot be written must not be committed.');
+        $this->assertSame(0, $this->countRows('author_audit', $this->storageConnection()));
+    }
+
+    public function testAuditEntriesOfEarlyBatchesAreDeletedWhenTheLastWriteFails(): void
+    {
+        $written = $this->recordWrittenAuditEntries();
+        $this->invalidateAuditEntry(3);
+
+        $this->assertFlushFails('John Doe', 'Jane Doe', 'Luke Skywalker');
+
+        $this->assertSame([0, 2, 2], $written->getArrayCopy(), 'The first two audit entries are written early.');
+        $this->assertSame(0, $this->countRows('author'));
+        $this->assertSame(0, $this->countRows('author_audit', $this->storageConnection()), 'The audit entries of the early batch must be deleted.');
     }
 
     public function testNoAuditEntryIsLeftWhenTheAuditFails(): void
     {
         $audited = 0;
-        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$audited): void {
+        $writtenEarly = null;
+        $storageConnection = $this->storageConnection();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$audited, &$writtenEarly, $storageConnection): void {
             if (3 === ++$audited) {
+                $writtenEarly = (int) $storageConnection->fetchOne('SELECT COUNT(*) FROM author_audit');
+
                 throw new \RuntimeException('audit failed');
             }
         }, 1_000);
 
         $this->assertFlushFails('John Doe', 'Jane Doe', 'Luke Skywalker');
 
+        $this->assertSame(2, $writtenEarly, 'The first two audit entries are written early.');
         $this->assertSame(0, $this->countRows('author'));
         $this->assertSame(0, $this->countRows('author_audit', $this->storageConnection()), 'The audit entries of the early batch must be deleted.');
     }
@@ -165,6 +190,36 @@ final class RemoteStorageBatchInsertTest extends TestCase
         $this->provider->registerAuditingService(new AuditingService('audited', new EntityManager($connection, $ormConfiguration)));
 
         $auditor->registerProvider($this->provider);
+    }
+
+    /**
+     * Makes the $nth audit entry invalid (null object id) before it is persisted.
+     */
+    private function invalidateAuditEntry(int $nth): void
+    {
+        $audited = 0;
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function (LifecycleEvent $event) use (&$audited, $nth): void {
+            if ($nth === ++$audited) {
+                $event->setPayload(['object_id' => null] + $event->getPayload());
+            }
+        });
+    }
+
+    /**
+     * Records the number of audit entries written on the storage connection once each audit entry is persisted.
+     *
+     * @return \ArrayObject<int, int>
+     */
+    private function recordWrittenAuditEntries(): \ArrayObject
+    {
+        /** @var \ArrayObject<int, int> $written */
+        $written = new \ArrayObject();
+        $storageConnection = $this->storageConnection();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use ($written, $storageConnection): void {
+            $written[] = (int) $storageConnection->fetchOne('SELECT COUNT(*) FROM author_audit');
+        }, -2_000_000);
+
+        return $written;
     }
 
     private function flushAuthors(string ...$fullnames): void

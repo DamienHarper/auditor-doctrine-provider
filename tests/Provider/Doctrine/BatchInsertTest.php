@@ -42,14 +42,18 @@ final class BatchInsertTest extends TestCase
     public function testBatchedAuditEntriesAreIdenticalToUnbatchedOnes(int $batchSize): void
     {
         $this->useProviderWithBatchSize(0);
+        $unbatchedIds = $this->recordPayloadIds();
         $this->runScenario();
         $unbatched = $this->snapshot();
 
         $this->useProviderWithBatchSize($batchSize);
+        $batchedIds = $this->recordPayloadIds();
         $this->runScenario();
         $batched = $this->snapshot();
 
-        $this->assertGreaterThan(99, \count($unbatched[Tag::class]), 'The scenario writes more audit entries than a statement holds.');
+        $this->assertGreaterThan(500, \count($unbatched[Tag::class]), 'The scenario writes more audit entries of a table than a statement holds.');
+        $this->assertNotContains(null, $unbatchedIds->getArrayCopy(), 'Without batching, audit entries are written one by one.');
+        $this->assertSame(array_fill(0, \count($unbatchedIds), null), $batchedIds->getArrayCopy(), 'With batching, every audit entry is buffered.');
         $this->assertSame($unbatched, $batched);
     }
 
@@ -148,8 +152,13 @@ final class BatchInsertTest extends TestCase
     public function testAuditEntriesOfAFailedCommitAreNotKept(): void
     {
         $audited = 0;
-        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$audited): void {
+        $writtenEarly = null;
+        $auditTable = $this->auditTable(Author::class);
+        $connection = $this->storageConnection();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$audited, &$writtenEarly, $auditTable, $connection): void {
             if (5 === ++$audited) {
+                $writtenEarly = (int) $connection->fetchOne('SELECT COUNT(*) FROM '.$auditTable);
+
                 throw new \RuntimeException('audit failed');
             }
         }, 1_000);
@@ -166,6 +175,7 @@ final class BatchInsertTest extends TestCase
             $this->assertSame('audit failed', $runtimeException->getMessage());
         }
 
+        $this->assertSame(3, $writtenEarly, 'The first three audit entries are written early, in the transaction.');
         $this->assertSame(0, (int) $this->storageConnection()->fetchOne('SELECT COUNT(*) FROM author'));
         $this->assertSame([], $this->auditedObjectIds(Author::class), 'The audit entries of the early batch are rolled back.');
     }
@@ -213,6 +223,25 @@ final class BatchInsertTest extends TestCase
 
         $this->provider->setStorageMapper(static fn (string $entity, array $storageServices): StorageServiceInterface => $storageServices['default']);
         $this->assertSame(0, (int) $this->storageConnection()->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame([], $this->auditedObjectIds(Author::class));
+    }
+
+    /**
+     * The early batch of the first two audit entries fails while they are persisted, where the auditor ignores
+     * exceptions: the commit must fail although the third entry alone could be written.
+     */
+    public function testAFailedEarlyBatchFailsTheCommit(): void
+    {
+        $this->useProviderWithBatchSize(2);
+        $this->invalidateAuditEntry(2);
+
+        $em = $this->entityManager();
+        foreach (['John Doe', 'Jane Doe', 'Luke Skywalker'] as $fullname) {
+            $em->persist(new Author()->setFullname($fullname)->setEmail('author@example.com'));
+        }
+
+        $this->assertCausedBy(NotNullConstraintViolationException::class, $this->flushFailure());
+        $this->assertSame(0, (int) $this->storageConnection()->fetchOne('SELECT COUNT(*) FROM author'), 'No change is committed without its audit entries.');
         $this->assertSame([], $this->auditedObjectIds(Author::class));
     }
 
@@ -374,6 +403,22 @@ final class BatchInsertTest extends TestCase
     }
 
     /**
+     * Records the id of each audit entry once it is persisted (null when it is buffered).
+     *
+     * @return \ArrayObject<int, mixed>
+     */
+    private function recordPayloadIds(): \ArrayObject
+    {
+        /** @var \ArrayObject<int, mixed> $ids */
+        $ids = new \ArrayObject();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function (LifecycleEvent $event) use ($ids): void {
+            $ids[] = $event->getPayload()['id'] ?? null;
+        }, -2_000_000);
+
+        return $ids;
+    }
+
+    /**
      * Inserts, updates, associations, dissociations and removals, in transactions opened by the flush or explicitly.
      */
     private function runScenario(): void
@@ -388,7 +433,7 @@ final class BatchInsertTest extends TestCase
         $comment1 = new Comment()->setBody('First comment')->setAuthor('Dark Vador')->setCreatedAt($createdAt);
         $comment2 = new Comment()->setBody('Second comment')->setAuthor('Yoshi')->setCreatedAt($createdAt);
         $tags = [];
-        for ($i = 1; $i <= 120; ++$i) {
+        for ($i = 1; $i <= 501; ++$i) {
             $tags[] = new Tag()->setTitle('tag'.$i);
         }
 
