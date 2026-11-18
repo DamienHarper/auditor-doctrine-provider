@@ -39,6 +39,8 @@ final class Configuration implements ConfigurationInterface
 
     private readonly bool $fullSnapshotOnRemove;
 
+    private readonly int $batchSize;
+
     private bool $initialized = false;
 
     /**
@@ -69,6 +71,7 @@ final class Configuration implements ConfigurationInterface
         $this->viewerPageSize = self::getViewerPageSizeFromConfig($config['viewer']);
         $this->utf8Convert = $config['utf8_convert'];
         $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
+        $this->batchSize = $config['batch_size'];
         $this->storageMapper = $config['storage_mapper'];
     }
 
@@ -177,6 +180,18 @@ final class Configuration implements ConfigurationInterface
     public function isFullSnapshotOnRemoveEnabled(): bool
     {
         return $this->fullSnapshotOnRemove;
+    }
+
+    /**
+     * Number of audit entries written by a single multi-row INSERT when a database transaction is committed.
+     *
+     * 0 (the default) writes each audit entry with its own INSERT, as soon as it is produced. A positive value
+     * buffers the audit entries of the transaction being committed and writes them in batches of at most this
+     * many rows (and at most the per-platform limit of rows per statement), right before the COMMIT.
+     */
+    public function getBatchSize(): int
+    {
+        return $this->batchSize;
     }
 
     /**
@@ -353,6 +368,7 @@ final class Configuration implements ConfigurationInterface
                 'storage_mapper' => null,
                 'utf8_convert' => false,
                 'full_snapshot_on_remove' => false,
+                'batch_size' => 0,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -364,6 +380,8 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('storage_mapper', ['null', 'string', 'callable'])
             ->setAllowedTypes('utf8_convert', 'bool')
             ->setAllowedTypes('full_snapshot_on_remove', 'bool')
+            ->setAllowedTypes('batch_size', 'int')
+            ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
         ;
     }
 }
