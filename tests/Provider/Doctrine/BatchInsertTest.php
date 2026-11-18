@@ -17,6 +17,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use DH\Auditor\User\User;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Exception\NotNullConstraintViolationException;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\AssertionFailedError;
@@ -215,6 +216,31 @@ final class BatchInsertTest extends TestCase
         $this->assertSame([], $this->auditedObjectIds(Author::class));
     }
 
+    /**
+     * On PostgreSQL, the transaction is aborted by the failed early INSERT: the next query fails (SQLSTATE 25P02)
+     * and must not hide the original failure.
+     */
+    public function testTheFailureOfAnEarlyBatchIsReportedRatherThanItsConsequences(): void
+    {
+        $this->useProviderWithBatchSize(2);
+        $this->invalidateAuditEntry(2);
+        $connection = $this->storageConnection();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use ($connection): void {
+            $connection->fetchOne('SELECT COUNT(*) FROM author');
+        }, -2_000_000);
+
+        $em = $this->entityManager();
+        foreach (['John Doe', 'Jane Doe', 'Luke Skywalker'] as $fullname) {
+            $em->persist(new Author()->setFullname($fullname)->setEmail('author@example.com'));
+        }
+
+        $throwable = $this->flushFailure();
+
+        $this->assertCausedBy(NotNullConstraintViolationException::class, $throwable);
+        $this->assertSame(0, (int) $connection->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame([], $this->auditedObjectIds(Author::class));
+    }
+
     public function testPersistWithoutAnActiveBufferInsertsImmediately(): void
     {
         $event = $this->event('1');
@@ -394,6 +420,49 @@ final class BatchInsertTest extends TestCase
         }
 
         return $snapshot;
+    }
+
+    /**
+     * Makes the $nth audit entry invalid (null object id) before it is persisted.
+     */
+    private function invalidateAuditEntry(int $nth): void
+    {
+        $audited = 0;
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function (LifecycleEvent $event) use (&$audited, $nth): void {
+            if ($nth === ++$audited) {
+                $event->setPayload(['object_id' => null] + $event->getPayload());
+            }
+        });
+    }
+
+    private function flushFailure(): \Throwable
+    {
+        try {
+            $this->entityManager()->flush();
+        } catch (\Throwable $throwable) {
+            return $throwable;
+        }
+
+        $this->fail('The flush must fail.');
+    }
+
+    /**
+     * @param class-string<\Throwable> $class
+     */
+    private function assertCausedBy(string $class, \Throwable $throwable): void
+    {
+        $causes = [];
+        for ($cause = $throwable; $cause instanceof \Throwable; $cause = $cause->getPrevious()) {
+            if ($cause instanceof $class) {
+                $this->addToAssertionCount(1);
+
+                return;
+            }
+
+            $causes[] = $cause::class.': '.$cause->getMessage();
+        }
+
+        $this->fail(\sprintf("The failure is not caused by %s:\n%s", $class, implode("\n", $causes)));
     }
 
     /**

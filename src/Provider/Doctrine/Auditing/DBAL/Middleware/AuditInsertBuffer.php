@@ -119,6 +119,17 @@ final class AuditInsertBuffer implements \Countable
     }
 
     /**
+     * Returns the memorised failure, if any, and forgets it.
+     */
+    public function takeFailure(): ?\Throwable
+    {
+        $failure = $this->failure;
+        $this->failure = null;
+
+        return $failure;
+    }
+
+    /**
      * Writes every buffered row. Rethrows the failure of an early flush, if any. The buffer is empty afterwards,
      * whether the rows could be written or not.
      */

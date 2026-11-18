@@ -45,6 +45,10 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             // rollBack() afterwards: the flusher would stay in the list and fail every later commit
             // on this connection, and the server-side transaction would stay open.
             $this->auditorDriver->resetFlusherList();
+
+            // A failed early batch happened first and is the probable cause of $throwable: e.g. on PostgreSQL, every
+            // query following a failed INSERT fails because the transaction is aborted.
+            $failure = $insertBuffer->takeFailure() ?? $throwable;
             $insertBuffer->discard();
 
             try {
@@ -56,7 +60,7 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             // No COMMIT was sent: the transaction is not committed, whether the rollback succeeded or not.
             $this->runRollbackHandlers();
 
-            throw $throwable;
+            throw $failure;
         }
 
         $this->auditorDriver->resetFlusherList();
