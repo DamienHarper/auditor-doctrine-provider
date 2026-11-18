@@ -377,6 +377,37 @@ final class MigrateSchemaCommandTest extends TestCase
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
+    public function testConvertDiffsConvertsEveryRowAcrossBatchesAndResumes(): void
+    {
+        // More rows than one batch (500), converted by a limited run ending in the middle of the second
+        // batch, then by a run that resumes after the rows already converted.
+        $this->simulateLegacySchema('post_audit');
+        $ids = [];
+        for ($i = 1; $i <= 1_201; ++$i) {
+            $ids[] = $this->insertLegacyRow('post_audit', 'update', (string) $i, ['title' => ['old' => 'Old '.$i, 'new' => 'New '.$i]]);
+        }
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-diffs' => true, '--limit' => '700']);
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+
+        $connection = $this->auditConnection();
+        $this->assertSame(
+            \array_slice($ids, 0, 700),
+            array_map(intval(...), $connection->fetchFirstColumn('SELECT id FROM post_audit WHERE schema_version = 2 ORDER BY id')),
+        );
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame(1_201, (int) $connection->fetchOne('SELECT COUNT(*) FROM post_audit WHERE schema_version = 2'));
+        foreach ([0, 499, 500, 699, 700, 1_200] as $index) {
+            $number = $index + 1;
+            $changes = $this->fetchConvertedDiffs('post_audit', $ids[$index])['changes'] ?? null;
+            $this->assertIsArray($changes);
+            $this->assertSameDiffs(['title' => ['new' => 'New '.$number, 'old' => 'Old '.$number]], $changes);
+        }
+    }
+
     public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void
     {
         $this->simulateLegacySchema('post_audit');

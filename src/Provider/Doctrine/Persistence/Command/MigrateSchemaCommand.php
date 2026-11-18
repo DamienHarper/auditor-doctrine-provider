@@ -13,6 +13,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\MigrateSchemaCommandTest;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
@@ -789,10 +790,12 @@ final class MigrateSchemaCommand extends Command
     /**
      * Converts legacy diffs JSON rows for a single table.
      *
-     * Processes rows with schema_version = 1 in batches of BATCH_SIZE.
-     * No OFFSET is used: already-converted rows (schema_version=2) are naturally excluded
-     * by the WHERE clause, so the query always returns the next unconverted batch from offset 0.
-     * This makes the operation safe to resume after an interruption.
+     * Processes rows with schema_version = 1 in batches of BATCH_SIZE, in id order.
+     * Each batch starts after the last id of the previous one (keyset pagination): schema_version is not
+     * indexed, so a query without this bound would read again every row already converted, and the
+     * conversion of a large table would cost (rows / BATCH_SIZE) × rows row reads.
+     * No OFFSET is used and every run starts from the first unconverted row, so the operation is
+     * safe to resume after an interruption.
      *
      * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
@@ -805,6 +808,7 @@ final class MigrateSchemaCommand extends Command
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
         $converted = 0;
+        $lastId = 0;
 
         while (true) {
             $batchLimit = self::BATCH_SIZE;
@@ -819,10 +823,12 @@ final class MigrateSchemaCommand extends Command
 
             $rows = $connection->fetchAllAssociative(
                 \sprintf(
-                    'SELECT id, type, object_id, discriminator, diffs FROM %s WHERE schema_version = 1 ORDER BY id LIMIT %d',
+                    'SELECT id, type, object_id, discriminator, diffs FROM %s WHERE schema_version = 1 AND id > ? ORDER BY id LIMIT %d',
                     $tableName,
                     $batchLimit,
                 ),
+                [$lastId],
+                [ParameterType::INTEGER],
             );
 
             if ([] === $rows) {
@@ -837,6 +843,13 @@ final class MigrateSchemaCommand extends Command
                     ['id' => $row['id']],
                 );
                 ++$converted;
+
+                $id = $row['id'];
+                if (!is_numeric($id)) {
+                    throw new \UnexpectedValueException(\sprintf('Unexpected non-numeric id in audit table %s.', $tableName));
+                }
+
+                $lastId = (int) $id;
             }
 
             if (\count($rows) < $batchLimit) {
