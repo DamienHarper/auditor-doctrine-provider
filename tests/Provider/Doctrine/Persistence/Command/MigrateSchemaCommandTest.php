@@ -18,6 +18,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
@@ -375,6 +376,61 @@ final class MigrateSchemaCommandTest extends TestCase
             'source' => ['id' => '90', 'class' => Post::class, 'label' => Post::class.'#90', 'table' => 'post'],
             'changes' => [],
         ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsConvertsEveryRowAcrossBatchesAndResumes(): void
+    {
+        // More rows than one batch (500), converted by a limited run ending in the middle of the second
+        // batch, then by a run that resumes after the rows already converted.
+        $this->simulateLegacySchema('post_audit');
+        $ids = [];
+        for ($i = 1; $i <= 1_201; ++$i) {
+            $ids[] = $this->insertLegacyRow('post_audit', 'update', (string) $i, ['title' => ['old' => 'Old '.$i, 'new' => 'New '.$i]]);
+        }
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-diffs' => true, '--limit' => '700']);
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+
+        $connection = $this->auditConnection();
+        $this->assertSame(
+            \array_slice($ids, 0, 700),
+            array_map(intval(...), $connection->fetchFirstColumn('SELECT id FROM post_audit WHERE schema_version = 2 ORDER BY id')),
+        );
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame(1_201, (int) $connection->fetchOne('SELECT COUNT(*) FROM post_audit WHERE schema_version = 2'));
+        foreach ([0, 499, 500, 699, 700, 1_200] as $index) {
+            $number = $index + 1;
+            $changes = $this->fetchConvertedDiffs('post_audit', $ids[$index])['changes'] ?? null;
+            $this->assertIsArray($changes);
+            $this->assertSameDiffs(['title' => ['new' => 'New '.$number, 'old' => 'Old '.$number]], $changes);
+        }
+    }
+
+    public function testConvertDiffsConvertsABatchEntirelyOrNotAtAll(): void
+    {
+        if (!$this->auditConnection()->getDatabasePlatform() instanceof SQLitePlatform) {
+            // a failing row is simulated with an invalid diffs value, which native JSON columns reject on insert
+            $this->markTestSkipped('Needs a platform that stores diffs as text.');
+        }
+
+        $this->simulateLegacySchema('post_audit');
+        $first = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Old', 'new' => 'New']]);
+        $broken = $this->insertLegacyRow('post_audit', 'update', '2', []);
+        $this->auditConnection()->update('post_audit', ['diffs' => '{not json'], ['id' => $broken]);
+
+        $commandTester = new CommandTester($this->createCommand());
+
+        try {
+            $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
+            $this->fail('The conversion of an invalid diffs value must fail.');
+        } catch (\JsonException) {
+        }
+
+        // the row before the invalid one belongs to the same batch: it is left unconverted, for the next run
+        $this->assertSame(1, (int) $this->auditConnection()->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$first]));
     }
 
     public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void

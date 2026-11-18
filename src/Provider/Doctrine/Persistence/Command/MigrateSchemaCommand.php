@@ -13,6 +13,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\MigrateSchemaCommandTest;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
@@ -643,15 +644,19 @@ final class MigrateSchemaCommand extends Command
             }
 
             $tableRows = 0;
-            foreach ($hashMap as $hash => $ulid) {
-                $affected = $connection->executeStatement(
-                    \sprintf(
-                        'UPDATE %s SET transaction_id = ? WHERE transaction_hash = ? AND transaction_id IS NULL',
-                        $tableName,
-                    ),
-                    [$ulid, $hash],
-                );
-                $tableRows += (int) $affected;
+            $sql = \sprintf('UPDATE %s SET transaction_id = ? WHERE transaction_hash = ? AND transaction_id IS NULL', $tableName);
+
+            // One database transaction per BATCH_SIZE hashes: in autocommit mode, each UPDATE would be
+            // committed (and its log flushed to disk) on its own, which dominates the duration of the conversion.
+            foreach (array_chunk($hashMap, self::BATCH_SIZE, true) as $chunk) {
+                $tableRows += $connection->transactional(static function (Connection $connection) use ($chunk, $sql): int {
+                    $affected = 0;
+                    foreach ($chunk as $hash => $ulid) {
+                        $affected += (int) $connection->executeStatement($sql, [$ulid, $hash]);
+                    }
+
+                    return $affected;
+                });
             }
 
             if ($tableRows > 0) {
@@ -789,10 +794,15 @@ final class MigrateSchemaCommand extends Command
     /**
      * Converts legacy diffs JSON rows for a single table.
      *
-     * Processes rows with schema_version = 1 in batches of BATCH_SIZE.
-     * No OFFSET is used: already-converted rows (schema_version=2) are naturally excluded
-     * by the WHERE clause, so the query always returns the next unconverted batch from offset 0.
-     * This makes the operation safe to resume after an interruption.
+     * Processes rows with schema_version = 1 in batches of BATCH_SIZE, in id order.
+     * Each batch starts after the last id of the previous one (keyset pagination): schema_version is not
+     * indexed, so a query without this bound would read again every row already converted, and the
+     * conversion of a large table would cost (rows / BATCH_SIZE) × rows row reads.
+     * No OFFSET is used and every run starts from the first unconverted row, so the operation is
+     * safe to resume after an interruption.
+     * Each batch is written in one database transaction: in autocommit mode, each UPDATE would be committed
+     * (and its log flushed to disk) on its own, which dominates the duration of the conversion. A failing row
+     * rolls its whole batch back, and the next run converts it again.
      *
      * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
@@ -805,6 +815,7 @@ final class MigrateSchemaCommand extends Command
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
         $converted = 0;
+        $lastId = 0;
 
         while (true) {
             $batchLimit = self::BATCH_SIZE;
@@ -819,25 +830,34 @@ final class MigrateSchemaCommand extends Command
 
             $rows = $connection->fetchAllAssociative(
                 \sprintf(
-                    'SELECT id, type, object_id, discriminator, diffs FROM %s WHERE schema_version = 1 ORDER BY id LIMIT %d',
+                    'SELECT id, type, object_id, discriminator, diffs FROM %s WHERE schema_version = 1 AND id > ? ORDER BY id LIMIT %d',
                     $tableName,
                     $batchLimit,
                 ),
+                [$lastId],
+                [ParameterType::INTEGER],
             );
 
             if ([] === $rows) {
                 break;
             }
 
+            $updates = [];
             foreach ($rows as $row) {
-                $newDiffs = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
-                $connection->update(
-                    $tableName,
-                    ['diffs' => json_encode($newDiffs, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'schema_version' => 2],
-                    ['id' => $row['id']],
-                );
-                ++$converted;
+                $updates[] = [
+                    'id' => $row['id'],
+                    'diffs' => json_encode($this->convertLegacyDiffs($row, $jsonFields, $auditedEntity), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                ];
             }
+
+            $connection->transactional(static function (Connection $connection) use ($tableName, $updates): void {
+                foreach ($updates as $update) {
+                    $connection->update($tableName, ['diffs' => $update['diffs'], 'schema_version' => 2], ['id' => $update['id']]);
+                }
+            });
+
+            $converted += \count($updates);
+            $lastId = $updates[\count($updates) - 1]['id'];
 
             if (\count($rows) < $batchLimit) {
                 break;
