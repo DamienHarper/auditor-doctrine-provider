@@ -77,7 +77,7 @@ final class BatchInsertTest extends TestCase
         if ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
             $this->assertSame(
                 ['object', 'null', 'object'],
-                array_values($connection->fetchNumeric('SELECT jsonb_typeof(diffs), coalesce(jsonb_typeof(extra_data), \'null\'), jsonb_typeof(blame) FROM '.$this->auditTable(Author::class)) ?: []),
+                array_values($connection->fetchNumeric("SELECT jsonb_typeof(diffs), coalesce(jsonb_typeof(extra_data), 'null'), jsonb_typeof(blame) FROM ".$this->auditTable(Author::class)) ?: []),
                 'JSON columns hold JSON values, not JSON strings.',
             );
         }
@@ -130,8 +130,10 @@ final class BatchInsertTest extends TestCase
         $connection = $em->getConnection();
 
         $connection->beginTransaction();
+
         $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
         $em->flush();
+
         $connection->rollBack();
 
         $this->assertSame([], $this->auditedObjectIds(Author::class));
@@ -242,6 +244,7 @@ final class BatchInsertTest extends TestCase
     {
         $provider = new DoctrineProvider($this->createProviderConfiguration(['batch_size' => 0]));
         $provider->registerStorageService(new StorageService('default', $this->provider->getStorageServiceForEntity(Author::class)->getEntityManager()));
+
         $buffer = new AuditInsertBuffer();
         $provider->useInsertBuffer($buffer);
 
@@ -333,10 +336,12 @@ final class BatchInsertTest extends TestCase
 
         $connection = $em->getConnection();
         $connection->beginTransaction();
+
         $john->setEmail('john.doe@example.com');
         $em->flush();
         $em->persist(new Author()->setFullname('Luke')->setEmail('luke@example.com'));
         $em->flush();
+
         $connection->commit();
     }
 

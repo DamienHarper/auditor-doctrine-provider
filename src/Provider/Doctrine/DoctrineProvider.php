@@ -202,7 +202,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $batchSize = $this->configuration->getBatchSize();
         if ($batchSize > 0 && $this->activeBuffer instanceof AuditInsertBuffer) {
             // written when the database transaction is committed: the id of the audit entry is not known yet
-            $this->activeBuffer->add($connection, $auditTable, self::row($payload), $batchSize);
+            $this->activeBuffer->add($connection, $auditTable, $this->row($payload), $batchSize);
 
             return;
         }
@@ -384,7 +384,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
      *
      * @return list<mixed>
      */
-    private static function row(array $payload): array
+    private function row(array $payload): array
     {
         $row = [];
         foreach (AuditInsertBuffer::COLUMNS as $column) {

@@ -145,12 +145,12 @@ final class AuditInsertBuffer
 
         foreach ($groups as [$connection, $auditTable, $rows]) {
             $platform = $connection->getDatabasePlatform();
-            $maxRows = self::maxRowsPerStatement($platform);
+            $maxRows = $this->maxRowsPerStatement($platform);
             if ($batchSize > 0) {
                 $maxRows = min($maxRows, $batchSize);
             }
 
-            $placeholders = self::rowPlaceholders($platform);
+            $placeholders = $this->rowPlaceholders($platform);
             foreach (array_chunk($rows, $maxRows) as $chunk) {
                 $connection->executeStatement(
                     \sprintf(
@@ -165,7 +165,7 @@ final class AuditInsertBuffer
         }
     }
 
-    private static function maxRowsPerStatement(AbstractPlatform $platform): int
+    private function maxRowsPerStatement(AbstractPlatform $platform): int
     {
         return match (true) {
             $platform instanceof SQLitePlatform => self::SQLITE_MAX_ROWS,
@@ -174,7 +174,7 @@ final class AuditInsertBuffer
         };
     }
 
-    private static function rowPlaceholders(AbstractPlatform $platform): string
+    private function rowPlaceholders(AbstractPlatform $platform): string
     {
         $jsonCast = $platform instanceof PostgreSQLPlatform ? '::jsonb' : '';
 

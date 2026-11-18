@@ -48,6 +48,7 @@ final class MultiConnectionBatchInsertTest extends TestCase
         $connection->beginTransaction();
         $authorEntityManager->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
         $authorEntityManager->flush();
+
         $catEntityManager->persist(new Cat()->setLabel('Grumpy'));
         $catEntityManager->flush();
         $this->assertCount(2, $driver->getFlusherList(), 'One flusher per entity manager.');

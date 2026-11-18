@@ -33,6 +33,7 @@ final class AuditInsertBufferTest extends TestCase
         $this->logger = new StatementLoggerMiddleware();
         $configuration = new Configuration();
         $configuration->setMiddlewares([$this->logger]);
+
         $this->connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true], $configuration);
         $this->createAuditTable('author_audit');
         $this->createAuditTable('post_audit');
