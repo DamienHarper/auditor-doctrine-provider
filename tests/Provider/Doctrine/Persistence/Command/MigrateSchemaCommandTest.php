@@ -151,6 +151,59 @@ final class MigrateSchemaCommandTest extends TestCase
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
+    public function testConvertDiffsKeepsLegacyInsertJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'insert', '90', [
+            '@source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'title' => ['new' => 'First post'],
+            'settings' => [
+                'theme' => ['new' => 'dark'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => 90, 'class' => Post::class, 'label' => 'First post', 'table' => 'post'],
+            'changes' => [
+                'title' => ['new' => 'First post', 'old' => null],
+                'settings' => [
+                    'theme' => ['new' => 'dark'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
+    public function testConvertDiffsKeepsLegacyUpdateJsonDeepDiff(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'update', '90', [
+            'title' => ['new' => 'Second title', 'old' => 'First title'],
+            'settings' => [
+                'theme' => ['new' => 'dark', 'old' => 'light'],
+                'lang' => ['old' => 'fr'],
+                'notifications' => ['email' => ['new' => true]],
+            ],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSame([
+            'source' => ['id' => '90', 'class' => '', 'label' => '', 'table' => ''],
+            'changes' => [
+                'title' => ['new' => 'Second title', 'old' => 'First title'],
+                'settings' => [
+                    'theme' => ['new' => 'dark', 'old' => 'light'],
+                    'lang' => ['old' => 'fr'],
+                    'notifications' => ['email' => ['new' => true]],
+                ],
+            ],
+        ], $this->fetchConvertedDiffs('post_audit', $id));
+    }
+
     public function testConvertDiffsKeepsLegacyRemoveSummaryAsSource(): void
     {
         $this->simulateLegacySchema('post_audit');
