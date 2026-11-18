@@ -109,7 +109,7 @@ flowchart TD
 
 | Version | Status                | Requirements                                                               |
 |---------|-----------------------|----------------------------------------------------------------------------|
-| 1.x     | Active development 🚀 | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.0     |
+| 1.x     | Active development 🚀 | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1     |
 
 ## Quick Links
 

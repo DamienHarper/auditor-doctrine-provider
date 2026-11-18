@@ -13,6 +13,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Driver\Exception as DriverException;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\ORM\EntityManager;
@@ -22,6 +23,8 @@ use Doctrine\ORM\ORMSetup;
 use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\AbstractLogger;
+use Psr\Log\LogLevel;
 
 /**
  * Audit entries stored on another connection than the audited one are written in their own transaction,
@@ -98,6 +101,53 @@ final class RemoteStorageRollbackTest extends TestCase
 
         $this->assertSame(1, $this->countRows('author'));
         $this->assertSame(1, $this->countRows('author_audit', $this->storageConnection()), 'The audit entries of a committed transaction must be kept.');
+    }
+
+    public function testAFailedDeletionOfAuditEntriesIsLogged(): void
+    {
+        $logger = new class extends AbstractLogger {
+            /** @var list<array{mixed, mixed, array<mixed>}> */
+            public array $records = [];
+
+            // $message is mixed: psr/log 1.x declares LoggerInterface::log() without parameter types.
+            public function log(mixed $level, mixed $message, array $context = []): void
+            {
+                $this->records[] = [$level, $message, $context];
+            }
+        };
+        $this->provider->setLogger($logger);
+
+        // the audit table of the storage connection is gone when the audit entries are deleted
+        $storageConnection = $this->storageConnection();
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use ($storageConnection): void {
+            $storageConnection->executeStatement('ALTER TABLE author_audit RENAME TO author_audit_moved');
+        }, -2_000_000); // after the audit entry is written
+        $this->commitFailure->failNextCommit('40001');
+
+        try {
+            $this->flushAuthors('John Doe');
+            $this->fail('The flush must fail.');
+        } catch (\Throwable $throwable) {
+            $this->assertNotInstanceOf(AssertionFailedError::class, $throwable);
+            $sqlStates = [];
+            for ($exception = $throwable; $exception instanceof \Throwable; $exception = $exception->getPrevious()) {
+                if ($exception instanceof DriverException) {
+                    $sqlStates[] = $exception->getSQLState();
+                }
+            }
+
+            $this->assertContains('40001', $sqlStates, 'The failure of the deletion must not hide the commit failure.');
+        } finally {
+            $storageConnection->executeStatement('ALTER TABLE author_audit_moved RENAME TO author_audit');
+        }
+
+        $this->assertSame(1, $this->countRows('author_audit', $storageConnection), 'The audit entry could not be deleted.');
+        $this->assertCount(1, $logger->records);
+        [$level, , $context] = $logger->records[0];
+        $this->assertSame(LogLevel::ERROR, $level);
+        $this->assertSame('author_audit', $context['table'] ?? null);
+        $this->assertSame($storageConnection->fetchOne('SELECT transaction_hash FROM author_audit'), $context['transaction_hash'] ?? null);
+        $this->assertInstanceOf(\Throwable::class, $context['exception'] ?? null);
     }
 
     private function configureEntities(): void

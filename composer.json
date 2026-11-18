@@ -12,9 +12,10 @@
   ],
   "require": {
     "php": ">=8.4",
-    "damienharper/auditor": "^4.0",
+    "damienharper/auditor": "^4.1",
     "doctrine/dbal": "^4.3",
     "doctrine/orm": "^3.2",
+    "psr/log": "^1.1 || ^2.0 || ^3.0",
     "symfony/cache": "^8.0",
     "symfony/lock": "^8.0"
   },
