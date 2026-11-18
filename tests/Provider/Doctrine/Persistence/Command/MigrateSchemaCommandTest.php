@@ -18,6 +18,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
+use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -376,6 +377,49 @@ final class MigrateSchemaCommandTest extends TestCase
         ], $this->fetchConvertedDiffs('post_audit', $id));
     }
 
+    public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->createLegacyTransactionHashIndex('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+        $this->insertLegacyRow('post_audit', 'insert', '2', ['title' => ['new' => 'Second']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true, '--limit' => '1']);
+
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertTrue($this->hasLegacyTransactionHashIndex('post_audit'), 'The conversion must still find rows by transaction_hash through its index.');
+        $this->assertSame(1, (int) $this->auditConnection()->fetchOne('SELECT COUNT(*) FROM post_audit WHERE transaction_id IS NOT NULL'));
+    }
+
+    public function testDiffsConversionAloneKeepsTheTransactionHashIndex(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->createLegacyTransactionHashIndex('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertTrue($this->hasLegacyTransactionHashIndex('post_audit'), 'A later --convert-transaction-hash run needs the transaction_hash index.');
+    }
+
+    public function testCompleteMigrationDropsTheTransactionHashIndexWithItsColumn(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->createLegacyTransactionHashIndex('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+        $this->insertLegacyRow('post_audit', 'insert', '2', ['title' => ['new' => 'Second']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true]);
+
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertFalse($this->hasLegacyTransactionHashIndex('post_audit'));
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertSame(0, (int) $this->auditConnection()->fetchOne('SELECT COUNT(*) FROM post_audit WHERE transaction_id IS NULL'));
+    }
+
     /**
      * Manipulates the first audit table to look like a v1 schema:
      * drops schema_version, adds transaction_hash (VARCHAR 40).
@@ -515,6 +559,33 @@ final class MigrateSchemaCommandTest extends TestCase
         ksort($array);
 
         return array_map(fn (mixed $value): mixed => \is_array($value) ? $this->sortKeysRecursively($value) : $value, $array);
+    }
+
+    /**
+     * Creates the transaction_hash index of a v1 audit table, which simulateLegacySchema() leaves out.
+     */
+    private function createLegacyTransactionHashIndex(string $tableName): void
+    {
+        $this->auditConnection()->executeStatement(\sprintf(
+            'CREATE INDEX %s ON %s (transaction_hash)',
+            $this->legacyTransactionHashIndexName($tableName),
+            $tableName,
+        ));
+    }
+
+    private function hasLegacyTransactionHashIndex(string $tableName): bool
+    {
+        return $this->auditTable($tableName)->hasIndex($this->legacyTransactionHashIndexName($tableName));
+    }
+
+    private function legacyTransactionHashIndexName(string $tableName): string
+    {
+        return 'transaction_hash_'.md5($tableName).'_idx';
+    }
+
+    private function auditTable(string $tableName): Table
+    {
+        return $this->auditConnection()->createSchemaManager()->introspectSchema()->getTable($tableName);
     }
 
     private function auditConnection(): Connection

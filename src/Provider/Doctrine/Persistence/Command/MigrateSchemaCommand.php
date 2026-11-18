@@ -38,9 +38,9 @@ use Symfony\Component\Uid\Ulid;
  * Migration is split into two DDL phases so that optional data conversions can run
  * while legacy columns are still present:
  *
- *   Phase 1 (additive)   — add new columns, mark rows as schema_version=1, migrate blame JSON, drop old index
+ *   Phase 1 (additive)   — add new columns, mark rows as schema_version=1, migrate blame JSON
  *   Conversions          — --convert-transaction-hash and/or --convert-diffs (reads transaction_hash)
- *   Phase 2 (destructive)— drop legacy columns (transaction_hash, blame_user, …)
+ *   Phase 2 (destructive)— drop the transaction_hash index and the legacy columns (transaction_hash, blame_user, …)
  *
  * Phase 2 is skipped when --limit is set so that partial runs can be resumed safely.
  *
@@ -452,8 +452,8 @@ final class MigrateSchemaCommand extends Command
      * Generates additive and destructive DDL SQL statements per legacy audit table.
      *
      * Additive: add new columns (idempotent — skips already-present columns),
-     *           mark existing rows as schema_version=1, migrate blame columns to JSON, drop old index.
-     * Destructive: drop legacy columns (transaction_hash, blame_user, …).
+     *           mark existing rows as schema_version=1, migrate blame columns to JSON.
+     * Destructive: drop the transaction_hash index and the legacy columns (transaction_hash, blame_user, …).
      *
      * @param array<string, Connection> $tables
      * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase.
@@ -517,21 +517,24 @@ final class MigrateSchemaCommand extends Command
                 $additive[] = $this->buildBlameMigrationSql($tableName, $connection);
             }
 
-            // 3. Drop old transaction_hash index
-            $hash = md5($tableName);
-            $oldTxIdx = 'transaction_hash_'.$hash.'_idx';
-            if ($table->hasIndex($oldTxIdx)) {
-                $indexName = $table->getIndex($oldTxIdx)->getObjectName();
-                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
-                    $additive[] = $sql;
-                }
-            }
-
-            // 4. Drop legacy columns (destructive — executed after conversions, and only when --limit is not set)
+            // 3. Drop legacy columns (destructive — executed after conversions, and only when --limit is not set)
             foreach (self::LEGACY_COLUMNS as $colName) {
                 // Skip transaction_hash if it should be preserved for a subsequent conversion run.
                 if ('transaction_hash' === $colName && !$dropTransactionHash) {
                     continue;
+                }
+
+                // The transaction_hash index is dropped with its column, not in the additive phase:
+                // --convert-transaction-hash looks rows up by transaction_hash, and would otherwise
+                // scan the whole table once per legacy transaction.
+                if ('transaction_hash' === $colName) {
+                    $oldTxIdx = 'transaction_hash_'.md5($tableName).'_idx';
+                    if ($table->hasIndex($oldTxIdx)) {
+                        $indexName = $table->getIndex($oldTxIdx)->getObjectName();
+                        foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
+                            $destructive[] = $sql;
+                        }
+                    }
                 }
 
                 if ($table->hasColumn($colName)) {
