@@ -127,7 +127,8 @@ final class AuditorConnection extends AbstractConnectionMiddleware
             try {
                 $handler();
             } catch (\Throwable) {
-                // best effort: the commit failure must not be hidden, the remaining handlers still run
+                // Last resort: a handler reports its own failures (the provider's ones log them), the commit failure
+                // must not be hidden and the remaining handlers still run.
             }
         }
     }

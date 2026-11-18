@@ -140,7 +140,16 @@ $provider->getConfiguration()->setStorageMapper(
 ## ⚠️ Transactions and Multi-Database
 
 > [!WARNING]
-> When using separate databases, the audit write and the application write happen in **different** database connections. If the application transaction is rolled back after an audit entry is written, the audit entry will **not** be rolled back. Design your application accordingly.
+> When using separate databases, the audit write and the application write happen in **different** database connections: the audit entries are written on the storage connection just before the application transaction is committed.
+
+When that transaction turns out to be rolled back (the audit fails, or the server reports a rollback when committing), the provider deletes the audit entries it has just written on the storage connection. This clean-up is best effort:
+
+- when the outcome of the COMMIT is unknown (e.g. the connection is lost), the audit entries are kept: an orphan entry is better than a missing one;
+- when the deletion itself fails, the entries are left behind and the failure is reported, without hiding the original error, to the PSR-3 logger of the provider, with the `transaction_hash` of the entries and the audit `table`:
+
+```php
+$provider->setLogger($logger); // any Psr\Log\LoggerInterface
+```
 
 For strict transactional consistency, keep auditing and storage on the same EntityManager/connection.
 
