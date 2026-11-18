@@ -106,12 +106,13 @@ final class RemoteStorageRollbackTest extends TestCase
     public function testAFailedDeletionOfAuditEntriesIsLogged(): void
     {
         $logger = new class extends AbstractLogger {
-            /** @var list<array{mixed, string, array<mixed>}> */
+            /** @var list<array{mixed, mixed, array<mixed>}> */
             public array $records = [];
 
-            public function log($level, string|\Stringable $message, array $context = []): void
+            // $message is mixed: psr/log 1.x declares LoggerInterface::log() without parameter types.
+            public function log(mixed $level, mixed $message, array $context = []): void
             {
-                $this->records[] = [$level, (string) $message, $context];
+                $this->records[] = [$level, $message, $context];
             }
         };
         $this->provider->setLogger($logger);
