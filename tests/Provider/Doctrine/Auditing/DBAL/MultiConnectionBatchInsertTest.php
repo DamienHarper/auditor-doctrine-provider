@@ -80,6 +80,40 @@ final class MultiConnectionBatchInsertTest extends TestCase
         $this->assertSame(1, $this->countAuditEntries(Car::class), 'The audit entries are written on the storage connection.');
     }
 
+    /**
+     * A listener flushes another entity manager while the audit entries of a transaction are processed: the
+     * entries processed after that nested commit must still be buffered.
+     */
+    public function testANestedCommitOnAnotherConnectionKeepsTheBufferInUse(): void
+    {
+        $authorEntityManager = $this->entityManager('blog');
+        $carEntityManager = $this->entityManager('vehicles');
+        $driver = $this->auditorDriver($authorEntityManager->getConnection());
+
+        $authorEntries = [];
+        $nested = false;
+        $this->provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function (LifecycleEvent $event) use ($driver, $carEntityManager, &$authorEntries, &$nested): void {
+            if (!$event->entity instanceof Author) {
+                return;
+            }
+
+            $authorEntries[] = [$event->getPayload()['id'] ?? null, $driver->getInsertBuffer()->count()];
+            if (!$nested) {
+                $nested = true;
+                $carEntityManager->persist(new Car()->setLabel('Mustang')->setWheels(4));
+                $carEntityManager->flush();
+            }
+        }, -2_000_000);
+
+        $authorEntityManager->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $authorEntityManager->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+        $authorEntityManager->flush();
+
+        $this->assertSame([[null, 1], [null, 2]], $authorEntries, 'The audit entry processed after the nested commit is buffered.');
+        $this->assertSame(2, $this->countAuditEntries(Author::class));
+        $this->assertSame(1, $this->countAuditEntries(Car::class));
+    }
+
     private function configureEntities(): void
     {
         $this->provider->getConfiguration()->setEntities([

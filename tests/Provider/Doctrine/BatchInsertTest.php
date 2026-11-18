@@ -241,6 +241,31 @@ final class BatchInsertTest extends TestCase
         $this->assertSame([], $this->auditedObjectIds(Author::class));
     }
 
+    /**
+     * Without the buffer, a failing INSERT would be ignored by the auditor: the change would be committed without
+     * its audit entry.
+     */
+    public function testAResetWhileTheTransactionIsProcessedDoesNotHideAFailure(): void
+    {
+        $provider = $this->provider;
+        $reset = false;
+        $provider->getAuditor()->getEventDispatcher()->addListener(LifecycleEvent::class, static function () use (&$reset, $provider): void {
+            if (!$reset) {
+                $reset = true;
+                $provider->reset();
+            }
+        }, -2_000_000);
+        $this->invalidateAuditEntry(2);
+
+        $em = $this->entityManager();
+        $em->persist(new Author()->setFullname('John Doe')->setEmail('john@example.com'));
+        $em->persist(new Author()->setFullname('Jane Doe')->setEmail('jane@example.com'));
+
+        $this->assertCausedBy(NotNullConstraintViolationException::class, $this->flushFailure());
+        $this->assertSame(0, (int) $this->storageConnection()->fetchOne('SELECT COUNT(*) FROM author'));
+        $this->assertSame([], $this->auditedObjectIds(Author::class));
+    }
+
     public function testPersistWithoutAnActiveBufferInsertsImmediately(): void
     {
         $event = $this->event('1');
@@ -305,7 +330,7 @@ final class BatchInsertTest extends TestCase
         $this->assertSame($this->lastAuditId(Author::class), $event->getPayload()['id'] ?? null);
     }
 
-    public function testResetDeactivatesTheBufferWithoutWritingIt(): void
+    public function testResetNeitherWritesNorDeactivatesTheBuffer(): void
     {
         $buffer = new AuditInsertBuffer();
         $this->provider->useInsertBuffer($buffer);
@@ -314,8 +339,8 @@ final class BatchInsertTest extends TestCase
         $this->provider->reset();
         $this->provider->persist($this->event('2'));
 
-        $this->assertSame(['2'], $this->auditedObjectIds(Author::class), 'Without an active buffer, audit entries are inserted immediately.');
-        $this->assertSame(1, $buffer->count(), 'Reset does not write the buffer.');
+        $this->assertSame([], $this->auditedObjectIds(Author::class));
+        $this->assertCount(2, $buffer, 'The buffer of the commit in progress is restored once that commit is processed.');
     }
 
     private function configureEntities(): void

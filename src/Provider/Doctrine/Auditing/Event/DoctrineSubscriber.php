@@ -71,12 +71,14 @@ final class DoctrineSubscriber implements ResetInterface
         // A single flusher per database transaction processes everything populated until the commit.
         if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
             $this->flushers[$entityManagerId] = function () use ($transaction, $entityManager, $driver): void {
+                // with a positive `batch_size`, audit entries are written by the driver when the transaction is committed
+                $previousBuffer = $this->provider->useInsertBuffer($driver->getInsertBuffer());
+
                 try {
-                    // with a positive `batch_size`, audit entries are written by the driver when the transaction is committed
-                    $this->provider->useInsertBuffer($driver->getInsertBuffer());
                     $this->provider->getTransactionManager()->process($transaction);
                 } finally {
-                    $this->provider->useInsertBuffer(null);
+                    // a listener may have committed another transaction while this one is processed
+                    $this->provider->useInsertBuffer($previousBuffer);
                     $this->addRollbackHandler($driver, $entityManager, $transaction);
                     $transaction->reset();
                 }

@@ -124,8 +124,9 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
      */
     public function reset(): void
     {
+        // The buffer of a commit in progress is left in use: it is restored by the flusher processing that commit,
+        // and without it an INSERT failure would be ignored by the auditor instead of failing the commit.
         $this->preparedStatements = [];
-        $this->activeBuffer = null;
 
         foreach ($this->subscribers as $subscriber) {
             $subscriber->reset();
@@ -179,13 +180,17 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     }
 
     /**
-     * Sets the buffer of the database transaction being committed (null when no commit is in progress).
+     * Sets the buffer of the database transaction being committed (null when no commit is in progress) and returns
+     * the previous one, to restore once that commit is processed: a commit may happen while another one is processed.
      *
      * @internal
      */
-    public function useInsertBuffer(?AuditInsertBuffer $buffer): void
+    public function useInsertBuffer(?AuditInsertBuffer $buffer): ?AuditInsertBuffer
     {
+        $previous = $this->activeBuffer;
         $this->activeBuffer = $buffer;
+
+        return $previous;
     }
 
     public function persist(LifecycleEvent $event): void
