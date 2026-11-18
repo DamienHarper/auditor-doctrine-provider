@@ -13,7 +13,7 @@ This section contains upgrade guides for major versions.
 | Version | Status                | Support Until |
 |:--------|:----------------------|:--------------|
 | 2.x     | Active development 🚀 | Current       |
-| 1.x     | End of Life           | -             |
+| 1.x     | Bug and security fixes | Until next major |
 
 ## ✅ General Upgrade Process
 
