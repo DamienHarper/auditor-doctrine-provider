@@ -11,6 +11,7 @@ use DH\Auditor\Exception\ProviderException;
 use DH\Auditor\Provider\AbstractProvider;
 use DH\Auditor\Provider\ConfigurationInterface;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
+use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditInsertBuffer;
 use DH\Auditor\Provider\Doctrine\Auditing\Event\DoctrineSubscriber;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\TransactionManager;
 use DH\Auditor\Provider\Doctrine\Persistence\Event\CreateSchemaListener;
@@ -42,24 +43,8 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     private const array RETENTION_OPTIONS = ['max_age', 'max_entries'];
 
     /**
-     * @var array<string, string>
-     */
-    private const array FIELDS = [
-        'schema_version' => '?',
-        'type' => '?',
-        'object_id' => '?',
-        'discriminator' => '?',
-        'transaction_id' => '?',
-        'diffs' => '?',
-        'extra_data' => '?',
-        'blame_id' => '?',
-        'blame' => '?',
-        'created_at' => '?',
-    ];
-
-    /**
-     * Maps each field name to its 1-based bind position for prepared statements.
-     * Computed once from FIELDS and cached for the process lifetime.
+     * Maps each column name to its 1-based bind position for prepared statements.
+     * Computed once from AuditInsertBuffer::COLUMNS and cached for the process lifetime.
      *
      * @var null|array<string, int>
      */
@@ -74,6 +59,12 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     private array $subscribers = [];
 
     private ?ContainerInterface $diffLabelResolverLocator = null;
+
+    /**
+     * Buffer of the database transaction being committed, if any: with a positive `batch_size`, audit entries are
+     * buffered instead of being inserted one by one.
+     */
+    private ?AuditInsertBuffer $activeBuffer = null;
 
     public function __construct(ConfigurationInterface $configuration)
     {
@@ -134,6 +125,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
     public function reset(): void
     {
         $this->preparedStatements = [];
+        $this->activeBuffer = null;
 
         foreach ($this->subscribers as $subscriber) {
             $subscriber->reset();
@@ -186,6 +178,16 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         return $storageMapper($entity, $this->getStorageServices());
     }
 
+    /**
+     * Sets the buffer of the database transaction being committed (null when no commit is in progress).
+     *
+     * @internal
+     */
+    public function useInsertBuffer(?AuditInsertBuffer $buffer): void
+    {
+        $this->activeBuffer = $buffer;
+    }
+
     public function persist(LifecycleEvent $event): void
     {
         $payload = $event->getPayload();
@@ -195,15 +197,25 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
 
         $storageService = $this->getStorageServiceForEntity($entity);
         $connection = $storageService->getEntityManager()->getConnection();
+
+        \assert($this->configuration instanceof Configuration);   // helps PHPStan
+        $batchSize = $this->configuration->getBatchSize();
+        if ($batchSize > 0 && $this->activeBuffer instanceof AuditInsertBuffer) {
+            // written when the database transaction is committed: the id of the audit entry is not known yet
+            $this->activeBuffer->add($connection, $auditTable, self::row($payload), $batchSize);
+
+            return;
+        }
+
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
 
         if (!isset($this->preparedStatements[$cacheKey])) {
             // PostgreSQL requires an explicit ::jsonb cast for jsonb columns in prepared statements
             // (the driver otherwise infers the placeholder type as text, causing a type mismatch).
             $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
-            $keys = array_keys(self::FIELDS);
+            $keys = AuditInsertBuffer::COLUMNS;
             $placeholders = array_map(
-                static fn (string $col): string => \in_array($col, ['diffs', 'extra_data', 'blame'], true)
+                static fn (string $col): string => \in_array($col, AuditInsertBuffer::JSON_COLUMNS, true)
                     ? '?'.$jsonCast
                     : '?',
                 $keys
@@ -221,7 +233,7 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
 
         $fieldIndex = self::$fieldIndex ??= array_map(
             static fn (int $i): int => $i + 1,
-            array_flip(array_keys(self::FIELDS))
+            array_flip(AuditInsertBuffer::COLUMNS)
         );
 
         foreach ($payload as $key => $value) {
@@ -363,6 +375,28 @@ final class DoctrineProvider extends AbstractProvider implements ResetInterface
         $this->configuration->setEntities($merged);
 
         return $this;
+    }
+
+    /**
+     * Values of the audit entry, ordered like AuditInsertBuffer::COLUMNS.
+     *
+     * @param array<array-key, mixed> $payload
+     *
+     * @return list<mixed>
+     */
+    private static function row(array $payload): array
+    {
+        $row = [];
+        foreach (AuditInsertBuffer::COLUMNS as $column) {
+            if (!\array_key_exists($column, $payload)) {
+                // cannot happen with a valid LifecycleEvent payload: guards against a column added to the audit table only
+                throw new \LogicException(\sprintf('The audit entry has no "%s" value.', $column));
+            }
+
+            $row[] = $payload[$column];
+        }
+
+        return $row;
     }
 
     private function checkStorageMapper(): self
