@@ -71,8 +71,9 @@ jobs:
         php:
           - '8.4'
           - '8.5'
+          - '8.6'
         symfony:
-          - '8.*'
+          - '8.2.*'
         db:
           - 'sqlite'
           - 'mysql'
@@ -81,17 +82,22 @@ jobs:
         dbal:
           - ''
         include:
+          # Lowest installable Symfony minor: every 8.0 release is blocked by Composer's security advisories (8.0 is EOL)
+          - php: '8.4'
+            symfony: '8.1.*'
+            db: 'sqlite'
+            dbal: ''
           # Lowest supported DBAL version (DBAL < 4.5 and < 4.6 compatibility paths)
           - php: '8.4'
-            symfony: '8.*'
+            symfony: '8.2.*'
             db: 'sqlite'
             dbal: '4.3.*'
           - php: '8.4'
-            symfony: '8.*'
+            symfony: '8.2.*'
             db: 'mysql'
             dbal: '4.3.*'
           - php: '8.4'
-            symfony: '8.*'
+            symfony: '8.2.*'
             db: 'pgsql'
             dbal: '4.3.*'
       fail-fast: false
@@ -124,6 +130,8 @@ jobs:
           composer global config --no-plugins allow-plugins.symfony/flex true
           composer global require --no-progress --no-scripts --no-plugins symfony/flex
           composer config extra.symfony.require "${{ matrix.symfony }}"
+          # Allows testing a Symfony minor before its stable release; --prefer-stable keeps the rest stable
+          composer config minimum-stability dev
 
       - name: Get Composer Cache Directory
         id: composer-cache
@@ -138,7 +146,7 @@ jobs:
 
       - name: Update project dependencies
         env:
-          SYMFONY_REQUIRE: "^8.0"
+          SYMFONY_REQUIRE: ${{ matrix.symfony }}
         run: composer update --no-progress --ansi --prefer-stable ${{ matrix.dbal && format('--with-all-dependencies --with "doctrine/dbal:{0}"', matrix.dbal) || '' }}
 
       # PHPStan analyses the code against the latest DBAL version only

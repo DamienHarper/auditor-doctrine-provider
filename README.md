@@ -18,7 +18,8 @@
 ## Version Information
 | Version | Status                      | Requirements                                                                           |
 |:--------|:----------------------------|:---------------------------------------------------------------------------------------|
-| 1.x     | Active development :rocket: | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1                 |
+| 2.x     | Active development :rocket: | PHP >= 8.4, Doctrine DBAL >= 4.6, Doctrine ORM >= 3.7, auditor >= 5.0                 |
+| 1.x     | Bug and security fixes      | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1                 |
 
 Changelog is available in [CHANGELOG.md](CHANGELOG.md).
 
