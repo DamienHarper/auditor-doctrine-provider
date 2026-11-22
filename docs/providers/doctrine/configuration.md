@@ -231,6 +231,11 @@ $configuration = new Configuration([
 MariaDB compresses and decompresses the values transparently: reading audit entries, `JsonFilter` and JSON functions in
 SQL work unchanged. Values shorter than `column_compression_threshold` (100 bytes by default) are stored as is.
 
+Compression trades CPU for disk space and I/O. Reading a large history whose pages are already in memory gets slower,
+since every value has to be decompressed: in the contributor's measurements (34,279 audit rows, MariaDB 11.8), reading
+an entity with ~510 changes took 16.0 ms instead of 7.5 ms (median, warm cache). Reads that hit the disk get faster
+(59.8 ms instead of 138.6 ms, cold cache) and writes are not slower, since there is much less data to read and write.
+
 New audit tables are created with compressed columns. Existing audit tables are converted by
 `audit:schema:update --force` (or by a migration containing the SQL shown by `audit:schema:update --dump-sql`):
 altering the columns rewrites the table and compresses existing entries. Disabling the option and running
@@ -242,8 +247,10 @@ altering the columns rewrites the table and compresses existing entries. Disabli
 > `audit:schema:update` for that. Conversely, they never report a difference for compressed columns.
 
 > [!WARNING]
-> Converting existing tables rewrites them (`ALTER TABLE ... MODIFY`), which takes time and locks writes to the audit
-> table on large tables. Plan it like any other large schema migration.
+> Converting existing tables rewrites them (`ALTER TABLE ... MODIFY`), which takes time on large tables. Before
+> MariaDB 11.2, writes to the audit table are also locked for the duration of the rewrite, so audited flushes wait for
+> it; since MariaDB 11.2, the rewrite runs online by default (`ALGORITHM=COPY, LOCK=NONE`). Plan it like any other
+> large schema migration.
 
 ## 🗄️ Storage Mapper
 

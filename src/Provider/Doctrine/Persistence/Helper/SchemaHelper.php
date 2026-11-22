@@ -42,6 +42,9 @@ abstract class SchemaHelper
      * is set through the column definition; compressible columns are nullable and default to NULL, which keeps
      * the declaration identical to the one DBAL generates for the uncompressed column.
      *
+     * The declaration is rebuilt from the type only: a charset, collation or comment set on a compressible column
+     * would be dropped, so these columns must not have any.
+     *
      * @internal
      */
     public static function getCompressibleColumnDeclarationSQL(Column $column, Connection $connection, bool $compressed): string
