@@ -74,6 +74,32 @@ final class SnapshotterTest extends TestCase
         $this->assertArrayNotHasKey('tags', $diffs['changes'], 'To-many associations are not part of a snapshot.');
     }
 
+    public function testSnapshotLabelsTheTargetsLoadedTogether(): void
+    {
+        // posts of several authors, read without their authors: the authors are loaded with one query per batch
+        $entityManager = $this->provider->getAuditingServiceForEntity(Post::class)->getEntityManager();
+        $configuration = $this->provider->getAuditor()->getConfiguration();
+        $configuration->disable();
+        foreach ($entityManager->getRepository(Author::class)->findAll() as $author) {
+            $post = new Post();
+            $post->setTitle('Post of '.$author->getFullname())->setBody('body')->setCreatedAt(new \DateTimeImmutable())->setAuthor($author);
+            $entityManager->persist($post);
+        }
+
+        $entityManager->flush();
+        $entityManager->clear();
+        $configuration->enable();
+
+        $result = new Snapshotter($this->provider)->snapshot(Post::class);
+        $this->assertSame(4, $result->snapshotted);
+
+        foreach ($this->auditRows(Post::class) as $row) {
+            $diffs = $this->decode($row['diffs']);
+            $post = $entityManager->find(Post::class, (int) $row['object_id']);
+            $this->assertSame((string) $post->getAuthor(), $diffs['changes']['author']['new']['label']);
+        }
+    }
+
     public function testSnapshotSkipsEntitiesThatAlreadyHaveAnHistory(): void
     {
         $entityManager = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();

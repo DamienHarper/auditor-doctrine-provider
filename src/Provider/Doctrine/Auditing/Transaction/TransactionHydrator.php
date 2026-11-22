@@ -21,6 +21,11 @@ final class TransactionHydrator implements TransactionHydratorInterface
 {
     use AuditTrait;
 
+    /**
+     * @var array<string, array<string, string>>
+     */
+    private array $inverseSideFields = [];
+
     public function __construct(private DoctrineProvider $provider) {}
 
     /**
@@ -229,35 +234,17 @@ final class TransactionHydrator implements TransactionHydratorInterface
         );
 
         foreach ($entities as $entity) {
-            $changeset = $uow->getEntityChangeSet($entity);
-            if ([] === $changeset) {
-                continue;
+            $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+            $inverseSideFields = $this->inverseSideFields($meta);
+            if ([] === $inverseSideFields) {
+                continue; // No owning-side single-valued association with an inverse side.
             }
 
-            $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+            $changeset = $uow->getEntityChangeSet($entity);
 
-            foreach ($changeset as $fieldName => [$old, $new]) {
-                if (!$meta->hasAssociation($fieldName) || !$meta->isSingleValuedAssociation($fieldName)) {
-                    continue; // Not an association, or a collection-valued one.
-                }
-
-                $assocMapping = $meta->getAssociationMapping($fieldName);
-
-                // Only owning-side associations that declare an inverse side are relevant here.
-                // After this check PHPStan narrows $assocMapping to OwningSideMapping, which
-                // carries the inversedBy property accessed below.
-                if (!$assocMapping->isOwningSide()) {
-                    continue;
-                }
-
-                $inversedBy = $assocMapping->inversedBy;
-
-                if (null === $inversedBy || '' === $inversedBy) {
-                    continue; // Unidirectional association (no inversedBy declared): nothing to audit on the inverse side.
-                }
-
-                $targetMeta = $entityManager->getClassMetadata($assocMapping->targetEntity);
-                $inverseMapping = $targetMeta->getAssociationMapping($inversedBy)->toArray();
+            foreach (array_intersect_key($changeset, $inverseSideFields) as $fieldName => [$old, $new]) {
+                $targetMeta = $entityManager->getClassMetadata($meta->getAssociationMapping($fieldName)->targetEntity);
+                $inverseMapping = $targetMeta->getAssociationMapping($inverseSideFields[$fieldName])->toArray();
 
                 // Dissociate from the old target when the association is removed or re-assigned.
                 if (null !== $old && $this->provider->isAudited($old)) {
@@ -341,6 +328,35 @@ final class TransactionHydrator implements TransactionHydratorInterface
         }
 
         $transaction->dissociate($source, $target, $mapping);
+    }
+
+    /**
+     * Owning-side single-valued associations (ManyToOne, OneToOne owning) of a class that declare an inverse side,
+     * as field name => inversedBy. Mapping data: computed once per class.
+     *
+     * @param ClassMetadata<object> $meta
+     *
+     * @return array<string, string>
+     */
+    private function inverseSideFields(ClassMetadata $meta): array
+    {
+        if (isset($this->inverseSideFields[$meta->name])) {
+            return $this->inverseSideFields[$meta->name];
+        }
+
+        $fields = [];
+        foreach ($meta->associationMappings as $fieldName => $assocMapping) {
+            if (!$assocMapping->isToOneOwningSide()) {
+                continue;
+            }
+
+            $inversedBy = $assocMapping->inversedBy;
+            if (null !== $inversedBy && '' !== $inversedBy) {
+                $fields[$fieldName] = $inversedBy;
+            }
+        }
+
+        return $this->inverseSideFields[$meta->name] = $fields;
     }
 
     /**

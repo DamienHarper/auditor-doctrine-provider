@@ -35,7 +35,9 @@ $configuration->setExtraDataProvider(function (): ?array {
 ```
 
 > [!NOTE]
-> The `extra_data_provider` is called for every audit entry. If it returns `null`, `extra_data` is stored as `null`.
+> The `extra_data_provider` is called once per flush (and once per batch of `audit:snapshot`): every audit entry of
+> that flush gets the same `extra_data`. If it returns `null`, `extra_data` is stored as `null`. For a value that depends
+> on the audited entity, use a `LifecycleEvent` listener (option 2).
 
 ## 🎧 Option 2: LifecycleEvent Listener (Per-Entry)
 

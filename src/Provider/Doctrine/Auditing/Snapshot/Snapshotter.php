@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Auditing\Snapshot;
 
 use DH\Auditor\Exception\InvalidArgumentException;
+use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditInsertBuffer;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\TransactionProcessor;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Tests\Provider\Doctrine\Auditing\Snapshot\SnapshotterTest;
+use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Uid\Ulid;
 
 /**
@@ -114,7 +116,7 @@ final readonly class Snapshotter
             $batchSnapshotted = $dryRun
                 ? $this->processor->snapshot($entityManager, $entities, $transactionId, $force, true)
                 : (int) $storageConnection->transactional(
-                    fn (): int => $this->processor->snapshot($entityManager, $entities, $transactionId, $force)
+                    fn (): int => $this->write($entityManager, $entities, $transactionId, $force, $batchSize)
                 );
 
             $entityManager->clear();
@@ -127,6 +129,28 @@ final readonly class Snapshotter
         } while ($batchRead === $batchSize);
 
         return new SnapshotResult($read, $snapshotted);
+    }
+
+    /**
+     * Writes the snapshot entries of a batch with multi-row INSERT statements, whatever the `batch_size` option.
+     *
+     * @param list<object> $entities
+     * @param positive-int $batchSize
+     */
+    private function write(EntityManagerInterface $entityManager, array $entities, string $transactionId, bool $force, int $batchSize): int
+    {
+        $buffer = new AuditInsertBuffer($batchSize);
+        $previous = $this->provider->useInsertBuffer($buffer);
+
+        try {
+            $count = $this->processor->snapshot($entityManager, $entities, $transactionId, $force);
+        } finally {
+            $this->provider->useInsertBuffer($previous);
+        }
+
+        $buffer->flush();
+
+        return $count;
     }
 
     private function validate(string $entity): void

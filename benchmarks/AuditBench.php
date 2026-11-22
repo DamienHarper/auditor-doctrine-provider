@@ -4,30 +4,10 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Benchmarks;
 
-use DH\Auditor\Auditor;
-use DH\Auditor\Configuration as AuditorConfiguration;
-use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditorMiddleware;
-use DH\Auditor\Provider\Doctrine\Configuration;
-use DH\Auditor\Provider\Doctrine\DoctrineProvider;
-use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
-use DH\Auditor\Provider\Doctrine\Service\AuditingService;
-use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
-use DH\Auditor\User\User;
-use Doctrine\DBAL\Configuration as DBALConfiguration;
-use Doctrine\DBAL\DriverManager;
-use Doctrine\DBAL\Tools\DsnParser;
-use Doctrine\ORM\EntityManager;
-use Doctrine\ORM\EntityManagerInterface;
-use Doctrine\ORM\Events;
-use Doctrine\ORM\Mapping\UnderscoreNamingStrategy;
-use Doctrine\ORM\ORMSetup;
-use Doctrine\ORM\Tools\SchemaTool;
-use Gedmo\SoftDeleteable\SoftDeleteableListener;
 use PhpBench\Attributes as Bench;
-use Symfony\Component\EventDispatcher\EventDispatcher;
 
 /**
  * Benchmarks the auditor flush pipeline (TransactionProcessor + persist()).
@@ -48,9 +28,9 @@ use Symfony\Component\EventDispatcher\EventDispatcher;
 #[Bench\Revs(1)]
 class AuditBench
 {
+    use BenchSetupTrait;
+
     private int $n;
-    private EntityManagerInterface $em;
-    private DoctrineProvider $provider;
 
     /** @var Author[] */
     private array $authors = [];
@@ -237,6 +217,10 @@ class AuditBench
 
         $this->buildProvider();
         $this->buildSchema();
+
+        // BENCH_SEED_ROWS=100000 writes into audit tables that already hold that many rows (index maintenance)
+        $this->seedAuditRows(Author::class, max(0, (int) (getenv('BENCH_SEED_ROWS') ?: 0)));
+        $this->seedAuditRows(Post::class, max(0, (int) (getenv('BENCH_SEED_ROWS') ?: 0)));
     }
 
     public function tearDownBase(): void
@@ -292,88 +276,4 @@ class AuditBench
         }
     }
 
-    // -------------------------------------------------------------------------
-    //  Infrastructure builders
-    // -------------------------------------------------------------------------
-
-    private function buildProvider(): void
-    {
-        $auditorConfig = new AuditorConfiguration(['timezone' => 'UTC', 'enabled' => true]);
-        $auditor       = new Auditor($auditorConfig, new EventDispatcher());
-
-        $providerConfig = new Configuration([
-            'table_prefix'    => '',
-            'table_suffix'    => '_audit',
-            'ignored_columns' => [],
-            'entities'        => [],
-            // BENCH_BATCH_SIZE=500 measures the multi-row INSERT of audit entries
-            'batch_size'      => max(0, (int) (getenv('BENCH_BATCH_SIZE') ?: 0)),
-        ]);
-        $this->provider = new DoctrineProvider($providerConfig);
-        $auditor->registerProvider($this->provider);
-
-        $this->em = $this->buildEntityManager();
-
-        $this->provider->registerStorageService(new StorageService('default', $this->em));
-        $this->provider->registerAuditingService(new AuditingService('default', $this->em));
-
-        $this->provider->getAuditor()->getConfiguration()->setUserProvider(
-            static fn (): User => new User('1', 'bench.user')
-        );
-        $this->provider->getAuditor()->getConfiguration()->setSecurityProvider(
-            static fn (): array => ['127.0.0.1', 'bench']
-        );
-
-        $this->provider->getConfiguration()->setEntities([
-            Author::class => ['enabled' => true],
-            Post::class   => ['enabled' => true],
-            Tag::class    => ['enabled' => true],
-        ]);
-    }
-
-    private function buildEntityManager(): EntityManagerInterface
-    {
-        $paths = [
-            __DIR__.'/../src/Provider/Doctrine/Auditing/Attribute',
-            __DIR__.'/../tests/Provider/Doctrine/Fixtures/Entity/Standard/Blog',
-        ];
-
-        $ormConfig = ORMSetup::createAttributeMetadataConfiguration($paths, isDevMode: true);
-        $ormConfig->setNamingStrategy(new UnderscoreNamingStrategy(CASE_LOWER));
-        $ormConfig->enableNativeLazyObjects(true);
-
-        $dbalConfig = new DBALConfiguration();
-        $dbalConfig->setMiddlewares([new AuditorMiddleware()]);
-
-        // BENCH_DATABASE_URL targets a real server (e.g. "pdo-mysql://auditor:password@127.0.0.1:3361/auditor");
-        // without it, the benchmark runs on an in-memory SQLite database.
-        $databaseUrl = getenv('BENCH_DATABASE_URL');
-        $params = \is_string($databaseUrl) && '' !== $databaseUrl
-            ? new DsnParser()->parse($databaseUrl)
-            : ['driver' => 'pdo_sqlite', 'memory' => true];
-
-        $connection = DriverManager::getConnection($params, $dbalConfig);
-
-        $em  = new EntityManager($connection, $ormConfig);
-        $evm = $em->getEventManager();
-        $evm->addEventListener(Events::onFlush, new SoftDeleteableListener());
-
-        return $em;
-    }
-
-    private function buildSchema(): void
-    {
-        // A real server keeps the tables of the previous iteration: start from an empty database.
-        $connection = $this->em->getConnection();
-        foreach ($connection->createSchemaManager()->introspectSchema()->toDropSql($connection->getDatabasePlatform()) as $sql) {
-            $connection->executeStatement($sql);
-        }
-
-        $schemaTool = new SchemaTool($this->em);
-        $classes    = $this->em->getMetadataFactory()->getAllMetadata();
-        $schemaTool->createSchema($classes);
-
-        $schemaManager = new SchemaManager($this->provider);
-        $schemaManager->updateAuditSchema();
-    }
 }

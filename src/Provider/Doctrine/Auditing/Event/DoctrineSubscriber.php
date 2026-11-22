@@ -65,6 +65,13 @@ final class DoctrineSubscriber implements ResetInterface
      */
     private array $remoteAuditTables = [];
 
+    /**
+     * Auditor driver of each connection (false when the auditor middleware is not configured on it).
+     *
+     * @var null|\WeakMap<Connection, AuditorDriver|false>
+     */
+    private ?\WeakMap $auditorDrivers = null;
+
     public function __construct(
         private readonly DoctrineProvider $provider // kept for BC, no longer used directly
     ) {}
@@ -227,7 +234,15 @@ final class DoctrineSubscriber implements ResetInterface
 
     private function auditorDriver(EntityManagerInterface $entityManager): ?AuditorDriver
     {
-        $driver = $this->getWrappedDriver($entityManager->getConnection()->getDriver());
+        // the driver of a connection never changes: unwrapped once per connection, not on every flush
+        $connection = $entityManager->getConnection();
+        $this->auditorDrivers ??= new \WeakMap();
+        if (!$this->auditorDrivers->offsetExists($connection)) {
+            $driver = $this->getWrappedDriver($connection->getDriver());
+            $this->auditorDrivers[$connection] = $driver instanceof AuditorDriver ? $driver : false;
+        }
+
+        $driver = $this->auditorDrivers[$connection];
 
         return $driver instanceof AuditorDriver ? $driver : null;
     }

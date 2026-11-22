@@ -280,6 +280,11 @@ final class SchemaManagerTest extends TestCase
                 $this->assertTrue($authorAuditTable->hasIndex($options['name']), 'audit table has an index named "'.$name.'".');
             }
         }
+
+        // the object_id and blame_id indices of earlier versions are dropped
+        foreach (SchemaHelper::getObsoleteAuditTableIndexNames('author_audit') as $indexName) {
+            $this->assertFalse($authorAuditTable->hasIndex($indexName), 'audit table has no index named "'.$indexName.'".');
+        }
     }
 
     #[DataProvider('provideComputeAuditTableNameCases')]
