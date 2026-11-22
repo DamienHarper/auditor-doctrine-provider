@@ -448,8 +448,8 @@ final readonly class SchemaManager
      * With DBAL 4.5+, returns a new table and leaves the given one untouched.
      * With older DBAL versions, modifies the given table in place and returns it.
      *
-     * @param array<string, array{type: string, options: array<string, mixed>}> $expectedColumns
-     * @param array<string, array{type: string, name?: string}>                 $expectedIndices
+     * @param array<string, array{type: string, options: array<string, mixed>}>                   $expectedColumns
+     * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
      *
      * @throws SchemaException
      */
@@ -498,7 +498,7 @@ final readonly class SchemaManager
     /**
      * Adds the primary key and indices of an audit table (DBAL 4.5+), replacing the ones of $currentTable.
      *
-     * @param array<string, array{type: string, name?: string}> $expectedIndices
+     * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
      */
     private function addAuditTableIndices(TableEditor $editor, ?Table $currentTable, array $expectedIndices, Connection $connection): void
     {
@@ -516,19 +516,22 @@ final readonly class SchemaManager
                         ->create()
                 );
             } elseif (isset($struct['name'])) {
+                // Composite indexes carry an explicit 'columns' list; single-column indexes derive
+                // from the array key (which is the column name for non-composite entries).
+                $columns = $struct['columns'] ?? [$columnName];
+
                 if ($currentTable instanceof Table && $currentTable->hasIndex($struct['name'])) {
                     $editor->dropIndex($currentTable->getIndex($struct['name'])->getObjectName());
                 }
 
-                $editor->addIndex(
-                    Index::editor()
-                        ->setUnquotedName($struct['name'])
-                        ->addUnquotedColumnName(
-                            $columnName,
-                            PlatformHelper::isIndexLengthLimited($columnName, $connection) ? 191 : null
-                        )
-                        ->create()
-                );
+                $indexEditor = Index::editor()->setUnquotedName($struct['name']);
+                // Length limiting only applies to single string columns, not composites
+                $isLengthLimited = 1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection);
+                foreach ($columns as $column) {
+                    $indexEditor->addUnquotedColumnName($column, $isLengthLimited ? 191 : null);
+                }
+
+                $editor->addIndex($indexEditor->create());
             } else {
                 throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
             }
@@ -650,12 +653,13 @@ final readonly class SchemaManager
             if ('primary' === $struct['type']) {
                 DoctrineHelper::setPrimaryKey($auditTable, $columnName);
             } elseif (isset($struct['name'])) {
+                $columns = $struct['columns'] ?? [$columnName];
                 // @phpstan-ignore method.deprecated (DBAL < 4.5 compatibility path)
                 $auditTable->addIndex(
-                    [$columnName],
+                    $columns,
                     $struct['name'],
                     [],
-                    PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                    1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection) ? ['lengths' => [191]] : []
                 );
             } else {
                 throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
@@ -727,12 +731,13 @@ final readonly class SchemaManager
                     $table->dropIndex($options['name']);
                 }
 
+                $columns = $options['columns'] ?? [$columnName];
                 // @phpstan-ignore method.deprecated (DBAL < 4.5 compatibility path)
                 $table->addIndex(
-                    [$columnName],
+                    $columns,
                     $options['name'],
                     [],
-                    PlatformHelper::isIndexLengthLimited($columnName, $connection) ? ['lengths' => [191]] : []
+                    1 === \count($columns) && PlatformHelper::isIndexLengthLimited($columns[0], $connection) ? ['lengths' => [191]] : []
                 );
             }
         }
