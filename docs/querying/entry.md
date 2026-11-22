@@ -75,7 +75,7 @@ All entry types use the same unified envelope. `getDiffs()` returns the `changes
 }
 ```
 
-**`remove`** — `new` is always `null`; full snapshot stored in `old`:
+**`remove`** — empty by default (the `source` block identifies the deleted entity); with the `full_snapshot_on_remove` option, every audited field, `new` always `null`:
 ```json
 {
     "title":   { "old": "Hello auditor!", "new": null },
