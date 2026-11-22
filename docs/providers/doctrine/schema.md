@@ -88,7 +88,7 @@ $schemaManager->updateAuditSchema();
 
 Two console commands are available.
 
-#### audit:schema:update
+#### `audit:schema:update`
 
 Creates new audit tables and updates existing ones to match the current schema.
 
@@ -103,7 +103,7 @@ php bin/console audit:schema:update --force
 php bin/console audit:schema:update --dump-sql --force
 ```
 
-#### audit:clean
+#### `audit:clean`
 
 Removes audit entries older than a specified retention period (`P12M` by default).
 
