@@ -11,6 +11,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ConnectionTrait;
 use DH\Auditor\Tests\Traits\ReflectionTrait;
+use Doctrine\DBAL\Exception\TableNotFoundException;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -418,5 +419,14 @@ final class QueryTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $query->resetQueryPart('invalid_part');
+    }
+
+    public function testCountPropagatesDatabaseErrors(): void
+    {
+        $query = new Query('missing_audit', $this->createConnection(), 'UTC');
+
+        $this->expectException(TableNotFoundException::class);
+
+        $query->count();
     }
 }
