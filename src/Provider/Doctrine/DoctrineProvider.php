@@ -294,6 +294,23 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
     }
 
     /**
+     * Returns true if $entity is auditable and has an audit table.
+     *
+     * An auditable entity has no audit table when the "skip_disabled_entities" option is on and the entity is
+     * disabled by its configuration (e.g. #[Auditable(enabled: false)]).
+     */
+    public function hasAuditTable(object|string $entity): bool
+    {
+        if (!$this->isAuditable($entity)) {
+            return false;
+        }
+
+        \assert($this->configuration instanceof Configuration);   // helps PHPStan
+
+        return !$this->configuration->isAuditTableSkipped(DoctrineHelper::getRealClassName($entity));
+    }
+
+    /**
      * Returns true if $entity is audited.
      */
     public function isAudited(object|string $entity): bool

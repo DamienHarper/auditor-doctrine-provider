@@ -35,14 +35,14 @@ final readonly class CreateSchemaListener
 
         $targetEntity = $metadata->name;
         // check if entity or its children are audited
-        if (!$this->provider->isAuditable($metadata->name)) {
+        if (!$this->provider->hasAuditTable($metadata->name)) {
             $audited = false;
             if (
                 $metadata->rootEntityName === $metadata->name
                 && ClassMetadata::INHERITANCE_TYPE_SINGLE_TABLE === $metadata->inheritanceType
             ) {
                 foreach ($metadata->subClasses as $subClass) {
-                    if ($this->provider->isAuditable($subClass)) {
+                    if ($this->provider->hasAuditTable($subClass)) {
                         $audited = true;
                         $targetEntity = $subClass;
 

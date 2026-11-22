@@ -110,6 +110,10 @@ final readonly class Reader implements ReaderInterface
 
         $entities = $configuration->getEntities();
         foreach (array_keys($entities) as $entity) {
+            if (!$this->provider->hasAuditTable($entity)) {
+                continue;
+            }
+
             try {
                 $auditTable = $this->getEntityAuditTableName($entity);
 
@@ -243,6 +247,10 @@ final readonly class Reader implements ReaderInterface
     {
         if (!$this->provider->isAuditable($entity)) {
             throw new InvalidArgumentException('Entity '.$entity.' is not auditable.');
+        }
+
+        if (!$this->provider->hasAuditTable($entity)) {
+            throw new InvalidArgumentException('Entity '.$entity.' has no audit table ("skip_disabled_entities" option).');
         }
     }
 
