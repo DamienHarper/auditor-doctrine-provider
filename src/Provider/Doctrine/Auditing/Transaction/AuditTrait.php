@@ -101,7 +101,7 @@ trait AuditTrait
     private static function columnSet(mixed $columns): array
     {
         $set = [];
-        if (\is_iterable($columns)) {
+        if (is_iterable($columns)) {
             foreach ($columns as $column) {
                 if (\is_string($column)) {
                     $set[$column] = true;
@@ -369,7 +369,7 @@ trait AuditTrait
      * @throws ConversionException
      * @throws ORMMappingException
      */
-    private function snapshot(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): array
+    private function removalSnapshot(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         $connection = $entityManager->getConnection();
