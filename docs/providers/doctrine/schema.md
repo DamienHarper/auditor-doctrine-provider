@@ -74,7 +74,7 @@ All entry types share a unified JSON envelope:
 - `changes` — field-level diff with explicit `old`/`new` for every operation:
   - **INSERT**: `old` is always `null`
   - **UPDATE**: both `old` and `new` reflect the changed values
-  - **REMOVE**: `new` is always `null`; `old` holds the full entity snapshot
+  - **REMOVE**: empty by default; with `full_snapshot_on_remove`, every audited field with its `old` value and a `null` `new`
 - **ASSOCIATE / DISSOCIATE** — use a different structure (no `changes` key):
   ```json
   {
@@ -183,8 +183,31 @@ php bin/console audit:clean -x App\\Entity\\User
 php bin/console audit:clean -i App\\Entity\\Log
 ```
 
+Entities with a retention policy (`#[Auditable(maxAge: …, maxEntries: …)]`, or the `max_age` / `max_entries` entity
+options) apply it: `maxAge` replaces the global cutoff, and `maxEntries` also deletes everything but the N most recent
+entries. See [Retention Policy](attributes.md#retention-policy).
+
+#### audit:export
+
+Exports audit entries as NDJSON (default, recommended for large exports), JSON or CSV, streamed to the standard
+output or to a file.
+
+```bash
+# Every auditable entity, NDJSON on stdout
+php bin/console audit:export
+
+# One entity, as CSV, for a period
+php bin/console audit:export App\\Entity\\Post --format=csv --from=2026-01-01 --to=2026-03-31 --output=posts.csv
+
+# One object, or one user, without the user and IP fields
+php bin/console audit:export App\\Entity\\Post --id=42 --anonymize
+php bin/console audit:export --blame-id=7
+```
+
+Each line or row is an `Entry::toArray()`: the same columns for legacy and schema v2 entries.
+
 > [!NOTE]
-> Both commands use Symfony's Lock component to prevent concurrent execution.
+> These commands use Symfony's Lock component to prevent concurrent execution.
 
 #### Registering Commands (Standalone)
 
@@ -192,6 +215,7 @@ When not using auditor-bundle, register the commands manually:
 
 ```php
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\ExportAuditLogsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
 use Symfony\Component\Console\Application;
@@ -209,6 +233,10 @@ $application->add($migrateCommand);
 $cleanCommand = new CleanAuditLogsCommand();
 $cleanCommand->setAuditor($auditor);
 $application->add($cleanCommand);
+
+$exportCommand = new ExportAuditLogsCommand();
+$exportCommand->setAuditor($auditor);
+$application->add($exportCommand);
 
 $application->run();
 ```
