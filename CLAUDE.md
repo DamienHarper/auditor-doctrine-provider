@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`auditor-doctrine-provider` (namespace `DH\Auditor\Provider\Doctrine`) is the Doctrine ORM provider of the [`damienharper/auditor`](https://github.com/DamienHarper/auditor) audit-log library: it detects entity changes on flush, writes them to audit tables in the same database transaction, and reads them back. Active development targets **2.x** on `main` (PHP ≥ 8.4, Doctrine ORM ^3.7, DBAL ^4.6, Symfony ^8.0 components, PHPUnit 13).
+`auditor-doctrine-provider` (namespace `DH\Auditor\Provider\Doctrine`) is the Doctrine ORM provider of the [`damienharper/auditor`](https://github.com/DamienHarper/auditor) audit-log library: it detects entity changes on flush, writes them to audit tables in the same database transaction, and reads them back. Active development targets **2.x** on `main` (PHP ≥ 8.4, Doctrine ORM ^3.7, DBAL ^4.6, Symfony ^8.1 components, PHPUnit 13).
 
 ## auditor family
 

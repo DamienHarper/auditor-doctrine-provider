@@ -11,9 +11,9 @@
 | PHP                       | >= 8.4   |
 | doctrine/dbal             | >= 4.6   |
 | doctrine/orm              | >= 3.7   |
-| symfony/cache             | >= 8.0   |
-| symfony/lock              | >= 8.0   |
-| symfony/event-dispatcher  | >= 8.0   |
+| symfony/cache             | >= 8.1   |
+| symfony/lock              | >= 8.1   |
+| symfony/event-dispatcher  | >= 8.1   |
 | damienharper/auditor      | >= 5.0   |
 
 Tested with PHP 8.4, 8.5 and 8.6, and Symfony 8.1 and 8.2.
