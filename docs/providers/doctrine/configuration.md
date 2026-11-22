@@ -22,6 +22,7 @@ $configuration = new Configuration([
     'batch_size'      => 0,
     'skip_disabled_entities' => false,
     'compression'     => false,
+    'ignored_columns_resolver' => null,
 ]);
 ```
 
@@ -39,6 +40,7 @@ $configuration = new Configuration([
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
 | `skip_disabled_entities` | `bool`    | `false`    | No audit table for entities disabled by their configuration (see below) |
 | `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
+| `ignored_columns_resolver` | `callable\|null` | `null` | Returns the properties to ignore for a given entity object (see below) |
 
 ## 📛 Table Naming
 
@@ -102,6 +104,81 @@ $configuration = new Configuration([
 ]);
 ```
 
+### Audited Properties (Allowlist)
+
+When only a few properties of an entity matter, list them with `audited_columns` instead of ignoring all the others:
+
+```php
+$configuration = new Configuration([
+    'entities' => [
+        App\Entity\Order::class => [
+            'audited_columns' => ['status', 'total', 'customer'],
+        ],
+    ],
+]);
+```
+
+- Only the listed properties (fields and to-one associations) appear in the diffs; an update that only changes
+  other properties writes no audit entry. Inserts and removals are still audited.
+- `null` or no `audited_columns` (the default) audits every property; `[]` audits no property, so only inserts and
+  removals are recorded (with empty diffs, or the allowlisted properties with `full_snapshot_on_remove`).
+- The identifier is not audited as a field unless it is listed, but every entry still records it (`object_id` and
+  the diff `source`).
+- An allowlist cannot audit an ignored property: global and per-entity `ignored_columns`, `#[Ignore]` and the
+  `ignored_columns_resolver` always win (see [Which properties are audited](#which-properties-are-audited)).
+
+### Ignoring Properties per Object
+
+`ignored_columns` and `audited_columns` apply to every object of an entity class. To decide per object (e.g. skip
+a field while a document is a draft), give `ignored_columns_resolver` a callable that receives the entity object
+and returns the properties to ignore for it:
+
+```php
+use App\Entity\Document;
+use DH\Auditor\Provider\Doctrine\Auditing\IgnoredColumnsResolverInterface;
+
+final class DocumentIgnoredColumnsResolver implements IgnoredColumnsResolverInterface
+{
+    public function __invoke(object $entity): array
+    {
+        if ($entity instanceof Document && $entity->isDraft()) {
+            return ['content'];
+        }
+
+        return [];
+    }
+}
+
+$configuration = new Configuration([
+    'ignored_columns_resolver' => new DocumentIgnoredColumnsResolver(),
+]);
+
+// or later, with any callable (null removes it)
+$configuration->setIgnoredColumnsResolver(static fn (object $entity): array => []);
+```
+
+- The resolver is called for every audited entity object, once per insert, update and (with
+  `full_snapshot_on_remove`) removal, with the entity as it is when the flush is processed: keep it cheap.
+- It must return a list of property names; anything else throws an `UnexpectedValueException`.
+- Its result is added to the ignored properties: a resolver can ignore more properties, never audit a property that
+  the configuration ignores or leaves out of `audited_columns`.
+- `isAuditedField()` applies it when given an entity object, not a class name.
+
+### Which Properties Are Audited
+
+A property is audited when its entity is audited and the property is:
+
+1. not in the global `ignored_columns`,
+2. not in the entity `ignored_columns` nor marked with `#[Ignore]`,
+3. listed in the entity `audited_columns`, when the entity has one,
+4. not returned by the `ignored_columns_resolver` for that object, when one is set.
+
+Ignoring always wins: a property listed in `audited_columns` but ignored by any other rule is not audited.
+
+> [!NOTE]
+> These rules apply to fields and to-one associations, which are recorded in the diffs. Changes of to-many
+> associations are recorded as `associate` / `dissociate` entries and are not filtered by property.
+
 ## 🏷️ Entity Configuration
 
 Configure entities programmatically instead of (or in addition to) using attributes:
@@ -132,6 +209,7 @@ $configuration = new Configuration([
 |-------------------|------------|---------|-------------------------------------------------|
 | `enabled`         | `bool`     | `true`  | Whether auditing is enabled for this entity     |
 | `ignored_columns` | `array`    | `[]`    | Properties to ignore for this entity            |
+| `audited_columns` | `?array`   | `null`  | Allowlist: only these properties are audited (`null`: all) |
 | `roles`           | `array`    | `null`  | View permissions (`['view' => ['ROLE_X']]`)     |
 | `max_age`         | `?string`  | `null`  | Retention: ISO 8601 duration applied by `audit:clean` instead of the global cutoff |
 | `max_entries`     | `?int`     | `null`  | Retention: number of most recent entries kept by `audit:clean` |
@@ -317,9 +395,12 @@ $provider->isAuditedField(App\Entity\Post::class, 'password'); // false (if igno
 > [!TIP]
 > Configuration from PHP attributes and programmatic config are merged intelligently.
 
-1. PHP attributes on entities are loaded first (via `AttributeLoader`)
-2. Programmatic configuration (the `entities` array) takes precedence over attributes
-3. Global `ignored_columns` are combined with entity-specific ones
+1. PHP attributes on entities are loaded first (via `AttributeLoader`): for an entity with `#[Auditable]`, they
+   provide `enabled`, `roles` (`#[Security]`) and the `#[Ignore]` properties
+2. The entity `ignored_columns` of the programmatic configuration are added to the `#[Ignore]` properties
+3. The entity `audited_columns` and the retention options (`max_age`, `max_entries`, key by key) of the programmatic
+   configuration are kept
+4. Global `ignored_columns` and the `ignored_columns_resolver` apply on top of the entity options
 
 ```php
 // Given this entity with attributes:
@@ -337,14 +418,15 @@ $configuration = new Configuration([
     'entities' => [
         Post::class => [
             'ignored_columns' => ['slug'],
-            'roles' => ['view' => ['ROLE_ADMIN']],  // Overrides attribute
+            'audited_columns' => ['title', 'slug', 'cached', 'updatedAt'],
         ],
     ],
 ]);
 
 // Final configuration for Post:
-// - ignored_columns: ['cached', 'slug', 'updatedAt']
-// - roles: ['view' => ['ROLE_ADMIN']]
+// - entity ignored_columns: ['cached', 'slug'] (+ the global 'updatedAt')
+// - audited_columns: ['title', 'slug', 'cached', 'updatedAt'] => only 'title' is audited
+// - roles: ['view' => ['ROLE_USER']]
 ```
 
 ## 📄 Complete Example

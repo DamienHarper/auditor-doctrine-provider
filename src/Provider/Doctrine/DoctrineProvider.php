@@ -342,6 +342,10 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
     /**
      * Returns true if $field is audited.
+     *
+     * A field is audited when its entity is audited, the field is not ignored (globally, for its entity, or by
+     * #[Ignore]) and, when "audited_columns" is set for its entity, is listed there. When $entity is an object, the
+     * "ignored_columns_resolver" is applied too.
      */
     public function isAuditedField(object|string $entity, string $field): bool
     {
@@ -363,7 +367,19 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
         // are columns excluded and is field part of them?
         // yes => $field is not audited
-        return !isset($entityOptions['ignored_columns']) || !\in_array($field, $entityOptions['ignored_columns'], true);
+        if (isset($entityOptions['ignored_columns']) && \in_array($field, $entityOptions['ignored_columns'], true)) {
+            return false;
+        }
+
+        // is there an allowlist and is field missing from it?
+        // yes => $field is not audited
+        if (\is_array($entityOptions['audited_columns'] ?? null) && !\in_array($field, $entityOptions['audited_columns'], true)) {
+            return false;
+        }
+
+        // does the resolver ignore the field for this object?
+        // yes => $field is not audited
+        return !\is_object($entity) || !\in_array($field, $this->configuration->resolveIgnoredColumns($entity), true);
     }
 
     public function supportsStorage(): bool
@@ -403,8 +419,6 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
         $merged = array_merge($entities, $attributeEntities);
 
-        // Retention settings given in the configuration (e.g. bundle YAML) take precedence over the attribute ones,
-        // key by key, so that they can be overridden per environment (an explicit null disables the attribute value).
         foreach (array_keys($attributeEntities) as $entity) {
             if (!\is_array($entities[$entity] ?? null)) {
                 continue;
@@ -414,10 +428,28 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
                 continue;
             }
 
+            // Retention settings given in the configuration (e.g. bundle YAML) take precedence over the attribute
+            // ones, key by key, so that they can be overridden per environment (an explicit null disables the
+            // attribute value).
             foreach (self::RETENTION_OPTIONS as $option) {
                 if (\array_key_exists($option, $entities[$entity])) {
                     $merged[$entity][$option] = $entities[$entity][$option];
                 }
+            }
+
+            // Properties ignored in the configuration are added to the #[Ignore] ones: neither can audit a property
+            // that the other ignores.
+            if (\is_array($entities[$entity]['ignored_columns'] ?? null)) {
+                $attributeIgnoredColumns = $merged[$entity]['ignored_columns'] ?? [];
+                $merged[$entity]['ignored_columns'] = array_values(array_unique([
+                    ...(\is_array($attributeIgnoredColumns) ? $attributeIgnoredColumns : []),
+                    ...$entities[$entity]['ignored_columns'],
+                ]));
+            }
+
+            // The allowlist only exists in the configuration.
+            if (\array_key_exists('audited_columns', $entities[$entity])) {
+                $merged[$entity]['audited_columns'] = $entities[$entity]['audited_columns'];
             }
         }
 
