@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Helper;
 
-use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\SchemaHelperTest;
 use DH\Auditor\Provider\Doctrine\Configuration;
+use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\SchemaHelperTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\ColumnEditor;
