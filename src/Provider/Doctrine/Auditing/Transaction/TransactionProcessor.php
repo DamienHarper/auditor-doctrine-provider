@@ -34,6 +34,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     private ?string $flushBlameJson = null;
 
+    private ?string $flushExtraData = null;
+
     public function __construct(private DoctrineProvider $provider) {}
 
     /**
@@ -85,6 +87,9 @@ final class TransactionProcessor implements TransactionProcessorInterface
             }
 
             $audited = $force ? [] : $this->auditedObjectIds($class, array_values($ids));
+            if (!$dryRun) {
+                $this->loadToOneTargets($entityManager, $meta, $classEntities);
+            }
 
             foreach ($classEntities as $entity) {
                 $id = $ids[spl_object_id($entity)];
@@ -118,15 +123,17 @@ final class TransactionProcessor implements TransactionProcessorInterface
     }
 
     /**
-     * Pre-computes blame JSON and timestamp once for the entire flush.
+     * Pre-computes blame JSON, extra data and timestamp once for the entire flush.
      * The blame context, if any, is written in the `via` key of the blame JSON.
-     * Avoids repeated json_encode() and DateTimeImmutable creation per audit entry.
+     * Avoids repeated json_encode(), extra data provider calls and DateTimeImmutable creation per audit entry.
      *
      * @param array{client_ip: ?string, user_firewall: ?string, user_fqdn: ?string, user_id: ?string, username: ?string} $blame
      */
     private function preComputeFlushContext(array $blame, ?BlameContext $blameContext = null): void
     {
         $tz = $this->dateTimeZone ??= new \DateTimeZone($this->provider->getAuditor()->getConfiguration()->timezone);
+        // the extra data provider takes no argument: called once for the whole flush, not for every entry
+        $this->flushExtraData = $this->extraData();
         $this->flushCreatedAt = new \DateTimeImmutable('now', $tz)->format('Y-m-d H:i:s.u');
         $this->flushBlameId = $blame['user_id'];
         $hasBlame = null !== $blame['user_id']
@@ -359,7 +366,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
             'discriminator' => $data['discriminator'],
             'transaction_id' => $data['transaction_id'],
             'diffs' => json_encode($diff, JSON_THROW_ON_ERROR),
-            'extra_data' => $this->extraData(),
+            'extra_data' => $this->flushExtraData,
             'blame_id' => $this->flushBlameId,
             'blame' => $this->flushBlameJson,
             'created_at' => $this->flushCreatedAt,
@@ -410,6 +417,54 @@ final class TransactionProcessor implements TransactionProcessorInterface
         }
 
         return $changeset;
+    }
+
+    /**
+     * Loads, with one query per target class, the uninitialized targets of the owning-side to-one associations of
+     * $entities whose class has a __toString() method: their summary label would otherwise load them one by one.
+     *
+     * @param ClassMetadata<object> $meta
+     * @param list<object>          $entities
+     */
+    private function loadToOneTargets(EntityManagerInterface $entityManager, ClassMetadata $meta, array $entities): void
+    {
+        $uow = $entityManager->getUnitOfWork();
+
+        /** @var array<class-string, array<string, mixed>> $ids identifiers by target class */
+        $ids = [];
+        foreach ($meta->associationMappings as $fieldName => $mapping) {
+            if (!$mapping->isToOneOwningSide()) {
+                continue;
+            }
+
+            foreach ($entities as $entity) {
+                $target = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
+                if (!\is_object($target) || !$uow->isUninitializedObject($target)) {
+                    continue;
+                }
+
+                $targetClass = DoctrineHelper::getRealClassName($target);
+                if (!(self::$hasToStringCache[$targetClass] ??= method_exists($targetClass, '__toString'))) {
+                    continue;
+                }
+
+                $identifier = $uow->getEntityIdentifier($target);
+                if (1 === \count($identifier)) {
+                    $id = reset($identifier);
+                    $ids[$targetClass][\is_scalar($id) || $id instanceof \Stringable ? (string) $id : spl_object_id($target)] = $id;
+                }
+            }
+        }
+
+        foreach ($ids as $targetClass => $targetIds) {
+            $targetMeta = $entityManager->getClassMetadata($targetClass);
+            if ($targetMeta->isIdentifierComposite) {
+                continue;
+            }
+
+            // the targets are hydrated into the proxies held by $entities
+            $entityManager->getRepository($targetMeta->getName())->findBy([$targetMeta->getSingleIdentifierFieldName() => array_values($targetIds)]);
+        }
     }
 
     /**

@@ -177,14 +177,17 @@ tools/docker/
 
 ### ⚡ Benchmarking
 
-The project ships with a **PHPBench** benchmark suite and a **Blackfire** profiling script to measure the performance impact of changes on the Doctrine flush pipeline (audit entry generation + persistence).
+The project ships with **PHPBench** benchmark suites and a **Blackfire** profiling script to measure the performance impact of changes on the Doctrine flush pipeline (audit entry generation + persistence), the read model and `audit:snapshot`.
 
 Benchmark files live in `benchmarks/`:
 
 ```
 benchmarks/
-├── AuditBench.php   # PHPBench suite — 6 statistical scenarios
-└── profile.php      # Standalone Blackfire profiling script
+├── AuditBench.php       # flush pipeline — 6 scenarios
+├── ReadBench.php        # Reader / Query — history, first and deep pages, count, transaction
+├── SnapshotBench.php    # audit:snapshot (Snapshotter)
+├── BenchSetupTrait.php  # shared provider, entity manager, schema and audit rows seeding
+└── profile.php          # Standalone Blackfire profiling script
 ```
 
 #### Composer Scripts (Recommended)
@@ -221,6 +224,10 @@ Two more environment variables shape the measured setup:
 
 - `BENCH_DATABASE_URL` runs the benchmarks on a database server instead of an in-memory SQLite database, e.g. `pdo-mysql://auditor:password@127.0.0.1:3361/auditor` or `pdo-pgsql://postgres:password@127.0.0.1:5433/auditor`. Every table of that database is dropped first: use a disposable one.
 - `BENCH_BATCH_SIZE` sets the `batch_size` provider option (default: `0`, one `INSERT` per audit entry).
+- `BENCH_SEED_ROWS` fills the audit tables of `AuditBench` with that many rows before the measured flush (default: `0`): index maintenance only shows on large tables.
+- `BENCH_READ_ROWS` (default: `50000`) and `BENCH_EXTRA_TABLES` (default: `200`) size the audit table and the database of `ReadBench`. `SnapshotBench` snapshots `BENCH_N` posts (default: `2000`).
+
+To compare with a branch that does not have a benchmark yet, copy the `benchmarks/` directory into a checkout of that branch and take the baseline there.
 
 ```bash
 # Measure the batched audit entries on PostgreSQL, back to back with the default

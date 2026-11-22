@@ -63,6 +63,13 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
     private ?ContainerInterface $diffLabelResolverLocator = null;
 
+    /**
+     * Storage mappers configured by class name, by class name.
+     *
+     * @var array<class-string, object>
+     */
+    private array $storageMappers = [];
+
     private LoggerInterface $logger;
 
     /**
@@ -191,7 +198,8 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         }
 
         if (\is_string($storageMapper) && class_exists($storageMapper)) {
-            $storageMapper = new $storageMapper();
+            // instantiated once, not for every audit entry
+            $storageMapper = $this->storageMappers[$storageMapper] ??= new $storageMapper();
         }
 
         \assert(\is_callable($storageMapper));   // helps PHPStan
@@ -221,8 +229,8 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         unset($payload['table'], $payload['entity']);
 
         \assert($this->configuration instanceof Configuration);   // helps PHPStan
-        $batchSize = $this->configuration->getBatchSize();
         $buffer = $this->activeBuffer;
+        $batchSize = $buffer->batchSize ?? $this->configuration->getBatchSize();
         if ($batchSize > 0 && $buffer instanceof AuditInsertBuffer) {
             // written when the database transaction is committed: the id of the audit entry is not known yet
             try {
@@ -236,15 +244,15 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             return;
         }
 
-        $storageService = $this->getStorageServiceForEntity($entity);
-        $connection = $storageService->getEntityManager()->getConnection();
+        $connection = $this->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
 
         $cacheKey = spl_object_id($connection).'.'.$auditTable;
+        $isPostgreSQL = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform;
 
         if (!isset($this->preparedStatements[$cacheKey])) {
             // PostgreSQL requires an explicit ::jsonb cast for jsonb columns in prepared statements
             // (the driver otherwise infers the placeholder type as text, causing a type mismatch).
-            $jsonCast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '::jsonb' : '';
+            $jsonCast = $isPostgreSQL ? '::jsonb' : '';
             $keys = AuditInsertBuffer::COLUMNS;
             $placeholders = array_map(
                 static fn (string $col): string => \in_array($col, AuditInsertBuffer::JSON_COLUMNS, true)
@@ -258,6 +266,12 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
                 implode(', ', $keys),
                 implode(', ', $placeholders)
             );
+
+            // On PostgreSQL, lastInsertId() runs a SELECT LASTVAL() query: the id is returned by the INSERT instead.
+            if ($isPostgreSQL) {
+                $query .= ' RETURNING id';
+            }
+
             $this->preparedStatements[$cacheKey] = $connection->prepare($query);
         }
 
@@ -272,11 +286,16 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             $statement->bindValue($fieldIndex[$key], $value);
         }
 
-        $statement->executeStatement();
+        if ($isPostgreSQL) {
+            $id = $statement->executeQuery()->fetchOne();
+        } else {
+            $statement->executeStatement();
+            $id = $connection->lastInsertId();
+        }
 
         // let's get the last inserted ID from the database so other providers can use that info
         $payload = $event->getPayload();
-        $payload['id'] = (int) $storageService->getEntityManager()->getConnection()->lastInsertId();
+        $payload['id'] = is_numeric($id) ? (int) $id : 0;
         $event->setPayload($payload);
     }
 

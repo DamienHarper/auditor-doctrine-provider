@@ -75,6 +75,43 @@ final class ExtraDataTest extends TestCase
     }
 
     /**
+     * The extra_data provider takes no argument: it is called once per flush, and every entry of the flush gets
+     * its value.
+     */
+    public function testExtraDataProviderIsCalledOncePerFlush(): void
+    {
+        $calls = 0;
+        $this->provider->getAuditor()->getConfiguration()->setExtraDataProvider(
+            static function () use (&$calls): array {
+                ++$calls;
+
+                return ['call' => $calls];
+            }
+        );
+
+        $storageServices = [
+            Post::class => $this->provider->getStorageServiceForEntity(Post::class),
+        ];
+        $entityManager = $storageServices[Post::class]->getEntityManager();
+        $reader = $this->createReader();
+
+        for ($i = 1; $i <= 3; ++$i) {
+            $post = new Post();
+            $post->setTitle('Post '.$i)->setBody('body')->setCreatedAt(new \DateTimeImmutable());
+            $entityManager->persist($post);
+        }
+
+        $this->flushAll($storageServices);
+
+        $this->assertSame(1, $calls, 'the provider is called once for the flush.');
+        $audits = $reader->createQuery(Post::class)->execute();
+        $this->assertCount(3, $audits);
+        foreach ($audits as $audit) {
+            $this->assertSame(['call' => 1], $audit->extraData);
+        }
+    }
+
+    /**
      * When an extra_data provider returns null, extra_data must be null.
      */
     public function testExtraDataIsNullWhenProviderReturnsNull(): void

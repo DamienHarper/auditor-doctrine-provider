@@ -17,6 +17,7 @@ use DH\Auditor\Security\SecurityProviderInterface;
 use DH\Auditor\Tests\Fixtures\Provider\AuditNoStorageProvider;
 use DH\Auditor\Tests\Fixtures\Provider\StorageNoAuditProvider;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditedEntity as AuditedEntityWithAttribute;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\ClassLevelAttributesEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -434,7 +435,7 @@ final class DoctrineProviderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(4, $loaded);
+        $this->assertCount(5, $loaded);
 
         $auditor = $this->createAuditor();
         $provider = new DoctrineProvider($this->createProviderConfiguration(['entities' => $loaded]));
@@ -449,6 +450,12 @@ final class DoctrineProviderTest extends TestCase
         $this->assertFalse($provider->isAuditedField(AuditedEntityWithAttribute::class, 'ignoredProtectedField'), 'Field "'.AuditedEntityWithAttribute::class.'::$ignoredProtectedField" is ignored.');
         $this->assertFalse($provider->isAuditedField(AuditedEntityWithAttribute::class, 'ignoredPrivateField'), 'Field "'.AuditedEntityWithAttribute::class.'::$ignoredPrivateField" is ignored.');
         $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'id'), 'Field "'.AuditedEntityWithAttribute::class.'::$id" is audited.');
+
+        // #[Ignore(field: …)] on the class
+        $this->assertFalse($provider->isAuditedField(ClassLevelAttributesEntity::class, 'secret'));
+        $this->assertFalse($provider->isAuditedField(ClassLevelAttributesEntity::class, 'token'));
+        $this->assertFalse($provider->isAuditedField(ClassLevelAttributesEntity::class, 'note'));
+        $this->assertTrue($provider->isAuditedField(ClassLevelAttributesEntity::class, 'categoryId'));
     }
 
     public function testConfiguredRetentionOverridesTheAttributeKeyByKey(): void

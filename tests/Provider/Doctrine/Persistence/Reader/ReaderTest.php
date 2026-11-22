@@ -399,6 +399,22 @@ final class ReaderTest extends TestCase
         $this->assertCount(2, $audits, 'result count is ok.');
     }
 
+    #[Depends('testGetAudits')]
+    public function testPagesFollowTheOrderOfTheWholeList(): void
+    {
+        $reader = $this->createReader();
+        $ids = static fn (array $entries): array => array_map(static fn (Entry $entry): ?int => $entry->id, $entries);
+
+        $all = $ids($reader->createQuery(Author::class, ['page_size' => null])->execute());
+        $pages = [];
+        for ($page = 1; $page <= 3; ++$page) {
+            // pages after the first one are read with a deferred join on MySQL and MariaDB
+            $pages = [...$pages, ...$ids($reader->createQuery(Author::class, ['page' => $page, 'page_size' => 2])->execute())];
+        }
+
+        $this->assertSame(\array_slice($all, 0, 6), $pages);
+    }
+
     public function testReaderHonorsPaging(): void
     {
         $reader = $this->createReader();
