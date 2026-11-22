@@ -82,8 +82,11 @@ final class DoctrineSubscriber implements ResetInterface
         $entityManagerId = spl_object_id($entityManager);
         $driver = $this->auditorDriver($entityManager);
         $transaction = $this->transaction($entityManager, $driver);
-        // Populate transaction
-        $this->provider->getTransactionManager()->populate($this->flushTransaction($entityManager, $transaction));
+        // Populate transaction, with the blame context current during this flush: the audits are written at commit
+        // time, when the context may already have been popped
+        $flushTransaction = $this->flushTransaction($entityManager, $transaction);
+        $flushTransaction->setBlameContext($this->provider->getAuditor()->getConfiguration()->getBlameContextStack()->current());
+        $this->provider->getTransactionManager()->populate($flushTransaction);
 
         // A single flusher per database transaction processes everything populated until the commit.
         if ($driver instanceof AuditorDriver && !isset($this->flushers[$entityManagerId])) {
@@ -134,6 +137,7 @@ final class DoctrineSubscriber implements ResetInterface
 
         $driver = $this->auditorDriver($entityManager);
         $transaction = new Transaction($entityManager, $this->transaction($entityManager, $driver)->getTransactionId());
+        $transaction->setBlameContext($pending->getBlameContext());
         $this->confirmedTransactions[$entityManagerId][] = [$transaction, $driver?->getCurrentSavepoint()];
 
         foreach ($pending->getInserted() as $dto) {

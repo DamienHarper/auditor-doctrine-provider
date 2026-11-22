@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Snapshot;
 
+use DH\Auditor\Blame\BlameContext;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Auditing\Snapshot\Snapshotter;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
@@ -11,6 +12,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
+use DH\Auditor\User\User;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -44,6 +46,20 @@ final class SnapshotterTest extends TestCase
         $diffs = $this->decode($rows[0]['diffs']);
         $this->assertEqualsCanonicalizing(['email', 'fullname'], array_keys($diffs['changes']), 'Every audited field but the generated id is recorded.');
         $this->assertSame(['new' => 'John', 'old' => null], $diffs['changes']['fullname']);
+    }
+
+    public function testSnapshotWritesTheCurrentBlameContext(): void
+    {
+        $this->provider->getAuditor()->getConfiguration()->getBlameContextStack()->run(
+            new BlameContext('console', 'audit:snapshot', user: new User('7', 'ops')),
+            fn () => new Snapshotter($this->provider)->snapshot(Author::class),
+        );
+
+        $row = $this->auditRows(Author::class)[0];
+        $this->assertSame('7', $row['blame_id']);
+        $blame = $this->decode($row['blame']);
+        $this->assertSame('ops', $blame['username']);
+        $this->assertSame(['type' => 'console', 'label' => 'audit:snapshot'], $blame['via']);
     }
 
     public function testSnapshotSummarizesOwningSideToOneAssociations(): void

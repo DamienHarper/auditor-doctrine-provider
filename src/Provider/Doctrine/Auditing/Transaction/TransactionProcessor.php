@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 
+use DH\Auditor\Blame\BlameContext;
 use DH\Auditor\Event\LifecycleEvent;
 use DH\Auditor\Model\TransactionInterface;
 use DH\Auditor\Model\TransactionType;
@@ -41,8 +42,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
     public function process(TransactionInterface $transaction): void
     {
         $em = $transaction->getEntityManager();
-        $blame = $this->blame();
-        $this->preComputeFlushContext($blame);
+        $blameContext = $transaction->getBlameContext();
+        $this->preComputeFlushContext($this->blame($blameContext?->user), $blameContext);
         $this->processInsertions($transaction, $em);
         $this->processUpdates($transaction, $em);
         $this->processAssociations($transaction, $em);
@@ -70,7 +71,9 @@ final class TransactionProcessor implements TransactionProcessorInterface
         }
 
         if (!$dryRun) {
-            $this->preComputeFlushContext($this->blame());
+            // written right away, outside of any flush: the current blame context applies
+            $blameContext = $this->provider->getAuditor()->getConfiguration()->getBlameContextStack()->current();
+            $this->preComputeFlushContext($this->blame($blameContext?->user), $blameContext);
         }
 
         $count = 0;
@@ -116,11 +119,12 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     /**
      * Pre-computes blame JSON and timestamp once for the entire flush.
+     * The blame context, if any, is written in the `via` key of the blame JSON.
      * Avoids repeated json_encode() and DateTimeImmutable creation per audit entry.
      *
      * @param array{client_ip: ?string, user_firewall: ?string, user_fqdn: ?string, user_id: ?string, username: ?string} $blame
      */
-    private function preComputeFlushContext(array $blame): void
+    private function preComputeFlushContext(array $blame, ?BlameContext $blameContext = null): void
     {
         $tz = $this->dateTimeZone ??= new \DateTimeZone($this->provider->getAuditor()->getConfiguration()->timezone);
         $this->flushCreatedAt = new \DateTimeImmutable('now', $tz)->format('Y-m-d H:i:s.u');
@@ -130,14 +134,25 @@ final class TransactionProcessor implements TransactionProcessorInterface
             || null !== $blame['user_fqdn']
             || null !== $blame['user_firewall']
             || null !== $blame['client_ip'];
-        $this->flushBlameJson = $hasBlame
-            ? json_encode([
-                'username' => $blame['username'],
-                'user_fqdn' => $blame['user_fqdn'],
-                'user_firewall' => $blame['user_firewall'],
-                'ip' => $blame['client_ip'],
-            ], JSON_THROW_ON_ERROR)
-            : null;
+
+        if (!$hasBlame && !$blameContext instanceof BlameContext) {
+            $this->flushBlameJson = null;
+
+            return;
+        }
+
+        $blameData = [
+            'username' => $blame['username'],
+            'user_fqdn' => $blame['user_fqdn'],
+            'user_firewall' => $blame['user_firewall'],
+            'ip' => $blame['client_ip'],
+        ];
+
+        if ($blameContext instanceof BlameContext) {
+            $blameData['via'] = $blameContext->toArray();
+        }
+
+        $this->flushBlameJson = json_encode($blameData, JSON_THROW_ON_ERROR);
     }
 
     private function notify(array $payload, ?object $entity = null): void

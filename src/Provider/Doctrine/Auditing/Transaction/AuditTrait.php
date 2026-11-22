@@ -503,9 +503,11 @@ trait AuditTrait
     /**
      * Blames an audit operation.
      *
+     * @param null|UserInterface $user user to blame instead of the one returned by the user provider
+     *
      * @return array{client_ip: null|string, user_firewall: null|string, user_fqdn: null|string, user_id: null|string, username: null|string}
      */
-    private function blame(): array
+    private function blame(?UserInterface $user = null): array
     {
         $user_id = null;
         $username = null;
@@ -518,8 +520,10 @@ trait AuditTrait
             [$client_ip, $user_firewall] = $securityProvider();
         }
 
-        $userProvider = $this->provider->getAuditor()->getConfiguration()->getUserProvider();
-        $user = null === $userProvider ? null : $userProvider();
+        if (!$user instanceof UserInterface) {
+            $userProvider = $this->provider->getAuditor()->getConfiguration()->getUserProvider();
+            $user = null === $userProvider ? null : $userProvider();
+        }
         if ($user instanceof UserInterface) {
             $user_id = $user->identifier;
             $username = $user->username;
