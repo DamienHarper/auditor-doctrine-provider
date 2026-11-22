@@ -118,7 +118,7 @@ composer testdox
 | 8.5         | ✅ Tested |
 | 8.6         | ✅ Tested |
 
-The CI tests Symfony 8.2, and Symfony 8.0 on PHP 8.4 as the lowest supported version.
+The CI tests Symfony 8.2, and Symfony 8.1 on PHP 8.4 (every Symfony 8.0 release is blocked by Composer's security advisories).
 
 ## 📝 License
 
