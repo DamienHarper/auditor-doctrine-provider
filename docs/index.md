@@ -119,6 +119,8 @@ flowchart TD
 - [DoctrineProvider](providers/doctrine/index.md)
 - [Configuration Reference](providers/doctrine/configuration.md)
 - [Querying Audits](querying/index.md)
+- [Performance](providers/doctrine/performance.md)
+- [Upgrade Guide](upgrade/index.md)
 
 ## Related Projects
 

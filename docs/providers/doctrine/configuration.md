@@ -19,6 +19,7 @@ $configuration = new Configuration([
     'viewer'          => true,
     'storage_mapper'  => null,
     'utf8_convert'    => false,
+    'full_snapshot_on_remove' => false,
     'batch_size'      => 0,
     'skip_disabled_entities' => false,
     'compression'     => false,
@@ -37,6 +38,7 @@ $configuration = new Configuration([
 | `viewer`         | `bool\|array`     | `true`     | Enable/configure the audit viewer                |
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
+| `full_snapshot_on_remove` | `bool`   | `false`    | Record every audited field of a removed entity (see below) |
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
 | `skip_disabled_entities` | `bool`    | `false`    | No audit table for entities disabled by their configuration (see below) |
 | `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
@@ -252,6 +254,21 @@ $configuration = new Configuration([
 ]);
 ```
 
+## 📸 Full Snapshot on Remove
+
+By default, a `remove` entry only identifies the deleted entity: its diff holds the `source` block (id, class, label,
+table) and an empty `changes`. With `full_snapshot_on_remove`, it also records the value of every audited field
+before the deletion, as `old` (with `new` set to `null`), so that the last state of a deleted entity can be read
+from its audit history:
+
+```php
+$configuration = new Configuration([
+    'full_snapshot_on_remove' => true,
+]);
+```
+
+The snapshot makes `remove` entries larger, and lets `ChangedFieldFilter` match them on any of their fields.
+
 ## 📦 Batch INSERT
 
 By default (`batch_size: 0`), each audit entry is written with its own `INSERT` statement as soon as it is produced.
@@ -284,8 +301,8 @@ $configuration = new Configuration([
   payload once the entry is written.
 - **Failures fail the commit**: if an audit entry cannot be buffered (e.g. the storage mapper throws) or the buffered
   audit entries cannot be written, the commit fails with the first of these failures and the audited transaction is
-  rolled back, so that no change is committed without its audit entries (with `batch_size: 0`, such a failure is
-  ignored and the audit entry is lost). This includes audit entries
+  rolled back, so that no change is committed without its audit entries (as with `batch_size: 0`, where a failure to
+  write an audit entry also fails the flush). This includes audit entries
   stored on another connection (see [Multi-Database Configuration](multi-database.md)): those already written by an
   early batch are deleted when the audited transaction is rolled back, as they are with `batch_size: 0`.
 - **Outside of a commit**: `DoctrineProvider::persist()` called directly, outside of the commit of an audited

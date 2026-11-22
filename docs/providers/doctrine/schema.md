@@ -74,7 +74,7 @@ All entry types share a unified JSON envelope:
 - `changes` — field-level diff with explicit `old`/`new` for every operation:
   - **INSERT**: `old` is always `null`
   - **UPDATE**: both `old` and `new` reflect the changed values
-  - **REMOVE**: `new` is always `null`; `old` holds the full entity snapshot
+  - **REMOVE**: empty by default; with `full_snapshot_on_remove`, every audited field with its `old` value and a `null` `new`
 - `snapshot` — only on entries written by [`audit:snapshot`](#auditsnapshot): an `insert` entry with
   `"snapshot": true` records the state of an entity that existed before auditing started, not its creation
   (`Entry::isSnapshot()` reads it)
@@ -120,7 +120,7 @@ $schemaManager->updateAuditSchema();
 
 Three console commands are available.
 
-#### audit:schema:update
+#### `audit:schema:update`
 
 Creates new audit tables and updates existing ones to match the current schema.
 
@@ -135,7 +135,7 @@ php bin/console audit:schema:update --force
 php bin/console audit:schema:update --dump-sql --force
 ```
 
-#### audit:schema:migrate
+#### `audit:schema:migrate`
 
 Migrates existing audit tables from schema version 1 to schema version 2.
 
@@ -165,7 +165,7 @@ php bin/console audit:schema:migrate --force --convert-all --limit=10000
 > on large tables. Without this flag, legacy rows remain readable via `Entry::getDiffs()` since
 > the `Entry` model handles both schema versions transparently.
 
-#### audit:clean
+#### `audit:clean`
 
 Removes audit entries older than a specified retention period (`P12M` by default).
 
@@ -186,7 +186,30 @@ php bin/console audit:clean -x App\\Entity\\User
 php bin/console audit:clean -i App\\Entity\\Log
 ```
 
-#### audit:snapshot
+Entities with a retention policy (`#[Auditable(maxAge: …, maxEntries: …)]`, or the `max_age` / `max_entries` entity
+options) apply it: `maxAge` replaces the global cutoff, and `maxEntries` also deletes everything but the N most recent
+entries. See [Retention Policy](attributes.md#retention-policy).
+
+#### `audit:export`
+
+Exports audit entries as NDJSON (default, recommended for large exports), JSON or CSV, streamed to the standard
+output or to a file.
+
+```bash
+# Every auditable entity, NDJSON on stdout
+php bin/console audit:export
+
+# One entity, as CSV, for a period
+php bin/console audit:export App\\Entity\\Post --format=csv --from=2026-01-01 --to=2026-03-31 --output=posts.csv
+
+# One object, or one user, without the user and IP fields
+php bin/console audit:export App\\Entity\\Post --id=42 --anonymize
+php bin/console audit:export --blame-id=7
+```
+
+Each line or row is an `Entry::toArray()`: the same columns for legacy and schema v2 entries.
+
+#### `audit:snapshot`
 
 Records the current state of existing entities, so that their history does not start at their first change
 when auditing is enabled on a database that already holds data. Each entity gets one `insert` entry flagged
@@ -243,6 +266,7 @@ When not using auditor-bundle, register the commands manually:
 
 ```php
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\ExportAuditLogsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\SnapshotCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
@@ -265,6 +289,10 @@ $application->add($cleanCommand);
 $snapshotCommand = new SnapshotCommand();
 $snapshotCommand->setAuditor($auditor);
 $application->add($snapshotCommand);
+
+$exportCommand = new ExportAuditLogsCommand();
+$exportCommand->setAuditor($auditor);
+$application->add($exportCommand);
 
 $application->run();
 ```
