@@ -63,6 +63,10 @@ class Post {}
 class DraftPost {}
 ```
 
+An entity disabled by default still gets an audit table, so that auditing can be enabled for it at runtime. If you
+never do that (e.g. a linter requires `#[Auditable]` on every entity and some are never meant to be audited), the
+[`skip_disabled_entities`](configuration.md#-skipping-disabled-entities) option leaves them without an audit table.
+
 ### Retention Policy
 
 ```php

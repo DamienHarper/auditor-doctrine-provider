@@ -20,6 +20,7 @@ $configuration = new Configuration([
     'storage_mapper'  => null,
     'utf8_convert'    => false,
     'batch_size'      => 0,
+    'skip_disabled_entities' => false,
     'compression'     => false,
 ]);
 ```
@@ -36,6 +37,7 @@ $configuration = new Configuration([
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
+| `skip_disabled_entities` | `bool`    | `false`    | No audit table for entities disabled by their configuration (see below) |
 | `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
 
 ## 📛 Table Naming
@@ -251,6 +253,27 @@ altering the columns rewrites the table and compresses existing entries. Disabli
 > MariaDB 11.2, writes to the audit table are also locked for the duration of the rewrite, so audited flushes wait for
 > it; since MariaDB 11.2, the rewrite runs online by default (`ALGORITHM=COPY, LOCK=NONE`). Plan it like any other
 > large schema migration.
+
+## ⏭️ Skipping Disabled Entities
+
+An entity disabled by its configuration (`#[Auditable(enabled: false)]` or `'enabled' => false`) is not audited, but
+it still gets an audit table: auditing can be enabled for it at runtime with `enableAuditFor()`, and the audit
+entries need somewhere to go. When you never enable such entities at runtime, `skip_disabled_entities` leaves them
+without an audit table:
+
+```php
+$configuration = new Configuration([
+    'skip_disabled_entities' => true,
+]);
+```
+
+- `audit:schema:update`, `doctrine:schema:update` and `doctrine:migrations:diff` all skip these entities, so the
+  result does not depend on the tool that manages your schema. Existing audit tables of these entities are left as
+  they are: drop them yourself if you no longer need them.
+- `enableAuditFor()` throws a `LogicException` for these entities, instead of a failing flush later on. Entities
+  enabled by their configuration and disabled at runtime with `disableAuditFor()` keep their audit table.
+- The `Reader` refuses to query these entities and ignores them when reading a transaction.
+- Entities configured without an `enabled` key are enabled, so they are never skipped.
 
 ## 🗄️ Storage Mapper
 

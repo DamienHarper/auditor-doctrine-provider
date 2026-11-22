@@ -107,7 +107,7 @@ final readonly class SchemaManager
 
     /**
      * Returns an array of audit table names indexed by entity FQN.
-     * Only auditable entities are considered.
+     * Only auditable entities with an audit table are considered.
      */
     public function getAuditableTableNames(EntityManagerInterface $entityManager): array
     {
@@ -119,7 +119,7 @@ final readonly class SchemaManager
 
         $audited = [];
         foreach ($entities as $entity) {
-            if ($this->provider->isAuditable($entity)) {
+            if ($this->provider->hasAuditTable($entity)) {
                 $audited[$entity] = $entityManager->getClassMetadata($entity)->getTableName();
             }
         }

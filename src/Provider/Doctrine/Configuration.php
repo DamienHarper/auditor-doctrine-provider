@@ -42,6 +42,15 @@ final class Configuration implements ConfigurationInterface
     private readonly int $batchSize;
     private readonly bool $compression;
 
+    private readonly bool $skipDisabledEntities;
+
+    /**
+     * Entities disabled by their configuration (before any runtime change), when "skip_disabled_entities" is on.
+     *
+     * @var null|array<string, true>
+     */
+    private ?array $skippedEntities = null;
+
     private bool $initialized = false;
 
     /**
@@ -73,6 +82,7 @@ final class Configuration implements ConfigurationInterface
         $this->utf8Convert = $config['utf8_convert'];
         $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
         $this->batchSize = $config['batch_size'];
+        $this->skipDisabledEntities = $config['skip_disabled_entities'];
         $this->compression = $config['compression'];
         $this->storageMapper = $config['storage_mapper'];
     }
@@ -116,6 +126,7 @@ final class Configuration implements ConfigurationInterface
     {
         $this->entities = $entities;
         $this->initialized = false;
+        $this->skippedEntities = null;
 
         return $this;
     }
@@ -195,6 +206,31 @@ final class Configuration implements ConfigurationInterface
     public function getBatchSize(): int
     {
         return $this->batchSize;
+    }
+
+    /**
+     * Whether entities disabled by their configuration (e.g. #[Auditable(enabled: false)]) get no audit table.
+     *
+     * By default, such entities still get an audit table, since auditing can be enabled for them at runtime with
+     * enableAuditFor(). With this option, audit:schema:update, doctrine:schema:update and Doctrine Migrations skip
+     * them, and enableAuditFor() refuses to enable them.
+     */
+    public function isSkipDisabledEntitiesEnabled(): bool
+    {
+        return $this->skipDisabledEntities;
+    }
+
+    /**
+     * Whether the given entity has no audit table: "skip_disabled_entities" is on and the entity is disabled by its
+     * configuration. Runtime changes made with enableAuditFor() / disableAuditFor() do not change the answer.
+     */
+    public function isAuditTableSkipped(string $entity): bool
+    {
+        if (!$this->skipDisabledEntities) {
+            return false;
+        }
+
+        return isset($this->getSkippedEntities()[$entity]);
     }
 
     /**
@@ -319,6 +355,10 @@ final class Configuration implements ConfigurationInterface
      */
     public function enableAuditFor(string $entity): self
     {
+        if ($this->isAuditTableSkipped($entity)) {
+            throw new \LogicException(\sprintf('Auditing cannot be enabled for "%s": it is disabled by its configuration and has no audit table since the "skip_disabled_entities" option is on.', $entity));
+        }
+
         if (isset($this->getEntities()[$entity])) {
             $this->entities[$entity]['enabled'] = true;
         }
@@ -335,6 +375,11 @@ final class Configuration implements ConfigurationInterface
      */
     public function disableAuditFor(string $entity): self
     {
+        if ($this->skipDisabledEntities) {
+            // snapshot the configured state before changing it
+            $this->getSkippedEntities();
+        }
+
         if (isset($this->getEntities()[$entity])) {
             $this->entities[$entity]['enabled'] = false;
         }
@@ -368,6 +413,30 @@ final class Configuration implements ConfigurationInterface
         $this->initialized = false;
     }
 
+    /**
+     * @return array<string, true>
+     */
+    private function getSkippedEntities(): array
+    {
+        if (null !== $this->skippedEntities) {
+            return $this->skippedEntities;
+        }
+
+        $skipped = [];
+        foreach ($this->getEntities() as $entity => $options) {
+            if (\is_array($options) && \array_key_exists('enabled', $options) && false === $options['enabled']) {
+                $skipped[(string) $entity] = true;
+            }
+        }
+
+        // only keep the snapshot once attributes are loaded, so that it reflects the whole configuration
+        if ($this->initialized) {
+            $this->skippedEntities = $skipped;
+        }
+
+        return $skipped;
+    }
+
     private function configureOptions(OptionsResolver $resolver): void
     {
         // https://symfony.com/doc/current/components/options_resolver.html
@@ -384,6 +453,7 @@ final class Configuration implements ConfigurationInterface
                 'utf8_convert' => false,
                 'full_snapshot_on_remove' => false,
                 'batch_size' => 0,
+                'skip_disabled_entities' => false,
                 'compression' => false,
             ])
             ->setAllowedTypes('table_prefix', 'string')
@@ -398,6 +468,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('full_snapshot_on_remove', 'bool')
             ->setAllowedTypes('batch_size', 'int')
             ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
+            ->setAllowedTypes('skip_disabled_entities', 'bool')
             ->setAllowedTypes('compression', 'bool')
         ;
     }
