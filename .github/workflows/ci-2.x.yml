@@ -84,13 +84,19 @@ jobs:
         php:
           - '8.4'
           - '8.5'
+          - '8.6'
         symfony:
-          - '8.*'
+          - '8.2.*'
         db:
           - 'sqlite'
           - 'mysql'
           - 'mariadb'
           - 'pgsql'
+        include:
+          # Lowest installable Symfony minor: every 8.0 release is blocked by Composer's security advisories (8.0 is EOL)
+          - php: '8.4'
+            symfony: '8.1.*'
+            db: 'sqlite'
       fail-fast: false
 
     steps:
@@ -137,7 +143,7 @@ jobs:
 
       - name: Update project dependencies
         env:
-          SYMFONY_REQUIRE: "^8.0"
+          SYMFONY_REQUIRE: ${{ matrix.symfony }}
         run: composer update --no-progress --ansi --prefer-stable
 
       - name: Install PHPStan

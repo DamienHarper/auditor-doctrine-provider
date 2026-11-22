@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`auditor-doctrine-provider` (namespace `DH\Auditor\Provider\Doctrine`) is the Doctrine ORM provider of the [`damienharper/auditor`](https://github.com/DamienHarper/auditor) audit-log library: it detects entity changes on flush, writes them to audit tables in the same database transaction, and reads them back. Active development targets **2.x** on `main` (PHP ≥ 8.4, Doctrine ORM ^3.7, DBAL ^4.6, Symfony ^8.0 components, PHPUnit 13).
+`auditor-doctrine-provider` (namespace `DH\Auditor\Provider\Doctrine`) is the Doctrine ORM provider of the [`damienharper/auditor`](https://github.com/DamienHarper/auditor) audit-log library: it detects entity changes on flush, writes them to audit tables in the same database transaction, and reads them back. Active development targets **2.x** on `main` (PHP ≥ 8.4, Doctrine ORM ^3.7, DBAL ^4.6, Symfony ^8.1 components, PHPUnit 13).
 
 ## auditor family
 
@@ -55,7 +55,7 @@ make tests args='--filter=ReaderTest'
 make qa                                 # rector + cs-fix + phpstan in Docker
 make help                               # all targets and options
 ```
-CI runs PHP 8.4/8.5 on SQLite, MySQL and PostgreSQL; MariaDB is only covered by `make tests db=mariadb`.
+CI runs PHP 8.4/8.5/8.6 (Symfony 8.2, plus 8.1 on PHP 8.4/SQLite) on SQLite, MySQL and PostgreSQL; MariaDB is only covered by `make tests db=mariadb`.
 
 ### Git worktrees (Makefile)
 Parallel work happens in worktrees under `.claude/worktrees/<name>/` (git-ignored), each with its

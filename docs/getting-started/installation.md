@@ -11,16 +11,18 @@
 | PHP                       | >= 8.4   |
 | doctrine/dbal             | >= 4.6   |
 | doctrine/orm              | >= 3.7   |
-| symfony/cache             | >= 8.0   |
-| symfony/lock              | >= 8.0   |
-| symfony/event-dispatcher  | >= 8.0   |
-| damienharper/auditor      | >= 4.0   |
+| symfony/cache             | >= 8.1   |
+| symfony/lock              | >= 8.1   |
+| symfony/event-dispatcher  | >= 8.1   |
+| damienharper/auditor      | >= 5.0   |
+
+Tested with PHP 8.4, 8.5 and 8.6, and Symfony 8.1 and 8.2.
 
 ### Previous Versions
 
 | Version | PHP    | damienharper/auditor |
 |---------|--------|----------------------|
-| 1.x     | >= 8.4 | >= 4.0               |
+| 1.x     | >= 8.4 | >= 4.1               |
 
 ## 📦 Install via Composer
 
