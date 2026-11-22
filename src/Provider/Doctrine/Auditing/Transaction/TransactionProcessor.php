@@ -13,6 +13,7 @@ use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Tests\Provider\Doctrine\Auditing\Transaction\TransactionProcessorTest;
 use DH\Auditor\Transaction\TransactionProcessorInterface;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\ClassMetadata;
 
@@ -47,6 +48,70 @@ final class TransactionProcessor implements TransactionProcessorInterface
         $this->processAssociations($transaction, $em);
         $this->processDissociations($transaction, $em);
         $this->processDeletions($transaction, $em);
+    }
+
+    /**
+     * Writes a snapshot of existing entities: one 'insert' entry per entity, flagged with "snapshot": true,
+     * that records the current state of the entity (old: null, new: current value).
+     *
+     * Entities that already have an audit entry are skipped unless $force is true; with $dryRun, nothing is
+     * written. Returns the number of entities snapshotted (or that would be, with $dryRun).
+     *
+     * @param list<object> $entities
+     */
+    public function snapshot(EntityManagerInterface $entityManager, array $entities, string $transactionId, bool $force = false, bool $dryRun = false): int
+    {
+        $byClass = [];
+        foreach ($entities as $entity) {
+            $class = DoctrineHelper::getRealClassName($entity);
+            if ($this->provider->isAudited($class) && $this->provider->hasAuditTable($class)) {
+                $byClass[$class][] = $entity;
+            }
+        }
+
+        if (!$dryRun) {
+            $this->preComputeFlushContext($this->blame());
+        }
+
+        $count = 0;
+        foreach ($byClass as $class => $classEntities) {
+            $meta = $entityManager->getClassMetadata($class);
+            $ids = [];
+            foreach ($classEntities as $entity) {
+                $ids[spl_object_id($entity)] = (string) $this->id($entityManager, $entity, $meta); // @phpstan-ignore-line
+            }
+
+            $audited = $force ? [] : $this->auditedObjectIds($class, array_values($ids));
+
+            foreach ($classEntities as $entity) {
+                $id = $ids[spl_object_id($entity)];
+                if (isset($audited[$id])) {
+                    continue;
+                }
+
+                ++$count;
+                if ($dryRun) {
+                    continue;
+                }
+
+                $diff = $this->diff($entityManager, $entity, $this->snapshotChangeset($meta, $entity), $meta);
+                $diff['snapshot'] = true;
+
+                $this->audit([
+                    'action' => TransactionType::Insert,
+                    'diff' => $diff,
+                    'table' => $meta->getTableName(),
+                    'schema' => $meta->getSchemaName(),
+                    'id' => $id,
+                    'transaction_id' => $transactionId,
+                    'discriminator' => $this->getDiscriminator($entity, $meta->inheritanceType),
+                    'entity' => $meta->getName(),
+                    'entity_object' => $entity,
+                ]);
+            }
+        }
+
+        return $count;
     }
 
     /**
@@ -314,6 +379,60 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
         // Leave any other thing as is
         return $input;
+    }
+
+    /**
+     * Builds the changeset of an insert from the current state of an entity: every field and owning-side
+     * to-one association, as [null, current value]. Generated identifiers are left out, as in a real insert.
+     *
+     * @return array<string, array{0: null, 1: mixed}>
+     */
+    private function snapshotChangeset(ClassMetadata $meta, object $entity): array
+    {
+        $changeset = [];
+        foreach (array_keys($meta->fieldMappings) as $fieldName) {
+            if ($meta->isIdentifier($fieldName) && !$meta->isIdentifierNatural()) {
+                continue;
+            }
+
+            $changeset[$fieldName] = [null, DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity)];
+        }
+
+        foreach (array_keys($meta->associationMappings) as $fieldName) {
+            if ($meta->isSingleValuedAssociation($fieldName) && !$meta->isAssociationInverseSide($fieldName)) {
+                $changeset[$fieldName] = [null, DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity)];
+            }
+        }
+
+        return $changeset;
+    }
+
+    /**
+     * Returns, among $objectIds, those that already have an entry in the audit table of $entity.
+     *
+     * @param list<string> $objectIds
+     *
+     * @return array<string, true>
+     */
+    private function auditedObjectIds(string $entity, array $objectIds): array
+    {
+        if ([] === $objectIds) {
+            return [];
+        }
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        $auditTable = $configuration->getEntities()[$entity]['computed_audit_table_name'] ?? '';
+        $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+
+        /** @var list<int|string> $rows */
+        $rows = $connection->fetchFirstColumn(
+            \sprintf('SELECT DISTINCT object_id FROM %s WHERE object_id IN (?)', $auditTable),
+            [$objectIds],
+            [ArrayParameterType::STRING],
+        );
+
+        return array_fill_keys(array_map(strval(...), $rows), true);
     }
 
     private function getDiscriminator(object $entity, int $inheritanceType): ?string

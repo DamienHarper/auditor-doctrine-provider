@@ -108,6 +108,17 @@ $target = $entry->getDiffTarget();
 
 Both return `null` for legacy schema v1 entries.
 
+### Snapshots
+
+`audit:snapshot` records the state of entities that existed before auditing started as `insert` entries
+flagged with `"snapshot": true`. `isSnapshot()` tells them from real insertions (always `false` on schema v1):
+
+```php
+if ('insert' === $entry->type && $entry->isSnapshot()) {
+    // state of the entity at $entry->createdAt, when it was snapshotted: not its creation
+}
+```
+
 ### Legacy Diff Structure (schema version 1)
 
 `getDiffs()` returns the raw decoded array as-is (minus the internal `@source` key):
