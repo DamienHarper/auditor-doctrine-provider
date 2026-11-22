@@ -6,6 +6,7 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
+use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Bike;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Car;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Vehicle;
@@ -19,6 +20,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
+use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
@@ -88,7 +90,8 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $output = $commandTester->getDisplay();
         $this->assertStringContainsString('The following SQL statements will be executed:', $output);
-        $this->assertStringContainsString('schema_version = 1', $output);
+        // Existing rows are marked as legacy rows by the statement that adds the column.
+        $this->assertMatchesRegularExpression('/schema_version SMALLINT[^;]*DEFAULT 1\b/i', $output);
     }
 
     #[Depends('testExecuteWithLegacySchemaDumpsSql')]
@@ -476,6 +479,58 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->assertSame(0, (int) $this->auditConnection()->fetchOne('SELECT COUNT(*) FROM post_audit WHERE transaction_id IS NULL'));
     }
 
+    public function testInterruptedTransactionHashConversionKeepsTheTransactionGroupedAcrossTables(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->simulateLegacySchema('comment_audit');
+        $postRow = $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+        $commentRow = $this->insertLegacyRow('comment_audit', 'insert', '1', ['body' => ['new' => 'Hello']]);
+
+        // Both rows were written by the same flush; a previous run converted post_audit, then stopped.
+        $connection = $this->auditConnection();
+        $connection->executeStatement('ALTER TABLE post_audit ADD COLUMN transaction_id CHAR(26)');
+        $connection->executeStatement('UPDATE comment_audit SET transaction_hash = ? WHERE id = ?', ['shared-hash', $commentRow]);
+        $connection->executeStatement('UPDATE post_audit SET transaction_hash = ?, transaction_id = ? WHERE id = ?', ['shared-hash', '01JZZZZZZZZZZZZZZZZZZZZZZZ', $postRow]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true]);
+
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertSame('01JZZZZZZZZZZZZZZZZZZZZZZZ', $connection->fetchOne('SELECT transaction_id FROM comment_audit WHERE id = ?', [$commentRow]));
+    }
+
+    public function testCompleteMigrationDropsTheLegacyBlameUserIndex(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->createLegacyBlameUserIndex('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true]);
+
+        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $table = $this->auditTable('post_audit');
+        $this->assertFalse($table->hasColumn('blame_user'));
+        $this->assertFalse($table->hasIndex($this->legacyBlameUserIndexName('post_audit')), 'The 1.x (blame_user, blame_id) index must not survive the migration.');
+
+        // audit:schema:update then brings the table to the v2 indexes, and only those.
+        new SchemaManager($this->provider)->updateAuditSchema();
+
+        $expectedIndexes = array_map(
+            static fn (array $struct): string => mb_strtolower($struct['name']),
+            array_filter(SchemaHelper::getAuditTableIndices('post_audit'), static fn (array $struct): bool => isset($struct['name'])),
+        );
+        $actualIndexes = [];
+        foreach ($this->auditTable('post_audit')->getIndexes() as $index) {
+            $columns = array_map(static fn (IndexedColumn $column): string => $column->getColumnName()->toString(), $index->getIndexedColumns());
+            if (['id'] !== $columns) { // primary key
+                $actualIndexes[] = mb_strtolower($index->getObjectName()->toString());
+            }
+        }
+
+        $this->assertEqualsCanonicalizing(array_values($expectedIndexes), $actualIndexes);
+    }
+
     /**
      * Manipulates the first audit table to look like a v1 schema:
      * drops schema_version, adds transaction_hash (VARCHAR 40).
@@ -492,6 +547,23 @@ final class MigrateSchemaCommandTest extends TestCase
             Car::class => ['enabled' => true],
             Bike::class => ['enabled' => true],
         ]);
+    }
+
+    /**
+     * Creates the (blame_user, blame_id) index added to v1 audit tables by provider 1.x.
+     */
+    private function createLegacyBlameUserIndex(string $tableName): void
+    {
+        $this->auditConnection()->executeStatement(\sprintf(
+            'CREATE INDEX %s ON %s (blame_user, blame_id)',
+            $this->legacyBlameUserIndexName($tableName),
+            $tableName,
+        ));
+    }
+
+    private function legacyBlameUserIndexName(string $tableName): string
+    {
+        return 'blame_user_blame_id_'.md5($tableName).'_idx';
     }
 
     /**

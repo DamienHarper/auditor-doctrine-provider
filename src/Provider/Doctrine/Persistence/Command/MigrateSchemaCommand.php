@@ -19,6 +19,7 @@ use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\ComparatorConfig;
+use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\TableEditor;
 use Doctrine\ORM\Mapping\FieldMapping;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -41,7 +42,7 @@ use Symfony\Component\Uid\Ulid;
  *
  *   Phase 1 (additive)   — add new columns, mark rows as schema_version=1, migrate blame JSON
  *   Conversions          — --convert-transaction-hash and/or --convert-diffs (reads transaction_hash)
- *   Phase 2 (destructive)— drop the transaction_hash index and the legacy columns (transaction_hash, blame_user, …)
+ *   Phase 2 (destructive)— drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …)
  *
  * Phase 2 is skipped when --limit is set so that partial runs can be resumed safely.
  *
@@ -453,8 +454,8 @@ final class MigrateSchemaCommand extends Command
      * Generates additive and destructive DDL SQL statements per legacy audit table.
      *
      * Additive: add new columns (idempotent — skips already-present columns),
-     *           mark existing rows as schema_version=1, migrate blame columns to JSON.
-     * Destructive: drop the transaction_hash index and the legacy columns (transaction_hash, blame_user, …).
+     *           existing rows get schema_version=1, migrate blame columns to JSON.
+     * Destructive: drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …).
      *
      * @param array<string, Connection> $tables
      * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase.
@@ -499,16 +500,16 @@ final class MigrateSchemaCommand extends Command
                         $colType = 'text';
                     }
 
+                    // Existing rows are legacy rows: adding the column with a default of 1 marks them in the
+                    // same statement, so that a run interrupted right after it cannot leave them at 2.
+                    // audit:schema:update sets the default of the v2 schema afterwards.
+                    if ('schema_version' === $colName) {
+                        $colOptions['default'] = 1;
+                    }
+
                     $column = SchemaHelper::buildColumn($colName, $colType, $colOptions);
                     foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->addColumn($column)) as $sql) {
                         $additive[] = $sql;
-                    }
-
-                    // Mark all existing rows as schema_version=1 immediately after adding the column.
-                    // This UPDATE only appears in the generated list when schema_version is first added
-                    // (the hasColumn check above guards it), so it never runs on restart.
-                    if ('schema_version' === $colName) {
-                        $additive[] = \sprintf('UPDATE %s SET schema_version = 1', $tableName);
                     }
                 }
             }
@@ -518,31 +519,44 @@ final class MigrateSchemaCommand extends Command
                 $additive[] = $this->buildBlameMigrationSql($tableName, $connection);
             }
 
-            // 3. Drop legacy columns (destructive — executed after conversions, and only when --limit is not set)
-            foreach (self::LEGACY_COLUMNS as $colName) {
-                // Skip transaction_hash if it should be preserved for a subsequent conversion run.
-                if ('transaction_hash' === $colName && !$dropTransactionHash) {
+            // 3. Drop legacy columns (destructive — executed after conversions, and only when --limit is not set).
+            // Skip transaction_hash if it should be preserved for a subsequent conversion run.
+            $droppedColumns = array_values(array_filter(
+                self::LEGACY_COLUMNS,
+                static fn (string $colName): bool => $table->hasColumn($colName) && ($dropTransactionHash || 'transaction_hash' !== $colName),
+            ));
+
+            // Indexes covering a dropped column are dropped first: the transaction_hash index of v1 tables,
+            // the (blame_user, blame_id) index of provider 1.x, or any custom one. MySQL and MariaDB would
+            // otherwise keep them on the remaining columns under their legacy name.
+            // The transaction_hash index goes with its column, not in the additive phase:
+            // --convert-transaction-hash looks rows up by transaction_hash, and would otherwise
+            // scan the whole table once per legacy transaction.
+            foreach ($table->getIndexes() as $index) {
+                $indexedColumns = array_map(
+                    static fn (IndexedColumn $column): string => mb_strtolower($column->getColumnName()->getIdentifier()->getValue()),
+                    $index->getIndexedColumns(),
+                );
+
+                if ([] === array_intersect($indexedColumns, $droppedColumns)) {
                     continue;
                 }
 
-                // The transaction_hash index is dropped with its column, not in the additive phase:
-                // --convert-transaction-hash looks rows up by transaction_hash, and would otherwise
-                // scan the whole table once per legacy transaction.
-                if ('transaction_hash' === $colName) {
-                    $oldTxIdx = 'transaction_hash_'.md5($tableName).'_idx';
-                    if ($table->hasIndex($oldTxIdx)) {
-                        $indexName = $table->getIndex($oldTxIdx)->getObjectName();
-                        foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
-                            $destructive[] = $sql;
-                        }
-                    }
+                $indexName = $index->getObjectName();
+                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
+                    $destructive[] = $sql;
                 }
+            }
 
-                if ($table->hasColumn($colName)) {
-                    $columnName = $table->getColumn($colName)->getObjectName();
-                    foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropColumn($columnName)) as $sql) {
-                        $destructive[] = $sql;
-                    }
+            // transaction_hash goes last: a table keeps being detected as a legacy table until it is dropped,
+            // so a run interrupted between two of these statements (MySQL and MariaDB do not roll DDL back)
+            // is completed by the next one.
+            usort($droppedColumns, static fn (string $a, string $b): int => ('transaction_hash' === $a) <=> ('transaction_hash' === $b));
+
+            foreach ($droppedColumns as $colName) {
+                $columnName = $table->getColumn($colName)->getObjectName();
+                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropColumn($columnName)) as $sql) {
+                    $destructive[] = $sql;
                 }
             }
 
@@ -598,6 +612,25 @@ final class MigrateSchemaCommand extends Command
         /** @var array<string, string> $hashMap  hash => ulid */
         $hashMap = [];
 
+        // ULIDs already given to a hash by an interrupted run: reusing them keeps the transaction
+        // grouped across the tables that run had converted and the ones it had not reached.
+        /** @var array<string, string> $convertedHashes hash => ulid */
+        $convertedHashes = [];
+        foreach ($tables as $tableName => $connection) {
+            if (!$connection->createSchemaManager()->introspectSchema()->getTable($tableName)->hasColumn('transaction_hash')) {
+                continue;
+            }
+
+            $pairs = $connection->fetchAllNumeric(\sprintf(
+                'SELECT DISTINCT transaction_hash, transaction_id FROM %s WHERE transaction_id IS NOT NULL AND transaction_hash IS NOT NULL',
+                $tableName,
+            ));
+
+            foreach ($pairs as [$hash, $ulid]) {
+                $convertedHashes[(string) $hash] ??= (string) $ulid;
+            }
+        }
+
         foreach ($tables as $tableName => $connection) {
             $dbSchemaManager = $connection->createSchemaManager();
             $schema = $dbSchemaManager->introspectSchema();
@@ -615,7 +648,7 @@ final class MigrateSchemaCommand extends Command
 
             foreach ($hashes as $raw) {
                 $hash = (string) $raw;
-                $hashMap[$hash] ??= (string) new Ulid();
+                $hashMap[$hash] ??= $convertedHashes[$hash] ?? (string) new Ulid();
             }
         }
 
