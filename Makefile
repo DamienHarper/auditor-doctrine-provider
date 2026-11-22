@@ -26,7 +26,7 @@ else ifeq ($(db),pgsql)
   DATABASE_URL = "pgsql://postgres:password@pgsql/auditor?serverVersion=15&charset=utf8"
   compose_files += -f tools/docker/compose.pgsql.yaml
 else ifeq ($(db),mariadb)
-  DATABASE_URL = "mysql://auditor:password@mariadb/auditor?serverVersion=11&charset=utf8mb4"
+  DATABASE_URL = "mysql://auditor:password@mariadb/auditor?serverVersion=11.8.2-MariaDB&charset=utf8mb4"
   compose_files += -f tools/docker/compose.mariadb.yaml
 else ifeq ($(db),sqlite)
   DATABASE_URL = "sqlite:///:memory:"

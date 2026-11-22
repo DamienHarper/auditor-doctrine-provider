@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Persistence\Helper;
 
+use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\SchemaHelperTest;
+use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\ColumnEditor;
 use Doctrine\DBAL\Schema\Table;
@@ -15,6 +17,47 @@ use Doctrine\DBAL\Types\Types;
  */
 abstract class SchemaHelper
 {
+    /**
+     * Audit table columns holding potentially large values, stored compressed when compression is enabled.
+     *
+     * @see Configuration::isCompressionEnabled()
+     */
+    private const array COMPRESSIBLE_COLUMNS = ['diffs', 'extra_data'];
+
+    /**
+     * Returns the names of the audit table columns that are stored compressed when compression is enabled.
+     *
+     * @return list<string>
+     */
+    public static function getCompressibleColumns(): array
+    {
+        return self::COMPRESSIBLE_COLUMNS;
+    }
+
+    /**
+     * Returns the declaration of a compressible audit table column (without its name), e.g. "JSON COMPRESSED
+     * DEFAULT NULL" on MariaDB.
+     *
+     * The COMPRESSED attribute has to directly follow the data type. DBAL has no column property for it, so it
+     * is set through the column definition; compressible columns are nullable and default to NULL, which keeps
+     * the declaration identical to the one DBAL generates for the uncompressed column.
+     *
+     * The declaration is rebuilt from the type only: a charset, collation or comment set on a compressible column
+     * would be dropped, so these columns must not have any.
+     *
+     * @internal
+     */
+    public static function getCompressibleColumnDeclarationSQL(Column $column, Connection $connection, bool $compressed): string
+    {
+        \assert(!$column->getNotnull() && null === $column->getDefault(), 'Compressible columns are nullable and default to NULL.');
+
+        return DoctrineHelper::getType($connection, $column->getTypeName())
+            ->getSQLDeclaration($column->toArray(true), $connection->getDatabasePlatform())
+            .($compressed ? ' COMPRESSED' : '')
+            .' DEFAULT NULL'
+        ;
+    }
+
     /**
      * Return columns of audit tables.
      *

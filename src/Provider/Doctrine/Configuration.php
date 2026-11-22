@@ -40,6 +40,7 @@ final class Configuration implements ConfigurationInterface
     private readonly bool $fullSnapshotOnRemove;
 
     private readonly int $batchSize;
+    private readonly bool $compression;
 
     private readonly bool $skipDisabledEntities;
 
@@ -82,6 +83,7 @@ final class Configuration implements ConfigurationInterface
         $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
         $this->batchSize = $config['batch_size'];
         $this->skipDisabledEntities = $config['skip_disabled_entities'];
+        $this->compression = $config['compression'];
         $this->storageMapper = $config['storage_mapper'];
     }
 
@@ -229,6 +231,18 @@ final class Configuration implements ConfigurationInterface
         }
 
         return isset($this->getSkippedEntities()[$entity]);
+    }
+
+    /**
+     * Whether the large JSON columns of audit tables (diffs, extra_data) are stored compressed.
+     *
+     * Only effective on MariaDB, where these columns are declared with the COMPRESSED attribute
+     * (transparent column compression). Ignored on other platforms: PostgreSQL already compresses
+     * large JSONB values (TOAST), MySQL and SQLite have no column-level compression.
+     */
+    public function isCompressionEnabled(): bool
+    {
+        return $this->compression;
     }
 
     /**
@@ -440,6 +454,7 @@ final class Configuration implements ConfigurationInterface
                 'full_snapshot_on_remove' => false,
                 'batch_size' => 0,
                 'skip_disabled_entities' => false,
+                'compression' => false,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -454,6 +469,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('batch_size', 'int')
             ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
             ->setAllowedTypes('skip_disabled_entities', 'bool')
+            ->setAllowedTypes('compression', 'bool')
         ;
     }
 }
