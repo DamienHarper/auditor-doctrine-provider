@@ -55,7 +55,7 @@ make tests args='--filter=ReaderTest'
 make qa                                 # rector + cs-fix + phpstan in Docker
 make help                               # all targets and options
 ```
-CI runs PHP 8.4/8.5/8.6 (Symfony 8.2, plus 8.0 on PHP 8.4/SQLite) on SQLite, MySQL and PostgreSQL; MariaDB is only covered by `make tests db=mariadb`.
+CI runs PHP 8.4/8.5/8.6 (Symfony 8.2, plus 8.1 on PHP 8.4/SQLite) on SQLite, MySQL and PostgreSQL; MariaDB is only covered by `make tests db=mariadb`.
 
 ### Git worktrees (Makefile)
 Parallel work happens in worktrees under `.claude/worktrees/<name>/` (git-ignored), each with its

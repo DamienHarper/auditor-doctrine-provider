@@ -93,9 +93,9 @@ jobs:
           - 'mariadb'
           - 'pgsql'
         include:
-          # Lowest supported Symfony version
+          # Lowest installable Symfony minor: every 8.0 release is blocked by Composer's security advisories (8.0 is EOL)
           - php: '8.4'
-            symfony: '8.0.*'
+            symfony: '8.1.*'
             db: 'sqlite'
       fail-fast: false
 
