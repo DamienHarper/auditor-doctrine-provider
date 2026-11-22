@@ -135,6 +135,14 @@ class User
 
 The `#[Ignore]` attribute has no parameters.
 
+### Combining with the Configuration
+
+- The entity `ignored_columns` of the configuration are added to the `#[Ignore]` properties.
+- `#[Ignore]` wins over the `audited_columns` allowlist: a property marked with `#[Ignore]` is never audited, even
+  when it is listed there.
+- To decide per object instead of per class, use the `ignored_columns_resolver` option
+  (see [Configuration](configuration.md#ignoring-properties-per-object)).
+
 ### Common Use Cases
 
 ```php

@@ -328,18 +328,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
 
-        // Populate entity config cache if not already done by diff() (e.g. remove/associate).
         // The cache correctly handles quoted identifiers for computed_audit_table_name.
-        if (!isset($this->entityConfigCache[$entityClass])) {
-            $entityCfg = $configuration->getEntities()[$entityClass] ?? [];
-            $this->entityConfigCache[$entityClass] = [
-                'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
-                'ignored_columns' => $entityCfg['ignored_columns'] ?? [],
-                'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
-            ];
-        }
-
-        $auditTable = $this->entityConfigCache[$entityClass]['computed_audit_table_name'];
+        $auditTable = $this->entityConfig($entityClass)['computed_audit_table_name'];
         $diff = $data['diff'];
         if ((\is_string($diff) || \is_array($diff)) && $configuration->isUtf8ConvertEnabled()) {
             $diff = $this->convertEncoding($diff);

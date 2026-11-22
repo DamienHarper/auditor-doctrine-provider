@@ -454,7 +454,7 @@ final class DoctrineProviderTest extends TestCase
     public function testConfiguredRetentionOverridesTheAttributeKeyByKey(): void
     {
         // RetentionEntity carries #[Auditable(maxAge: 'P7Y', maxEntries: 1_000)]
-        $options = $this->loadRetentionEntityWith(['enabled' => true, 'max_age' => 'P2Y']);
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'max_age' => 'P2Y']);
 
         // The configured value wins, the other one comes from the attribute.
         $this->assertSame('P2Y', $options['max_age']);
@@ -465,7 +465,7 @@ final class DoctrineProviderTest extends TestCase
 
     public function testConfiguredNullRetentionDisablesTheAttributeValue(): void
     {
-        $options = $this->loadRetentionEntityWith(['enabled' => true, 'max_entries' => null]);
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'max_entries' => null]);
 
         $this->assertSame('P7Y', $options['max_age']);
         $this->assertNull($options['max_entries']);
@@ -473,10 +473,52 @@ final class DoctrineProviderTest extends TestCase
 
     public function testAttributeRetentionIsKeptWithoutConfiguredRetention(): void
     {
-        $options = $this->loadRetentionEntityWith(['enabled' => true]);
+        $options = $this->loadAttributeEntityWith(['enabled' => true]);
 
         $this->assertSame('P7Y', $options['max_age']);
         $this->assertSame(1_000, $options['max_entries']);
+    }
+
+    public function testConfiguredIgnoredColumnsAreAddedToTheIgnoreAttributes(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'ignored_columns' => ['id', 'ignoredField']], AuditedEntityWithAttribute::class);
+
+        $ignoredColumns = $options['ignored_columns'];
+        \assert(\is_array($ignoredColumns));
+        sort($ignoredColumns);
+        $this->assertSame(['id', 'ignoredField', 'ignoredPrivateField', 'ignoredProtectedField'], $ignoredColumns);
+    }
+
+    public function testConfiguredAuditedColumnsAreKeptWithIgnoreAttributes(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'audited_columns' => ['auditedField', 'ignoredField']], AuditedEntityWithAttribute::class);
+
+        $this->assertSame(['auditedField', 'ignoredField'], $options['audited_columns']);
+        $this->assertContains('ignoredField', $options['ignored_columns'], 'The #[Ignore] attributes are kept.');
+    }
+
+    public function testIsAuditedFieldWithAuditedColumnsAndIgnoreAttributes(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+        $auditor = $this->createAuditor();
+        $provider = new DoctrineProvider($this->createProviderConfiguration([
+            'entities' => [
+                AuditedEntityWithAttribute::class => ['enabled' => true, 'audited_columns' => ['auditedField', 'ignoredField']],
+            ],
+        ]));
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+        $auditor->registerProvider($provider);
+
+        $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'auditedField'), 'An allowlisted field is audited.');
+        $this->assertFalse($provider->isAuditedField(AuditedEntityWithAttribute::class, 'ignoredField'), 'An allowlisted field marked with #[Ignore] is not audited.');
+        $this->assertFalse($provider->isAuditedField(AuditedEntityWithAttribute::class, 'id'), 'A field missing from the allowlist is not audited.');
     }
 
     #[Depends('testIsAuditedHonorsEnabledFlag')]
@@ -634,10 +676,11 @@ final class DoctrineProviderTest extends TestCase
 
     /**
      * @param array<string, mixed> $configuredOptions
+     * @param class-string         $entity
      *
      * @return array<string, mixed>
      */
-    private function loadRetentionEntityWith(array $configuredOptions): array
+    private function loadAttributeEntityWith(array $configuredOptions, string $entity = RetentionEntity::class): array
     {
         $entityManager = $this->createEntityManager(
             [
@@ -654,11 +697,11 @@ final class DoctrineProviderTest extends TestCase
 
         $auditor->registerProvider($provider);
 
-        $provider->loadAttributes($entityManager, [RetentionEntity::class => $configuredOptions]);
+        $provider->loadAttributes($entityManager, [$entity => $configuredOptions]);
 
         $configuration = $provider->getConfiguration();
         $this->assertInstanceOf(Configuration::class, $configuration);
-        $options = $configuration->getEntities()[RetentionEntity::class];
+        $options = $configuration->getEntities()[$entity];
         \assert(\is_array($options));
 
         /** @var array<string, mixed> $options */
