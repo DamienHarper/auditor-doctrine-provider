@@ -207,6 +207,7 @@ final readonly class SchemaManager
                         SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
                         SchemaHelper::getAuditTableIndices($auditTablename),
                         $connection,
+                        SchemaHelper::getObsoleteAuditTableIndexNames($auditTablename),
                     );
                     $tableDiff = $comparator->compareTables($currentTable, $expectedTable);
                     if (!$tableDiff->isEmpty()) {
@@ -344,6 +345,7 @@ final readonly class SchemaManager
             SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
             SchemaHelper::getAuditTableIndices($auditTablename),
             $connection,
+            SchemaHelper::getObsoleteAuditTableIndexNames($auditTablename),
         );
 
         return $schema->edit()
@@ -574,10 +576,11 @@ final readonly class SchemaManager
      *
      * @param array<string, array{type: string, options: array<string, mixed>}>                   $expectedColumns
      * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
+     * @param list<string>                                                                        $obsoleteIndexNames
      *
      * @throws SchemaException
      */
-    private function applyAuditTableStructure(Table $table, array $expectedColumns, array $expectedIndices, Connection $connection): Table
+    private function applyAuditTableStructure(Table $table, array $expectedColumns, array $expectedIndices, Connection $connection, array $obsoleteIndexNames = []): Table
     {
         $editor = $table->edit();
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
@@ -612,7 +615,7 @@ final readonly class SchemaManager
             }
         }
 
-        $this->addAuditTableIndices($editor, $table, $expectedIndices, $connection);
+        $this->addAuditTableIndices($editor, $table, $expectedIndices, $connection, $obsoleteIndexNames);
 
         return $editor->create();
     }
@@ -621,8 +624,9 @@ final readonly class SchemaManager
      * Adds the primary key and indices of an audit table, replacing the ones of $currentTable.
      *
      * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $expectedIndices
+     * @param list<string>                                                                        $obsoleteIndexNames indices to drop if $currentTable has them
      */
-    private function addAuditTableIndices(TableEditor $editor, ?Table $currentTable, array $expectedIndices, Connection $connection): void
+    private function addAuditTableIndices(TableEditor $editor, ?Table $currentTable, array $expectedIndices, Connection $connection, array $obsoleteIndexNames = []): void
     {
         foreach ($expectedIndices as $columnName => $struct) {
             \assert(\is_string($columnName));
@@ -668,6 +672,13 @@ final readonly class SchemaManager
                 $editor->addIndex($indexEditor->create());
             } else {
                 throw new InvalidArgumentException(\sprintf("Missing key 'name' for column '%s'", $columnName));
+            }
+        }
+
+        // Indices of earlier versions that only slow the audit INSERTs down
+        foreach ($obsoleteIndexNames as $indexName) {
+            if ($currentTable instanceof Table && $currentTable->hasIndex($indexName)) {
+                $editor->dropIndex($currentTable->getIndex($indexName)->getObjectName());
             }
         }
     }

@@ -16,9 +16,99 @@ of magnitude and to compare configurations, and measure your own workload before
   1,000 entities per flush, a flush is **10 to 18 % faster** than with 1.2.1 on SQLite, **19 to 51 % faster** on
   MySQL and **44 to 67 % faster** on PostgreSQL. The more round trips cost (a remote database server, a network),
   the larger the gain.
+- **Before the 2.0 release**, fewer indexes, `RETURNING id` on PostgreSQL, a lighter transaction page, deferred joins
+  for deep pages on MySQL and a batched `audit:snapshot`: see [Before the 2.0 release](#-before-the-20-release-write-read-and-snapshot).
 - **Migrating** a 1,000,000-row schema v1 audit table with `audit:schema:migrate --force --convert-all` took
   **5 minutes on MySQL** and **3 minutes on PostgreSQL**.
   See [Schema v2 migration](#-schema-v2-migration).
+
+## 🚀 Before the 2.0 release: write, read and snapshot
+
+A last series of optimizations landed before the 2.0 release, each measured with the PHPBench suites of
+`benchmarks/` (`AuditBench`, `ReadBench`, `SnapshotBench`), `main` before the changes against the branch, back to back
+on the same machine:
+
+| Change | Measured effect |
+|---|---|
+| 3 secondary indexes fewer on audit tables (`object_id`, `blame_id` and `discriminator` alone) | Flushes 20 to 28 % faster on PostgreSQL; indexes 30 % smaller on MySQL (raw `INSERT`s 18 % faster on a 300,000-row table) |
+| `INSERT … RETURNING id` on PostgreSQL with `batch_size: 0` (no `SELECT LASTVAL()` per entry) | Included in the PostgreSQL figures above (raw `INSERT`: 152-178 → 82-87 µs per row) |
+| `Reader::getAuditsByTransactionId()` introspects each audit table only, not the whole database | Transaction page 89 to 99 % faster (200 unrelated tables) |
+| Deep pages of an unfiltered query read with a deferred join on MySQL and MariaDB | Page 500 of 1,000: 55 → 4 ms on MySQL |
+| `audit:snapshot` writes multi-row `INSERT`s and loads the association targets of a batch together | Snapshot 40 % faster on SQLite, 73 % on MySQL, 79 % on PostgreSQL |
+| `extra_data_provider` called once per flush; driver, storage mapper and association metadata resolved once | Within the dispersion of the flush figures |
+
+### Method
+
+- **Machine**: cloud container (Linux), PHP 8.5.13 CLI without Xdebug, MySQL 8.4 and PostgreSQL 17 (official Docker
+  images, default configuration, reached on `127.0.0.1`), SQLite in memory.
+- **Flush** (`AuditBench`): `BENCH_N=500` entities per flush, `BENCH_SEED_ROWS=20000` rows already in the audit
+  tables, `batch_size: 0`; 5 iterations (10 for the SQLite re-run reported below).
+- **Read** (`ReadBench`): `BENCH_READ_ROWS=50000` rows in `post_audit`, 200 unrelated tables in the database; 5
+  iterations of 5 revolutions after a warm-up.
+- **Snapshot** (`SnapshotBench`): 2,000 posts of 200 authors, default batch size (500); 5 iterations.
+- Reported: the mode in milliseconds, its rstdev, and the change. Results within ±10 % with an rstdev of the same order
+  are noise.
+
+### Results
+
+#### SQLite (in memory)
+
+| Scenario | Before | After | Change |
+|---|---:|---:|---:|
+| `insert` | 26.8 (±13 %) | 24.8 (±5 %) | -8 % |
+| `update` | 25.8 (±5 %) | 24.1 (±7 %) | -6 % |
+| `remove` | 21.7 (±8 %) | 18.4 (±5 %) | -15 % |
+| `associate` | 37.3 (±23 %) | 36.1 (±6 %) | -3 % |
+| `dissociate` | 36.9 (±5 %) | 35.1 (±8 %) | -5 % |
+| `mixed` | 22.2 (±11 %) | 22 (±6 %) | -1 % |
+| `history` | 0.128 (±22 %) | 0.115 (±7 %) | -10 % |
+| `list first page` | 0.291 (±13 %) | 0.21 (±9 %) | -28 % |
+| `list deep page` | 0.817 (±7 %) | 0.856 (±5 %) | +5 % |
+| `count` | 1.47 (±10 %) | 1.43 (±4 %) | -2 % |
+| `transaction` | 82.6 (±2 %) | 0.947 (±8 %) | -99 % |
+| `snapshot` | 169 (±14 %) | 102 (±2 %) | -40 % |
+
+The first SQLite flush run gave +6 to +37 % with rstdev up to 23 %; run again with 10 iterations, back to back, it
+gave the figures above. The flush changes do not touch what SQLite measures here (in-memory, no round trip).
+
+#### MySQL 8.4
+
+| Scenario | Before | After | Change |
+|---|---:|---:|---:|
+| `insert` | 218 (±16 %) | 225 (±6 %) | +3 % |
+| `update` | 317 (±9 %) | 301 (±10 %) | -5 % |
+| `remove` | 215 (±6 %) | 216 (±7 %) | +1 % |
+| `associate` | 423 (±7 %) | 385 (±8 %) | -9 % |
+| `dissociate` | 396 (±11 %) | 345 (±9 %) | -13 % |
+| `mixed` | 268 (±12 %) | 176 (±10 %) | -34 % |
+| `history` | 0.521 (±20 %) | 0.554 (±33 %) | +6 % |
+| `list first page` | 30.2 (±16 %) | 30.8 (±18 %) | +2 % |
+| `list deep page` | 55 (±12 %) | 3.98 (±9 %) | -93 % |
+| `count` | 4.25 (±24 %) | 4.48 (±13 %) | +5 % |
+| `transaction` | 80.9 (±4 %) | 6.08 (±8 %) | -92 % |
+| `snapshot` | 849 (±3 %) | 233 (±4 %) | -73 % |
+
+`list first page` takes 30 ms on both sides: on a table seeded right before the measure, MySQL sorts the rows instead
+of reading the `created_at` index backwards (its statistics are not up to date yet).
+
+#### PostgreSQL 17
+
+| Scenario | Before | After | Change |
+|---|---:|---:|---:|
+| `insert` | 308 (±10 %) | 222 (±15 %) | -28 % |
+| `update` | 245 (±9 %) | 195 (±9 %) | -21 % |
+| `remove` | 214 (±7 %) | 170 (±11 %) | -21 % |
+| `associate` | 364 (±7 %) | 275 (±4 %) | -25 % |
+| `dissociate` | 337 (±6 %) | 271 (±8 %) | -20 % |
+| `mixed` | 234 (±6 %) | 226 (±5 %) | -3 % |
+| `history` | 0.434 (±19 %) | 0.547 (±18 %) | +26 % |
+| `list first page` | 0.746 (±15 %) | 0.74 (±12 %) | -1 % |
+| `list deep page` | 26.5 (±43 %) | 24.3 (±6 %) | -8 % |
+| `count` | 3.92 (±7 %) | 3.93 (±11 %) | +0 % |
+| `transaction` | 95.5 (±3 %) | 10.5 (±25 %) | -89 % |
+| `snapshot` | 886 (±6 %) | 189 (±3 %) | -79 % |
+
+`history` read again with 10 iterations of 20 revolutions: 0.421 ms (±17 %) before, 0.411 ms (±23 %) after (−2 %).
 
 ## 🧪 Flush benchmarks
 

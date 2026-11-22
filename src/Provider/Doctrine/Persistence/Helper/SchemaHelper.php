@@ -9,6 +9,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Helper\SchemaHelperTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\ColumnEditor;
+use Doctrine\DBAL\Schema\Name\Parsers;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Types;
 
@@ -160,6 +161,10 @@ abstract class SchemaHelper
      * Single-column entries: keyed by the column name.
      * Composite entries: keyed by a '__composite_*' synthetic key with an explicit 'columns' list.
      *
+     * Every secondary index slows down each audit INSERT: there is none on object_id or blame_id alone (the
+     * composite indexes starting with them serve the same lookups) nor on discriminator (a few distinct values,
+     * always filtered along with object_id or created_at). See getObsoleteAuditTableIndexNames().
+     *
      * @return array<string, array{type: string, name: string, columns?: list<string>}|array{type: string}>
      */
     public static function getAuditTableIndices(string $tablename): array
@@ -174,21 +179,9 @@ abstract class SchemaHelper
                 'type' => 'index',
                 'name' => 'type_'.$hash.'_idx',
             ],
-            'object_id' => [
-                'type' => 'index',
-                'name' => 'object_id_'.$hash.'_idx',
-            ],
-            'discriminator' => [
-                'type' => 'index',
-                'name' => 'discriminator_'.$hash.'_idx',
-            ],
             'transaction_id' => [
                 'type' => 'index',
                 'name' => 'transaction_id_'.$hash.'_idx',
-            ],
-            'blame_id' => [
-                'type' => 'index',
-                'name' => 'blame_id_'.$hash.'_idx',
             ],
             'created_at' => [
                 'type' => 'index',
@@ -206,6 +199,42 @@ abstract class SchemaHelper
                 'name' => 'blame_id_created_at_'.$hash.'_idx',
             ],
         ];
+    }
+
+    /**
+     * Names of the indices that earlier versions created on an audit table and that audit:schema:update drops:
+     * object_id and blame_id alone (redundant with the composite indexes starting with them) and discriminator.
+     *
+     * @return list<string>
+     */
+    public static function getObsoleteAuditTableIndexNames(string $tablename): array
+    {
+        $hash = md5($tablename);
+
+        return [
+            'object_id_'.$hash.'_idx',
+            'blame_id_'.$hash.'_idx',
+            'discriminator_'.$hash.'_idx',
+        ];
+    }
+
+    /**
+     * Names (lowercased) of the columns of a table, e.g. to tell a schema v1 audit table from a v2 one.
+     *
+     * Only that table is introspected, not the whole database: the cost of Schema introspection grows with the
+     * number of tables of the database. $tableName is a name as it appears in SQL, possibly schema-qualified and
+     * quoted. An empty list is returned when the table does not exist.
+     *
+     * @return list<string>
+     */
+    public static function getTableColumnNames(Connection $connection, string $tableName): array
+    {
+        $columns = $connection->createSchemaManager()->introspectTableColumns(Parsers::parseOptionallyQualifiedName($tableName));
+
+        return array_map(
+            static fn (Column $column): string => mb_strtolower($column->getObjectName()->getIdentifier()->getValue()),
+            $columns,
+        );
     }
 
     public static function isValidPayload(array $payload): bool

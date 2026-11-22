@@ -80,6 +80,12 @@ final class AuditInsertBuffer implements \Countable
     private ?\Throwable $failure = null;
 
     /**
+     * @param null|positive-int $batchSize rows buffered before they are written, instead of the `batch_size` option
+     *                                     (e.g. the batch size of audit:snapshot)
+     */
+    public function __construct(public readonly ?int $batchSize = null) {}
+
+    /**
      * Buffers a row of $auditTable (a table name as it appears in SQL, possibly schema-qualified and quoted),
      * whose values are ordered like COLUMNS, and writes every buffered row once $batchSize rows are buffered.
      *

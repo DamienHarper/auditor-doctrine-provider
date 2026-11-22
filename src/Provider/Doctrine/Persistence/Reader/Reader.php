@@ -10,6 +10,7 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ChangedFieldFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\ReaderTest;
@@ -120,8 +121,8 @@ final readonly class Reader implements ReaderInterface
                 // Detect which transaction column this table uses (once per table per request).
                 if (!isset($transactionColumnCache[$auditTable])) {
                     $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
-                    $table = $connection->createSchemaManager()->introspectSchema()->getTable($auditTable);
-                    $transactionColumnCache[$auditTable] = $table->hasColumn(Query::TRANSACTION_ID)
+                    // only this table is introspected: the whole schema was, once per audit table
+                    $transactionColumnCache[$auditTable] = \in_array(Query::TRANSACTION_ID, SchemaHelper::getTableColumnNames($connection, $auditTable), true)
                         ? Query::TRANSACTION_ID
                         : Query::LEGACY_TRANSACTION_HASH;
                 }

@@ -286,6 +286,16 @@ $configuration = new Configuration([
 > 51 % faster on MySQL and 44 to 67 % faster on PostgreSQL in our measurements: see [Performance](performance.md) for
 > the method, the full results and how to reproduce them.
 
+**Why is it off by default?** Only because of the `id`: a `LifecycleEvent` listener, or another storage provider, that
+reads `$payload['id']` gets no `id` from a buffered entry (see below). If nothing in your application reads it, a
+positive `batch_size` is the largest speed-up available for flushes of many entities, and turning it on changes
+nothing else: the entries are written in the same database transaction, and a failure still fails the commit.
+
+| You read `$payload['id']` in a listener or another provider? | Recommended `batch_size`          |
+|---------------------------------------------------------------|-----------------------------------|
+| No                                                            | `500`                             |
+| Yes                                                           | `0` (default): the `id` is set    |
+
 - **When**: the buffered audit entries are written right before the `COMMIT` of the audited transaction, or as soon
   as `batch_size` entries are buffered. Values between `100` and `1000` are a good start: the larger the value, the
   fewer statements, but the more memory the buffer holds for a large transaction.
@@ -298,7 +308,7 @@ $configuration = new Configuration([
   of your largest audit entry (as with `batch_size: 0`).
 - **No `id` in the payload**: the `LifecycleEvent` payload of a buffered audit entry has no `id` key, since the entry is
   not written yet when it is persisted. With `batch_size: 0`, the provider adds the `id` of the inserted row to the
-  payload once the entry is written.
+  payload once the entry is written (on PostgreSQL, through `INSERT … RETURNING id`, in the same round trip).
 - **Failures fail the commit**: if an audit entry cannot be buffered (e.g. the storage mapper throws) or the buffered
   audit entries cannot be written, the commit fails with the first of these failures and the audited transaction is
   rolled back, so that no change is committed without its audit entries (as with `batch_size: 0`, where a failure to
