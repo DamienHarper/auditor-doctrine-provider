@@ -106,23 +106,16 @@ final class Query implements QueryInterface
 
     public function count(): int
     {
-        $queryBuilder = $this->buildQueryBuilder();
+        $result = $this->buildQueryBuilder()
+            ->select('COUNT(id)')
+            ->resetOrderBy()
+            ->setMaxResults(null)
+            ->setFirstResult(0)
+            ->executeQuery()
+            ->fetchOne()
+        ;
 
-        try {
-            $queryBuilder
-                ->select('COUNT(id)')
-                ->resetOrderBy()
-                ->setMaxResults(null)
-                ->setFirstResult(0)
-            ;
-
-            /** @var false|int $result */
-            $result = $queryBuilder->executeQuery()->fetchOne();
-        } catch (\Exception) {
-            $result = false;
-        }
-
-        return (int) $result;
+        return is_numeric($result) ? (int) $result : 0;
     }
 
     public function addFilter(FilterInterface $filter): self

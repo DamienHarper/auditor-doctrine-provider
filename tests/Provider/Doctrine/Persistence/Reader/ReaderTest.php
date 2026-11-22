@@ -269,6 +269,20 @@ final class ReaderTest extends TestCase
         $this->assertSame($countAll, $countId1 + $countId2, 'Query by user_id is ok.');
     }
 
+    public function testCountMatchesExecuteWithFilters(): void
+    {
+        $reader = $this->createReader();
+
+        foreach ([['object_id' => [1, 2]], ['object_id' => [1, 2], 'type' => 'update'], ['changed_field' => 'fullname']] as $options) {
+            $count = $reader->createQuery(Author::class, $options + ['page_size' => null])->count();
+            $query = $reader->createQuery(Author::class, $options + ['page' => null, 'page_size' => null]);
+            $query->limit(2);
+
+            $this->assertSame(\count($reader->createQuery(Author::class, $options + ['page_size' => null])->execute()), $count, json_encode($options, JSON_THROW_ON_ERROR));
+            $this->assertSame($count, $query->count(), 'count() ignores the limit.');
+        }
+    }
+
     public function testGetAuditsByBlameIdAndUserId(): void
     {
         $reader = $this->createReader();
