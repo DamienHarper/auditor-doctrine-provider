@@ -8,6 +8,8 @@ use Doctrine\DBAL\Types\Types;
 
 abstract class SchemaHelper
 {
+    private const string COMPOSITE_INDEX_PREFIX = '__composite_';
+
     /**
      * Return columns of audit tables.
      *
@@ -127,7 +129,10 @@ abstract class SchemaHelper
     /**
      * Return indices of an audit table.
      *
-     * @return array{id: array{type: string}, type: array{type: string, name: string}, object_id: array{type: string, name: string}, discriminator: array{type: string, name: string}, transaction_hash: array{type: string, name: string}, blame_id: array{type: string, name: string}, created_at: array{type: string, name: string}}
+     * Single-column entries are keyed by their column name.
+     * Composite entries are keyed by a '__composite_*' synthetic key with an explicit 'columns' list.
+     *
+     * @return array{id: array{type: string}, type: array{type: string, name: string}, object_id: array{type: string, name: string}, discriminator: array{type: string, name: string}, transaction_hash: array{type: string, name: string}, blame_id: array{type: string, name: string}, created_at: array{type: string, name: string}, __composite_blame_user_blame_id: array{type: string, name: string, columns: non-empty-list<string>}}
      */
     public static function getAuditTableIndices(string $tablename): array
     {
@@ -159,7 +164,22 @@ abstract class SchemaHelper
                 'type' => 'index',
                 'name' => 'created_at_'.md5($tablename).'_idx',
             ],
+            // Covers the user filter of the viewer (SELECT DISTINCT blame_id, blame_user ... ORDER BY blame_user)
+            // without reading the table rows.
+            self::COMPOSITE_INDEX_PREFIX.'blame_user_blame_id' => [
+                'type' => 'index',
+                'columns' => ['blame_user', 'blame_id'],
+                'name' => 'blame_user_blame_id_'.md5($tablename).'_idx',
+            ],
         ];
+    }
+
+    /**
+     * Tells whether an audit table indices key is a synthetic key of a composite index.
+     */
+    public static function isCompositeIndexKey(string $key): bool
+    {
+        return str_starts_with($key, self::COMPOSITE_INDEX_PREFIX);
     }
 
     public static function isValidPayload(array $payload): bool

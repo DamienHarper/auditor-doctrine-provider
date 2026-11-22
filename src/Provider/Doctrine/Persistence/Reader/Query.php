@@ -159,7 +159,12 @@ final class Query implements QueryInterface
 
     public function getSupportedFilters(): array
     {
-        return [...array_keys(SchemaHelper::getAuditTableIndices('fake')), self::JSON];
+        $indexedColumns = array_filter(
+            array_keys(SchemaHelper::getAuditTableIndices('fake')),
+            static fn (string $key): bool => !SchemaHelper::isCompositeIndexKey($key),
+        );
+
+        return [...$indexedColumns, self::JSON];
     }
 
     public function getFilters(): array

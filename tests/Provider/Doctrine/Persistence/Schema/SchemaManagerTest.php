@@ -284,6 +284,58 @@ final class SchemaManagerTest extends TestCase
         }
     }
 
+    #[Depends('testCreateAuditTable')]
+    public function testAuditTableHasBlameUserBlameIdIndex(): void
+    {
+        $updater = new SchemaManager($this->provider);
+
+        $storageService = $this->provider->getStorageServiceForEntity(Author::class);
+        $entityManager = $storageService->getEntityManager();
+        $schemaManager = $entityManager->getConnection()->createSchemaManager();
+
+        $this->doConfigureEntities();
+        $this->migrate($schemaManager->introspectSchema(), $updater->createAuditTable(Author::class), $entityManager);
+
+        $authorAuditTable = $this->getTable($schemaManager->listTables(), 'author_audit');
+        $this->assertInstanceOf(Table::class, $authorAuditTable, 'author_audit table has been created.');
+
+        $indexName = 'blame_user_blame_id_'.md5('author_audit').'_idx';
+        $this->assertTrue($authorAuditTable->hasIndex($indexName), 'audit table has the (blame_user, blame_id) index.');
+        $this->assertSame(['blame_user', 'blame_id'], $this->getIndexColumns($authorAuditTable, $indexName), 'Index columns are blame_user then blame_id.');
+    }
+
+    #[Depends('testAuditTableHasBlameUserBlameIdIndex')]
+    public function testUpdateAuditSchemaAddsMissingBlameUserBlameIdIndex(): void
+    {
+        $updater = new SchemaManager($this->provider);
+
+        $storageService = $this->provider->getStorageServiceForEntity(Author::class);
+        $entityManager = $storageService->getEntityManager();
+        $connection = $entityManager->getConnection();
+        $schemaManager = $connection->createSchemaManager();
+
+        // an audit table created before the (blame_user, blame_id) index existed
+        $this->doConfigureEntities();
+        $updater->updateAuditSchema();
+        $indexName = 'blame_user_blame_id_'.md5('author_audit').'_idx';
+        $connection->executeStatement($connection->getDatabasePlatform()->getDropIndexSQL($indexName, 'author_audit'));
+        $authorAuditTable = $this->getTable($schemaManager->listTables(), 'author_audit');
+        $this->assertInstanceOf(Table::class, $authorAuditTable);
+        $this->assertFalse($authorAuditTable->hasIndex($indexName), 'The index has been dropped.');
+
+        // audit:schema:update adds the missing index
+        $sqls = $updater->getUpdateAuditSchemaSql();
+        $this->assertNotSame([], array_merge(...array_values($sqls)), 'Missing index is detected.');
+        $updater->updateAuditSchema($sqls);
+
+        $authorAuditTable = $this->getTable($schemaManager->listTables(), 'author_audit');
+        $this->assertInstanceOf(Table::class, $authorAuditTable);
+        $this->assertSame(['blame_user', 'blame_id'], $this->getIndexColumns($authorAuditTable, $indexName), 'The index has been added.');
+
+        // and a second run has nothing left to do
+        $this->assertSame([], array_merge(...array_values($updater->getUpdateAuditSchemaSql())), 'Audit schema is up to date.');
+    }
+
     #[DataProvider('provideComputeAuditTableNameCases')]
     public function testComputeAuditTableName(string $tableName, string $expectedResult): void
     {
@@ -331,6 +383,17 @@ final class SchemaManagerTest extends TestCase
             $statement = $connection->prepare($sql);
             $statement->executeStatement();
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function getIndexColumns(Table $table, string $indexName): array
+    {
+        return array_map(
+            static fn ($column): string => $column->getColumnName()->toString(),
+            $table->getIndex($indexName)->getIndexedColumns(),
+        );
     }
 
     private function getTable(array $tables, string $name): ?Table

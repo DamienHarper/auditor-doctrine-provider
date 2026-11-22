@@ -34,6 +34,17 @@ final class QueryTest extends TestCase
         }
     }
 
+    public function testCompositeIndicesAreNotSupportedFilters(): void
+    {
+        $query = new Query('author_audit', $this->createConnection(), 'UTC');
+
+        $this->assertSame(
+            [Query::ID, Query::TYPE, Query::OBJECT_ID, Query::DISCRIMINATOR, Query::TRANSACTION_HASH, Query::USER_ID, Query::CREATED_AT, Query::JSON],
+            $query->getSupportedFilters(),
+            'Composite indices are not exposed as filters.',
+        );
+    }
+
     #[Depends('testNoFiltersByDefault')]
     public function testAddSimpleFilter(): void
     {
