@@ -286,10 +286,23 @@ When you add `#[Auditable]` to a new entity and add it to the configuration:
 
 - Native `JSON` column type is used for `diffs`, `extra_data`, and `blame`
 - InnoDB engine is recommended for transactional integrity
+- InnoDB does not compress anything by default. On **MariaDB**, enable the [`compression`](configuration.md#-compression)
+  option to store `diffs` and `extra_data` as compressed columns (`JSON COMPRESSED`).
+- **MySQL** has no column compression, so the `compression` option has no effect there. If disk space matters more
+  than speed, InnoDB page compression can be enabled manually on audit tables (requires `innodb_file_per_table` and a
+  file system supporting hole punching, e.g. ext4 or XFS):
+
+  ```sql
+  ALTER TABLE posts_audit COMPRESSION='zlib';
+  OPTIMIZE TABLE posts_audit; -- compresses existing rows
+  ```
+
+  Doctrine does not manage table compression options: this is neither reported nor reverted by schema commands.
 
 ### PostgreSQL
 
 - Native `JSONB` column type is used for `diffs`, `extra_data` and `blame`
+- Large `JSONB` values are compressed automatically (TOAST): the `compression` option is not needed and has no effect
 - Audit tables created with `JSON` columns by previous versions are converted to `JSONB` by `audit:schema:update` (or by your next migration if you manage audit tables with Doctrine Migrations)
 - Indexed columns use PostgreSQL-compatible index names
 

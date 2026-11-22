@@ -20,6 +20,7 @@ $configuration = new Configuration([
     'storage_mapper'  => null,
     'utf8_convert'    => false,
     'batch_size'      => 0,
+    'compression'     => false,
 ]);
 ```
 
@@ -35,6 +36,7 @@ $configuration = new Configuration([
 | `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
+| `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
 
 ## 📛 Table Naming
 
@@ -208,6 +210,47 @@ $configuration = new Configuration([
   early batch are deleted when the audited transaction is rolled back, as they are with `batch_size: 0`.
 - **Outside of a commit**: `DoctrineProvider::persist()` called directly, outside of the commit of an audited
   transaction, still writes the audit entry immediately.
+## 🗜️ Compression
+
+On MySQL and MariaDB, audit tables can become the largest tables of a database: almost all of their size is the
+`diffs` column (and `extra_data` when used). The `compression` option stores these two columns compressed:
+
+```php
+$configuration = new Configuration([
+    'compression' => true,
+]);
+```
+
+| Platform   | Effect                                                                                       |
+|------------|----------------------------------------------------------------------------------------------|
+| MariaDB    | `diffs` and `extra_data` are declared `JSON COMPRESSED` (transparent column compression)      |
+| PostgreSQL | None: large `JSONB` values are already compressed by PostgreSQL (TOAST)                      |
+| MySQL      | None: MySQL has no column compression (see [Schema Management](schema.md#mysql--mariadb))     |
+| SQLite     | None                                                                                          |
+
+MariaDB compresses and decompresses the values transparently: reading audit entries, `JsonFilter` and JSON functions in
+SQL work unchanged. Values shorter than `column_compression_threshold` (100 bytes by default) are stored as is.
+
+Compression trades CPU for disk space and I/O. Reading a large history whose pages are already in memory gets slower,
+since every value has to be decompressed: in the contributor's measurements (34,279 audit rows, MariaDB 11.8), reading
+an entity with ~510 changes took 16.0 ms instead of 7.5 ms (median, warm cache). Reads that hit the disk get faster
+(59.8 ms instead of 138.6 ms, cold cache) and writes are not slower, since there is much less data to read and write.
+
+New audit tables are created with compressed columns. Existing audit tables are converted by
+`audit:schema:update --force` (or by a migration containing the SQL shown by `audit:schema:update --dump-sql`):
+altering the columns rewrites the table and compresses existing entries. Disabling the option and running
+`audit:schema:update` again converts the columns back, without losing data.
+
+> [!NOTE]
+> The schema comparator of Doctrine DBAL does not see the `COMPRESSED` attribute, so `doctrine:schema:update` and
+> `doctrine:migrations:diff` neither report nor change the compression of existing audit tables: use
+> `audit:schema:update` for that. Conversely, they never report a difference for compressed columns.
+
+> [!WARNING]
+> Converting existing tables rewrites them (`ALTER TABLE ... MODIFY`), which takes time on large tables. Before
+> MariaDB 11.2, writes to the audit table are also locked for the duration of the rewrite, so audited flushes wait for
+> it; since MariaDB 11.2, the rewrite runs online by default (`ALGORITHM=COPY, LOCK=NONE`). Plan it like any other
+> large schema migration.
 
 ## 🗄️ Storage Mapper
 
@@ -326,6 +369,8 @@ $configuration = new Configuration([
     ],
 
     'storage_mapper' => null,  // Single database, no mapper needed
+
+    'compression' => true,     // MariaDB only, ignored on other platforms
 ]);
 ```
 

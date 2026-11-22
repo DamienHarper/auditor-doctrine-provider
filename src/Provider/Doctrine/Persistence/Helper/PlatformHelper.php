@@ -41,6 +41,19 @@ abstract class PlatformHelper
         return [];
     }
 
+    /**
+     * Whether the platform supports transparent column compression (the COMPRESSED column attribute).
+     *
+     * Only MariaDB (10.3+) does: MySQL has page/table compression only, PostgreSQL already compresses large
+     * values on its own (TOAST) and SQLite has no compression at all.
+     *
+     * @see https://mariadb.com/docs/server/reference/sql-statements/data-definition/create/storage-engine-independent-column-compression
+     */
+    public static function supportsColumnCompression(Connection $connection): bool
+    {
+        return $connection->getDatabasePlatform() instanceof MariaDBPlatform;
+    }
+
     public static function isIndexLengthLimited(string $name, Connection $connection): bool
     {
         $columns = SchemaHelper::getAuditTableColumns();

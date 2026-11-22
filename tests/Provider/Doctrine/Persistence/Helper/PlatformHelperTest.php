@@ -9,6 +9,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Small;
@@ -97,5 +98,28 @@ final class PlatformHelperTest extends TestCase
             [],
             [],
         ];
+    }
+
+    #[DataProvider('provideSupportsColumnCompressionCases')]
+    public function testSupportsColumnCompression(object $platform, bool $expected): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn($platform);
+
+        $this->assertSame($expected, PlatformHelper::supportsColumnCompression($connection));
+    }
+
+    /**
+     * @return iterable<string, array{object, bool}>
+     */
+    public static function provideSupportsColumnCompressionCases(): iterable
+    {
+        yield 'MariaDB supports column compression' => [new MariaDBPlatform(), true];
+
+        yield 'MySQL does not support column compression' => [new MySQLPlatform(), false];
+
+        yield 'PostgreSQL does not support column compression' => [new PostgreSQLPlatform(), false];
+
+        yield 'SQLite does not support column compression' => [new SQLitePlatform(), false];
     }
 }
