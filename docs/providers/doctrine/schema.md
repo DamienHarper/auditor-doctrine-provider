@@ -75,6 +75,9 @@ All entry types share a unified JSON envelope:
   - **INSERT**: `old` is always `null`
   - **UPDATE**: both `old` and `new` reflect the changed values
   - **REMOVE**: `new` is always `null`; `old` holds the full entity snapshot
+- `snapshot` — only on entries written by [`audit:snapshot`](#auditsnapshot): an `insert` entry with
+  `"snapshot": true` records the state of an entity that existed before auditing started, not its creation
+  (`Entry::isSnapshot()` reads it)
 - **ASSOCIATE / DISSOCIATE** — use a different structure (no `changes` key):
   ```json
   {
@@ -183,8 +186,56 @@ php bin/console audit:clean -x App\\Entity\\User
 php bin/console audit:clean -i App\\Entity\\Log
 ```
 
+#### audit:snapshot
+
+Records the current state of existing entities, so that their history does not start at their first change
+when auditing is enabled on a database that already holds data. Each entity gets one `insert` entry flagged
+with `"snapshot": true`, holding the current value of every audited field (`old: null`).
+
+```bash
+# Snapshot some entities
+php bin/console audit:snapshot 'App\Entity\Post' 'App\Entity\Author'
+
+# Snapshot every audited entity, 1,000 rows per database transaction
+php bin/console audit:snapshot --all --batch-size=1000
+
+# Count what would be written
+php bin/console audit:snapshot --all --dry-run
+```
+
+| Option         | Short | Description                                                                  |
+|----------------|-------|------------------------------------------------------------------------------|
+| `--all`        | `-a`  | Snapshot every audited entity (instead of the entities given as arguments)   |
+| `--batch-size` | `-b`  | Entities read and written per database transaction (default `500`)           |
+| `--force`      | `-f`  | Also snapshot entities that already have an audit history                    |
+| `--dry-run`    |       | Count the entities to snapshot, write nothing                                |
+
+- **Idempotent**: an entity that already has at least one audit entry is skipped, so the command can be
+  run again (e.g. after an interruption). `--force` snapshots it anyway: a manual snapshot of its current state.
+- **Batches**: entities are read in identifier order (keyset pagination), each batch is written in its own
+  database transaction and its entries share one `transaction_id`. The entity manager is cleared between batches.
+- **Content**: the same fields as an insert: ignored columns and generated identifiers are left out,
+  owning-side to-one associations are summarized, JSON fields are deep diffs. To-many associations are not
+  snapshotted.
+- **Context**: `created_at` is the date of the snapshot, the blame is the console user (`blame_id` is `null`
+  without a user provider). Doctrine filters that are enabled apply: rows they hide (e.g. soft-deleted) are
+  not snapshotted.
+- **Inheritance**: an entity whose parent class is also selected is read through its parent; each row is
+  written to the audit table of its own class.
+
+The same logic is available in PHP through `DH\Auditor\Provider\Doctrine\Auditing\Snapshot\Snapshotter`:
+
+```php
+use DH\Auditor\Provider\Doctrine\Auditing\Snapshot\Snapshotter;
+
+$result = new Snapshotter($provider)->snapshot(Post::class, batchSize: 500);
+$result->read;        // entities read
+$result->snapshotted; // entries written
+$result->skipped();   // entities that already had an audit history
+```
+
 > [!NOTE]
-> Both commands use Symfony's Lock component to prevent concurrent execution.
+> These commands use Symfony's Lock component to prevent concurrent execution.
 
 #### Registering Commands (Standalone)
 
@@ -193,6 +244,7 @@ When not using auditor-bundle, register the commands manually:
 ```php
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\SnapshotCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
 use Symfony\Component\Console\Application;
 
@@ -209,6 +261,10 @@ $application->add($migrateCommand);
 $cleanCommand = new CleanAuditLogsCommand();
 $cleanCommand->setAuditor($auditor);
 $application->add($cleanCommand);
+
+$snapshotCommand = new SnapshotCommand();
+$snapshotCommand->setAuditor($auditor);
+$application->add($snapshotCommand);
 
 $application->run();
 ```
