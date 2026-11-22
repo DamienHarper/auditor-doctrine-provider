@@ -53,7 +53,7 @@ CREATE TABLE posts_audit (
 | `diffs`          | JSON                | JSON-encoded change data (see format below)                       |
 | `extra_data`     | JSON                | Custom extra data (populated via `LifecycleEvent` listener)       |
 | `blame_id`       | VARCHAR(255)        | User identifier who made the change                               |
-| `blame`          | JSON                | Blame context: `username`, `user_fqdn`, `user_firewall`, `ip`     |
+| `blame`          | JSON                | Blame: `username`, `user_fqdn`, `user_firewall`, `ip`, and `via` when a blame context is set |
 | `created_at`     | DATETIME            | When the audit entry was created                                  |
 
 ### Diffs Format (schema version 2)

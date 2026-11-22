@@ -31,6 +31,7 @@ use DH\Auditor\Model\Entry;
 | `$userFqdn`      | `string\|null`         | Convenience shortcut for `$blame['user_fqdn']`                       |
 | `$userFirewall`  | `string\|null`         | Convenience shortcut for `$blame['user_firewall']`                   |
 | `$ip`            | `string\|null`         | Convenience shortcut for `$blame['ip']`                              |
+| `$via`           | `array\|null`          | Blame context (`type`, `label`, `data`) the change was made in, from `$blame['via']` |
 | `$createdAt`     | `\DateTimeImmutable`   | Timestamp of when the audit entry was created                        |
 
 > [!IMPORTANT]
