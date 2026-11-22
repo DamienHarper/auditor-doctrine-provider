@@ -9,9 +9,9 @@ Auditor uses PHP 8 attributes to configure Doctrine entity auditing. These attri
 | Attribute       | Target   | Description                               |
 |-----------------|----------|-------------------------------------------|
 | `#[Auditable]`  | Class    | Marks an entity for auditing              |
-| `#[Ignore]`     | Property | Excludes a property from auditing         |
+| `#[Ignore]`     | Property or class | Excludes a property from auditing |
 | `#[Security]`   | Class    | Defines who can view entity audits        |
-| `#[DiffLabel]`  | Property | Attaches a human-readable label resolver to a field |
+| `#[DiffLabel]`  | Property or class | Attaches a human-readable label resolver to a field |
 
 ## 📝 #[Auditable]
 
@@ -133,7 +133,28 @@ class User
 
 ### Parameters
 
-The `#[Ignore]` attribute has no parameters.
+| Parameter | Type      | Required          | Description                                         |
+|-----------|-----------|-------------------|-----------------------------------------------------|
+| `field`   | `?string` | On the class only | Name of the ignored field; leave it out on a property |
+
+### On the Class
+
+`#[Ignore]` can also be put on the class, once per field, with `field` naming the property. This is handy when the
+property is declared in a parent class or a trait you do not want to touch:
+
+```php
+#[ORM\Entity]
+#[Auditable]
+#[Ignore(field: 'password')]
+#[Ignore(field: 'resetToken')]
+class User
+{
+    // ...
+}
+```
+
+A class-level `#[Ignore]` without `field`, or a property-level one with `field`, throws an `InvalidArgumentException`
+when the attributes are loaded.
 
 ### Combining with the Configuration
 
@@ -301,6 +322,11 @@ final class CategoryResolver implements DiffLabelResolverInterface
 | Parameter  | Type     | Required | Description                          |
 |------------|----------|----------|--------------------------------------|
 | `resolver` | `string` | Yes      | FQCN of the `DiffLabelResolverInterface` implementation |
+| `field`    | `?string` | On the class only | Name of the field; leave it out on a property |
+
+As with `#[Ignore]`, the attribute can be put on the class, once per field:
+`#[DiffLabel(resolver: CategoryResolver::class, field: 'categoryId')]`. A property-level `#[DiffLabel]` wins over a
+class-level one for the same field.
 
 ### Wiring resolvers (standalone)
 

@@ -91,31 +91,36 @@ final readonly class AttributeLoader
         ];
     }
 
+    /**
+     * Collects the fields excluded by #[Ignore], on the properties or on the class (with a field).
+     *
+     * @return list<string>
+     */
     private function getAllProperties(\ReflectionClass $reflection): array
     {
         $properties = [];
 
-        foreach ($reflection->getProperties() as $property) {
-            $ignoreAttribute = null;
-            $attributes = $property->getAttributes(Ignore::class, \ReflectionAttribute::IS_INSTANCEOF);
-            if (\is_array($attributes) && [] !== $attributes) {
-                $ignoreAttribute = $attributes[0]->newInstance();
-            }
+        foreach ($reflection->getAttributes(Ignore::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
+            $properties[] = $this->classLevelField($attribute->newInstance()->field, 'Ignore', $reflection);
+        }
 
-            if ($ignoreAttribute instanceof Ignore) {
+        foreach ($reflection->getProperties() as $property) {
+            $attributes = $property->getAttributes(Ignore::class, \ReflectionAttribute::IS_INSTANCEOF);
+            if ([] !== $attributes) {
+                $this->assertNoPropertyLevelField($attributes[0]->newInstance()->field, 'Ignore', $property);
                 $properties[] = $property->getName();
             }
         }
 
         if (false !== $reflection->getParentClass()) {
-            return array_unique(array_merge($this->getAllProperties($reflection->getParentClass()), $properties));
+            return array_values(array_unique(array_merge($this->getAllProperties($reflection->getParentClass()), $properties)));
         }
 
-        return $properties;
+        return array_values(array_unique($properties));
     }
 
     /**
-     * Collects DiffLabel resolvers defined on entity properties.
+     * Collects DiffLabel resolvers defined on entity properties or on the class (with a field).
      *
      * @return array<string, string> Map of property name => resolver FQCN
      */
@@ -123,10 +128,17 @@ final readonly class AttributeLoader
     {
         $resolvers = [];
 
+        foreach ($reflection->getAttributes(DiffLabel::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
+            $diffLabel = $attribute->newInstance();
+            $resolvers[$this->classLevelField($diffLabel->field, 'DiffLabel', $reflection)] = $diffLabel->resolver;
+        }
+
         foreach ($reflection->getProperties() as $property) {
             $attributes = $property->getAttributes(DiffLabel::class, \ReflectionAttribute::IS_INSTANCEOF);
-            if (\is_array($attributes) && [] !== $attributes) {
-                $resolvers[$property->getName()] = $attributes[0]->newInstance()->resolver;
+            if ([] !== $attributes) {
+                $diffLabel = $attributes[0]->newInstance();
+                $this->assertNoPropertyLevelField($diffLabel->field, 'DiffLabel', $property);
+                $resolvers[$property->getName()] = $diffLabel->resolver;
             }
         }
 
@@ -135,5 +147,21 @@ final readonly class AttributeLoader
         }
 
         return $resolvers;
+    }
+
+    private function classLevelField(?string $field, string $attribute, \ReflectionClass $reflection): string
+    {
+        if (null === $field) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[%s] attribute on "%s": a class-level #[%s] needs a "field" argument.', $attribute, $reflection->getName(), $attribute));
+        }
+
+        return $field;
+    }
+
+    private function assertNoPropertyLevelField(?string $field, string $attribute, \ReflectionProperty $property): void
+    {
+        if (null !== $field) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[%s] attribute on "%s::$%s": leave "field" out on a property, the property is the field.', $attribute, $property->getDeclaringClass()->getName(), $property->getName()));
+        }
     }
 }
