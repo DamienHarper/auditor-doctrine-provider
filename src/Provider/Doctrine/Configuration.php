@@ -58,6 +58,11 @@ final class Configuration implements ConfigurationInterface
      */
     private $storageMapper;
 
+    /**
+     * @var null|callable(object): mixed
+     */
+    private $ignoredColumnsResolver;
+
     private array $attributeLoaded = [];
 
     public function __construct(array $options)
@@ -85,6 +90,7 @@ final class Configuration implements ConfigurationInterface
         $this->skipDisabledEntities = $config['skip_disabled_entities'];
         $this->compression = $config['compression'];
         $this->storageMapper = $config['storage_mapper'];
+        $this->ignoredColumnsResolver = $config['ignored_columns_resolver'];
     }
 
     public static function isViewerEnabledInConfig(mixed $config): bool
@@ -262,13 +268,61 @@ final class Configuration implements ConfigurationInterface
     }
 
     /**
-     * Get the value of excludedColumns.
+     * Properties that are not audited, for every entity.
      *
      * @return array<string>
      */
     public function getIgnoredColumns(): array
     {
         return $this->ignoredColumns;
+    }
+
+    /**
+     * Sets the callable that returns, for a given entity object, the properties that are not audited
+     * (see IgnoredColumnsResolverInterface), or removes it with null.
+     *
+     * @param null|callable(object): array<string> $resolver
+     */
+    public function setIgnoredColumnsResolver(?callable $resolver): self
+    {
+        $this->ignoredColumnsResolver = $resolver;
+
+        return $this;
+    }
+
+    public function getIgnoredColumnsResolver(): ?callable
+    {
+        return $this->ignoredColumnsResolver;
+    }
+
+    /**
+     * Returns the properties of $entity that the "ignored_columns_resolver" ignores ([] without resolver).
+     *
+     * @return list<string>
+     *
+     * @throws \UnexpectedValueException when the resolver does not return a list of property names
+     */
+    public function resolveIgnoredColumns(object $entity): array
+    {
+        if (null === $this->ignoredColumnsResolver) {
+            return [];
+        }
+
+        $resolved = ($this->ignoredColumnsResolver)($entity);
+        if (!\is_array($resolved)) {
+            throw new \UnexpectedValueException(\sprintf('The ignored columns resolver must return an array of property names, %s returned for "%s".', get_debug_type($resolved), $entity::class));
+        }
+
+        $columns = [];
+        foreach ($resolved as $column) {
+            if (!\is_string($column)) {
+                throw new \UnexpectedValueException(\sprintf('The ignored columns resolver must return an array of property names, an array holding %s returned for "%s".', get_debug_type($column), $entity::class));
+            }
+
+            $columns[] = $column;
+        }
+
+        return $columns;
     }
 
     /**
@@ -455,6 +509,7 @@ final class Configuration implements ConfigurationInterface
                 'batch_size' => 0,
                 'skip_disabled_entities' => false,
                 'compression' => false,
+                'ignored_columns_resolver' => null,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -470,6 +525,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
             ->setAllowedTypes('skip_disabled_entities', 'bool')
             ->setAllowedTypes('compression', 'bool')
+            ->setAllowedTypes('ignored_columns_resolver', ['null', 'callable'])
         ;
     }
 }

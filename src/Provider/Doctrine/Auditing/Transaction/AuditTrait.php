@@ -28,13 +28,89 @@ trait AuditTrait
     private static array $hasToStringCache = [];
 
     /**
-     * Per-entity-class config cache (ignored_columns, diff_label_resolvers,
+     * Per-entity-class config cache (ignored and audited columns, diff_label_resolvers,
      * computed_audit_table_name). Populated lazily on first access per class
      * and shared across all flush operations for the lifetime of the provider.
      *
-     * @var array<string, array{computed_audit_table_name: string, ignored_columns: string[], diff_label_resolvers: array<string, string>}>
+     * "ignored_columns" holds the global and the per-entity ignored properties as keys; "audited_columns"
+     * holds the per-entity allowlist as keys, or null when every property is audited.
+     *
+     * @var array<string, array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>}>
      */
     private array $entityConfigCache = [];
+
+    /**
+     * Returns the cached configuration of an entity class.
+     *
+     * The configuration is set at bootstrap and never changes at runtime, so it is cached for the process lifetime.
+     *
+     * @return array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>}
+     */
+    private function entityConfig(string $entityClass): array
+    {
+        if (isset($this->entityConfigCache[$entityClass])) {
+            return $this->entityConfigCache[$entityClass];
+        }
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        $entityCfg = $configuration->getEntities()[$entityClass] ?? [];
+        if (!\is_array($entityCfg)) {
+            $entityCfg = [];
+        }
+
+        $auditedColumns = $entityCfg['audited_columns'] ?? null;
+
+        return $this->entityConfigCache[$entityClass] = [
+            'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
+            'ignored_columns' => self::columnSet($configuration->getIgnoredColumns()) + self::columnSet($entityCfg['ignored_columns'] ?? []),
+            'audited_columns' => null === $auditedColumns ? null : self::columnSet($auditedColumns),
+            'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
+        ];
+    }
+
+    /**
+     * Returns the properties of $entity that are ignored (as keys), and the allowlist of its audited properties
+     * (as keys, null when every property not ignored is audited).
+     *
+     * A property is audited when it is not ignored (globally, for its entity class, by #[Ignore] or by the
+     * "ignored_columns_resolver") and, when "audited_columns" is set for its entity class, is listed there:
+     * an ignored property is never audited, even when it is allowlisted.
+     *
+     * @return array{array<string, true>, null|array<string, true>}
+     */
+    private function columnFilter(string $entityClass, object $entity): array
+    {
+        $entityConfig = $this->entityConfig($entityClass);
+        $ignoredColumns = $entityConfig['ignored_columns'];
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        foreach ($configuration->resolveIgnoredColumns($entity) as $column) {
+            $ignoredColumns[$column] = true;
+        }
+
+        return [$ignoredColumns, $entityConfig['audited_columns']];
+    }
+
+    /**
+     * Turns a list of property names into a set (property names as keys); non-string values are dropped.
+     *
+     * @return array<string, true>
+     */
+    private static function columnSet(mixed $columns): array
+    {
+        $set = [];
+        if (\is_iterable($columns)) {
+            foreach ($columns as $column) {
+                if (\is_string($column)) {
+                    $set[$column] = true;
+                }
+            }
+        }
+
+        return $set;
+    }
 
     /**
      * Returns the primary key value of an entity.
@@ -190,25 +266,11 @@ trait AuditTrait
         $changes = [];
         $deepDiffs = [];
 
-        /** @var Configuration $configuration */
-        $configuration = $this->provider->getConfiguration();
-        $globalIgnoredColumns = $configuration->getIgnoredColumns();
         $resolverLocator = $this->provider->getDiffLabelResolverLocator();
         $jsonTypes = DoctrineHelper::jsonTypes($connection);
 
-        // Cache entity-class-level config (ignored_columns, diff_label_resolvers) for the
-        // process lifetime — config is set at bootstrap and never changes at runtime.
-        if (!isset($this->entityConfigCache[$meta->name])) {
-            $entityCfg = $configuration->getEntities()[$meta->name] ?? [];
-            $this->entityConfigCache[$meta->name] = [
-                'computed_audit_table_name' => $entityCfg['computed_audit_table_name'] ?? '',
-                'ignored_columns' => $entityCfg['ignored_columns'] ?? [],
-                'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
-            ];
-        }
-
-        $entityIgnoredColumns = $this->entityConfigCache[$meta->name]['ignored_columns'];
-        $diffLabelResolvers = $this->entityConfigCache[$meta->name]['diff_label_resolvers'];
+        [$ignoredColumns, $auditedColumns] = $this->columnFilter($meta->name, $entity);
+        $diffLabelResolvers = $this->entityConfig($meta->name)['diff_label_resolvers'];
 
         foreach ($changeset as $fieldName => [$old, $new]) {
             $o = null;
@@ -219,8 +281,8 @@ trait AuditTrait
                 continue;
             }
 
-            $isAuditedField = !\in_array($fieldName, $globalIgnoredColumns, true)
-                && !\in_array($fieldName, $entityIgnoredColumns, true);
+            $isAuditedField = !isset($ignoredColumns[$fieldName])
+                && (null === $auditedColumns || isset($auditedColumns[$fieldName]));
 
             $type = null;
             if (
@@ -300,7 +362,7 @@ trait AuditTrait
      * deleted from the audit log alone.
      *
      * Only called when Configuration::isFullSnapshotOnRemoveEnabled() is true.
-     * Skipped for ignored columns and embedded classes.
+     * Skipped for ignored (or not allowlisted) columns and embedded classes.
      *
      * @throws MappingException
      * @throws Exception
@@ -314,17 +376,14 @@ trait AuditTrait
         $source = $this->summarize($entityManager, $entity, [], $meta);
         $changes = [];
 
-        /** @var Configuration $configuration */
-        $configuration = $this->provider->getConfiguration();
-        $globalIgnoredColumns = $configuration->getIgnoredColumns();
-        $entityIgnoredColumns = $configuration->getEntities()[$meta->name]['ignored_columns'] ?? [];
+        [$ignoredColumns, $auditedColumns] = $this->columnFilter($meta->name, $entity);
 
         foreach (array_keys($meta->fieldMappings) as $fieldName) {
-            if (\in_array($fieldName, $globalIgnoredColumns, true)) {
+            if (isset($ignoredColumns[$fieldName])) {
                 continue;
             }
 
-            if (\in_array($fieldName, $entityIgnoredColumns, true)) {
+            if (null !== $auditedColumns && !isset($auditedColumns[$fieldName])) {
                 continue;
             }
 
