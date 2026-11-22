@@ -138,14 +138,20 @@ Migrates existing audit tables from schema version 1 to schema version 2.
 
 ```bash
 # Preview the SQL that would be executed (dry-run)
-php bin/console audit:schema:migrate --dump-sql
+php bin/console audit:schema:migrate --dump-sql --convert-all
 
-# Execute the migration
-php bin/console audit:schema:migrate --force
+# Execute the migration and convert the existing rows (recommended)
+php bin/console audit:schema:migrate --force --convert-all
 
-# Also convert existing v1 diffs JSON to the v2 unified format
-php bin/console audit:schema:migrate --force --convert-diffs
+# Convert a sample only, to estimate the duration (keeps the legacy columns, resumable)
+php bin/console audit:schema:migrate --force --convert-all --limit=10000
 ```
+
+> [!CAUTION]
+> The migration drops the legacy columns and cannot be undone: back up the audit tables first. Without
+> `--convert-transaction-hash` (or `--convert-all`), `--force` drops `transaction_hash` without converting it, and
+> legacy rows lose their transaction grouping. Follow the [upgrade guide](../../upgrade/v2.md#-upgrade-steps) for
+> the complete procedure.
 
 > [!NOTE]
 > Use `audit:schema:migrate` when upgrading an existing installation. New installations created
