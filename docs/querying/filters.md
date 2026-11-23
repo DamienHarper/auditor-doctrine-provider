@@ -122,34 +122,39 @@ use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\NullFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 
 // Entries where blame_id IS NULL (anonymous changes)
-$query->addFilter(new NullFilter(Query::USER_ID, isNull: true));
-
-// Entries where blame_id IS NOT NULL (authenticated changes)
-$query->addFilter(new NullFilter(Query::USER_ID, isNull: false));
+$query->addFilter(new NullFilter(Query::USER_ID));
 ```
+
+`NullFilter` only tests `IS NULL`. To keep the entries whose column is not null, use a `RangeFilter` or a
+`SimpleFilter` with the values you expect, or a `JsonFilter` with `IS NOT NULL` on a JSON column.
 
 > [!WARNING]
 > `NullFilter` works on indexed columns such as `blame_id`, `object_id`, `type`, etc. Do not use `Query::JSON` with `NullFilter` — there is no `json` column in the audit table. To find entries where `extra_data IS NULL`, query without a filter and check `$entry->extraData === null`.
 
 ## 🔍 JsonFilter
 
-Filters entries by the presence of a field key within the `diffs` JSON column. Useful to find all audits where a specific field was changed.
+Filters entries on a value inside a JSON column, typically `extra_data`:
+`new JsonFilter($column, $path, $value = null, $operator = '=', $strict = false)`.
 
 ### Usage
 
 ```php
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\JsonFilter;
-use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 
-// Entries where the 'title' field was part of the diff
-$query->addFilter(new JsonFilter(Query::JSON, 'title'));
+// Entries whose extra_data.department is 'IT'
+$query->addFilter(new JsonFilter('extra_data', 'department', 'IT'));
+
+// Entries whose extra_data has a non-null 'route'
+$query->addFilter(new JsonFilter('extra_data', 'route', null, 'IS NOT NULL'));
 ```
 
-> [!NOTE]
-> `JsonFilter` implements `PlatformAwareFilterInterface`. The exact SQL it generates is platform-specific:
-> - **MySQL / MariaDB** — Uses `JSON_CONTAINS_PATH(diffs, 'one', '$.title')`
-> - **PostgreSQL** — Uses `diffs ? 'title'`
-> - **SQLite** — Uses `json_extract(diffs, '$.title') IS NOT NULL`
+Operators: `=`, `!=`, `<>`, `LIKE`, `NOT LIKE`, `IN`, `NOT IN`, `IS NULL`, `IS NOT NULL`. On a platform without JSON
+support, the filter falls back to `LIKE` unless `$strict` is `true` (it then throws). See
+[Extra Data](../extra-data.md#filtering-by-extra-data) for the platforms and indexing.
+
+> [!TIP]
+> To find the entries that changed a field, use [`ChangedFieldFilter`](#-changedfieldfilter) rather than a
+> `JsonFilter` on `diffs`.
 
 ## ✏️ ChangedFieldFilter
 

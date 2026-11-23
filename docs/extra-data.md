@@ -53,7 +53,7 @@ $eventDispatcher = new EventDispatcher();
 
 $eventDispatcher->addListener(LifecycleEvent::class, function (LifecycleEvent $event): void {
     $payload = $event->getPayload();
-    $entity  = $event->getEntity();  // The audited Doctrine entity object
+    $entity  = $event->entity;       // The audited Doctrine entity object (null when unknown)
 
     // Only enrich specific entities
     if (!$entity instanceof App\Entity\Order) {
@@ -108,7 +108,7 @@ $eventDispatcher->addListener(LifecycleEvent::class, function (LifecycleEvent $e
 ```php
 $eventDispatcher->addListener(LifecycleEvent::class, function (LifecycleEvent $event): void {
     $payload = $event->getPayload();
-    $entity  = $event->getEntity();
+    $entity  = $event->entity;
 
     if ('remove' !== $payload['type']) {
         return;

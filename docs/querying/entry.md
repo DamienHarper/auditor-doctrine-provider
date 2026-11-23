@@ -33,6 +33,11 @@ use DH\Auditor\Model\Entry;
 | `$ip`            | `string\|null`         | Convenience shortcut for `$blame['ip']`                              |
 | `$via`           | `array\|null`          | Blame context (`type`, `label`, `data`) the change was made in, from `$blame['via']` |
 | `$createdAt`     | `\DateTimeImmutable`   | Timestamp of when the audit entry was created                        |
+| `$entity`        | `string\|null`         | FQCN of the audited entity, set by readers that merge several audit tables (history of a root) |
+| `$rootPath`      | `string\|null`         | Path that led to the root in the history of a root (`null` for the root itself) |
+
+`isDeepDiff($field)` tells whether a field's changeset is a JSON deep diff, and `getSortKey()` gives a total order
+of entries across tables (see [Histories](history.md)).
 
 > [!IMPORTANT]
 > - `$entry->type` is a plain `string` (e.g. `'insert'`, `'update'`), not an enum.
@@ -122,12 +127,12 @@ if ('insert' === $entry->type && $entry->isSnapshot()) {
 
 ### Legacy Diff Structure (schema version 1)
 
-`getDiffs()` returns the raw decoded array as-is (minus the internal `@source` key):
+`getDiffs()` returns the raw decoded array as-is, minus the internal `@source` key that legacy inserts carry
+(`getDiffSource()` returns `null` for legacy entries):
 
-**`insert`**:
+**`insert`** (as returned by `getDiffs()`):
 ```json
 {
-    "@source": { "id": 42, "class": "App\\Entity\\Post", "label": "Hello World", "table": "posts" },
     "title":   { "new": "Hello World" },
     "content": { "new": "My first post." }
 }
@@ -194,7 +199,7 @@ foreach ($entries as $entry) {
     printf(
         "[%s] %s #%s — by %s (%s) from %s at %s\n",
         $entry->type,
-        $source['class'] ?? $entity,
+        $source['class'] ?? App\Entity\Post::class,
         $entry->objectId,
         $entry->username ?? 'anonymous',
         $entry->userId ?? '-',
@@ -203,10 +208,10 @@ foreach ($entries as $entry) {
     );
 
     foreach ($entry->getDiffs() as $field => $change) {
-        if (!isset($change['old'], $change['new'])) {
-            continue;
+        if (!\is_array($change) || $entry->isDeepDiff($field)) {
+            continue;   // association entries and JSON deep diffs have another shape
         }
-        printf("  %s: %s → %s\n", $field, $change['old'] ?? '(null)', $change['new'] ?? '(null)');
+        printf("  %s: %s → %s\n", $field, json_encode($change['old'] ?? null), json_encode($change['new'] ?? null));
     }
 }
 ```

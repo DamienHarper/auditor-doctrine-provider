@@ -175,6 +175,23 @@ tools/docker/
 └── Dockerfile               # PHP CLI image (pdo_mysql + pdo_pgsql + xdebug, + blackfire stage)
 ```
 
+#### Migration end-to-end test
+
+`tests/MigrationE2E` checks `audit:schema:migrate` on data written by provider 1.x: provider 1.x, installed in
+`tools/migration-e2e/v1`, writes audit entries, then the test migrates them and compares every row. It is excluded
+from the default suite:
+
+```bash
+make migration-e2e db=mysql            # in Docker: sqlite (default), mysql, pgsql, mariadb
+
+# or locally
+composer install --working-dir=tools/migration-e2e/v1
+E2E_DATABASE_URL=… vendor/bin/phpunit --group migration-e2e
+```
+
+> [!CAUTION]
+> The generator drops every table of the `E2E_DATABASE_URL` database: point it to a throwaway database.
+
 ### ⚡ Benchmarking
 
 The project ships with **PHPBench** benchmark suites and a **Blackfire** profiling script to measure the performance impact of changes on the Doctrine flush pipeline (audit entry generation + persistence), the read model and `audit:snapshot`.

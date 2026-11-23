@@ -12,6 +12,7 @@ Auditor uses PHP 8 attributes to configure Doctrine entity auditing. These attri
 | `#[Ignore]`     | Property or class | Excludes a property from auditing |
 | `#[Security]`   | Class    | Defines who can view entity audits        |
 | `#[DiffLabel]`  | Property or class | Attaches a human-readable label resolver to a field |
+| `#[AuditRoot]`  | Class (repeatable) | Indexes the entries under the history of another entity (see [Histories](../../querying/history.md)) |
 
 ## 📝 #[Auditable]
 
