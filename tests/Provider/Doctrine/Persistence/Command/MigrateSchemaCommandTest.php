@@ -283,6 +283,72 @@ final class MigrateSchemaCommandTest extends TestCase
     }
 
     /**
+     * Before auditor 3.2.0, a JSON field got a field diff holding both whole values, never a deep diff: it stays a
+     * field diff, even though both of its sides are arrays.
+     */
+    public function testConvertDiffsKeepsAJsonFieldDiffWrittenBeforeAuditor32(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['old' => ['theme' => 'dark', 'list' => [1, 2]], 'new' => ['theme' => 'light', 'list' => [1, 2, 3]]],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'json_array' => ['new' => ['theme' => 'light', 'list' => [1, 2, 3]], 'old' => ['theme' => 'dark', 'list' => [1, 2]]],
+            ],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * {"new": []} inserted yields the deep diff {"new": []}: 1.x writes an empty JSON array as is.
+     */
+    public function testConvertDiffsKeepsADeepDiffHoldingAnEmptyArray(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'insert', '90', [
+            'json_array' => ['new' => []],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'json_array' => ['new' => []],
+            ],
+            'deep_diffs' => ['json_array'],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
+     * A table already rid of its legacy columns but still holding unconverted diffs is converted along with the legacy
+     * tables, not only once no legacy table is left.
+     */
+    public function testConvertDiffsAlsoConvertsTablesWithoutLegacyColumns(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $connection = $this->auditConnection();
+        $connection->insert('comment_audit', [
+            'schema_version' => 1,
+            'type' => 'update',
+            'object_id' => '1',
+            'transaction_id' => '01HXYZ1234567890ABCDEFGHIJ',
+            'diffs' => json_encode(['body' => ['old' => 'Old', 'new' => 'New']], JSON_THROW_ON_ERROR),
+            'created_at' => '2024-01-01 00:00:00',
+        ]);
+        $id = (int) $connection->lastInsertId();
+
+        $commandTester = new CommandTester($this->createCommand());
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-all' => true]));
+
+        $this->assertSameDiffs(['body' => ['new' => 'New', 'old' => 'Old']], $this->fetchConvertedDiffs('comment_audit', $id)['changes'] ?? null);
+    }
+
+    /**
      * The field diff of an association ({"new": summary}) only holds arrays: it stays a field diff.
      */
     public function testConvertDiffsNormalizesLegacyAssociationFieldDiff(): void
