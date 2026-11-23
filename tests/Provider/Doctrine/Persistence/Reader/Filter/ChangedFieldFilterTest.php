@@ -34,6 +34,13 @@ final class ChangedFieldFilterTest extends TestCase
         $this->assertSame('title', $filter->getField());
     }
 
+    public function testSeveralFields(): void
+    {
+        $filter = new ChangedFieldFilter(['title', 'body', 'title']);
+
+        $this->assertSame(['title', 'body'], $filter->getFields());
+    }
+
     #[DataProvider('provideRejectsInvalidFieldNamesCases')]
     public function testRejectsInvalidFieldNames(string $field): void
     {
@@ -174,6 +181,13 @@ final class ChangedFieldFilterTest extends TestCase
 
         $this->assertSame([$dotted], $this->ids($reader->createQuery(Post::class, ['changed_field' => 'address.street', 'page_size' => null])->execute()));
         $this->assertCount(0, $reader->createQuery(Post::class, ['changed_field' => 'address', 'page_size' => null])->execute());
+    }
+
+    public function testAtLeastOneField(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new ChangedFieldFilter([]);
     }
 
     /**

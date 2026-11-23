@@ -130,7 +130,7 @@ trait SchemaSetupTrait
         $tables = $schemaManager->listTables();
         foreach ($tables as $table) {
             $regex = '#^'.$this->provider->getConfiguration()->getTablePrefix().'.*'.$this->provider->getConfiguration()->getTableSuffix().'$#';
-            if (preg_match($regex, $table->getName())) {
+            if (preg_match($regex, $table->getName()) || $table->getName() === $this->provider->getConfiguration()->getRootIndexTableName()) {
                 $schema->dropTable($table->getName());
             }
         }

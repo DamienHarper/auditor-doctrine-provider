@@ -9,7 +9,9 @@ use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\DateRangeFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\FilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\PlatformAwareFilterInterface;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\QueryAwareFilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RangeFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RootFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\QueryTest;
 use Doctrine\DBAL\ArrayParameterType;
@@ -52,15 +54,44 @@ final class Query implements QueryInterface
      */
     public const string DIFFS = 'diffs';
 
+    /**
+     * Name of the filters on the audit root index (see RootFilter).
+     */
+    public const string ROOT = 'root';
+
+    /**
+     * Name of the filters on the content of the blame column (see BlameOriginFilter).
+     */
+    public const string BLAME = 'blame';
+
+    /**
+     * Name of the keyset pagination filters of the history of a root.
+     */
+    public const string CURSOR = 'cursor';
+
     private array $filters = [];
 
     private array $orderBy = [];
+
+    /**
+     * The root filter of the history this query reads (Reader::createRootQuery()): the path an entry was indexed
+     * under is read from it, whatever the other root filters (a read scope may add some).
+     */
+    private ?RootFilter $historyRoot = null;
+
+    /**
+     * Whether a null transaction id sorts as an empty string, like the cursors of RootQuery (by default, PostgreSQL
+     * sorts nulls first in descending order and MySQL last).
+     */
+    private bool $nullTransactionIdAsEmpty = false;
 
     private int $offset = 0;
 
     private int $limit = 0;
 
     private readonly \DateTimeZone $timezone;
+
+    private ?string $rootIndexTable = null;
 
     public function __construct(private readonly string $table, private readonly Connection $connection, string $timezone)
     {
@@ -98,7 +129,7 @@ final class Query implements QueryInterface
      */
     public function iterate(): \Generator
     {
-        $statement = $this->buildQueryBuilder()->executeQuery();
+        $statement = $this->buildQueryBuilder(true)->executeQuery();
 
         yield from $statement->iterateAssociative();
     }
@@ -134,6 +165,30 @@ final class Query implements QueryInterface
         }
 
         $this->orderBy[$field] = $direction;
+
+        return $this;
+    }
+
+    /**
+     * Adds the root filter of the history the query reads.
+     *
+     * @internal
+     */
+    public function setHistoryRoot(RootFilter $filter): self
+    {
+        $this->historyRoot = $filter;
+
+        return $this->addFilter($filter);
+    }
+
+    /**
+     * Sorts a null transaction id as an empty string, on every platform.
+     *
+     * @internal
+     */
+    public function sortNullTransactionIdAsEmpty(): self
+    {
+        $this->nullTransactionIdAsEmpty = true;
 
         return $this;
     }
@@ -176,9 +231,42 @@ final class Query implements QueryInterface
         return $this;
     }
 
+    /**
+     * Audit table read by the query, as it appears in SQL.
+     */
+    public function getTable(): string
+    {
+        return $this->table;
+    }
+
+    public function getConnection(): Connection
+    {
+        return $this->connection;
+    }
+
+    public function getTimezone(): \DateTimeZone
+    {
+        return $this->timezone;
+    }
+
+    /**
+     * Sets the audit root index table that root filters read.
+     */
+    public function setRootIndexTable(string $rootIndexTable): self
+    {
+        $this->rootIndexTable = $rootIndexTable;
+
+        return $this;
+    }
+
+    public function getRootIndexTable(): string
+    {
+        return $this->rootIndexTable ?? throw new InvalidArgumentException('The audit root index table of the query is not set.');
+    }
+
     public function getSupportedFilters(): array
     {
-        return [self::ID, self::TYPE, self::OBJECT_ID, self::DISCRIMINATOR, self::TRANSACTION_ID, self::USER_ID, self::CREATED_AT, self::JSON, self::DIFFS, self::LEGACY_TRANSACTION_HASH];
+        return [self::ROOT, self::BLAME, self::CURSOR, self::ID, self::TYPE, self::OBJECT_ID, self::DISCRIMINATOR, self::TRANSACTION_ID, self::USER_ID, self::CREATED_AT, self::JSON, self::DIFFS, self::LEGACY_TRANSACTION_HASH];
     }
 
     public function getFilters(): array
@@ -199,13 +287,29 @@ final class Query implements QueryInterface
         return [$this->limit, $this->offset];
     }
 
-    private function buildQueryBuilder(): QueryBuilder
+    /**
+     * @param bool $withRootPath selects the path entries read through a root filter were indexed under
+     */
+    private function buildQueryBuilder(bool $withRootPath = false): QueryBuilder
     {
         $queryBuilder = $this->connection->createQueryBuilder();
         $queryBuilder
             ->select('*')
             ->from($this->table, 'at')
         ;
+
+        // entries read through a root filter tell the path they were indexed under
+        if ($withRootPath && $this->historyRoot instanceof RootFilter) {
+            $data = $this->historyRoot->getRootPathSQL($this);
+            $queryBuilder->select('at.*', $data['sql'].' AS root_path');
+            foreach ($data['params'] as $name => $value) {
+                if (\is_array($value)) {
+                    $queryBuilder->setParameter($name, $value, ArrayParameterType::STRING);
+                } else {
+                    $queryBuilder->setParameter($name, $value);
+                }
+            }
+        }
 
         // build WHERE clause(s)
         $queryBuilder = $this->buildWhere($queryBuilder);
@@ -225,7 +329,7 @@ final class Query implements QueryInterface
     private function buildPageQueryBuilder(): QueryBuilder
     {
         if (0 === $this->offset || $this->hasFilters() || !$this->connection->getDatabasePlatform() instanceof AbstractMySQLPlatform) {
-            return $this->buildQueryBuilder();
+            return $this->buildQueryBuilder(true);
         }
 
         $page = $this->buildQueryBuilder()->select('id');
@@ -305,8 +409,10 @@ final class Query implements QueryInterface
                 }
 
                 foreach ($filters as $filter) {
-                    // Use platform-aware method if available
-                    if ($filter instanceof PlatformAwareFilterInterface) {
+                    // Use query-aware or platform-aware method if available
+                    if ($filter instanceof QueryAwareFilterInterface) {
+                        $data = $filter->getSQLForQuery($this);
+                    } elseif ($filter instanceof PlatformAwareFilterInterface) {
                         $data = $filter->getSQLWithConnection($this->connection);
                     } else {
                         $data = $filter->getSQL();
@@ -331,7 +437,7 @@ final class Query implements QueryInterface
     private function buildOrderBy(QueryBuilder $queryBuilder): QueryBuilder
     {
         foreach ($this->orderBy as $field => $direction) {
-            $queryBuilder->addOrderBy($field, $direction);
+            $queryBuilder->addOrderBy(self::TRANSACTION_ID === $field && $this->nullTransactionIdAsEmpty ? "COALESCE(transaction_id, '')" : $field, $direction);
         }
 
         return $queryBuilder;

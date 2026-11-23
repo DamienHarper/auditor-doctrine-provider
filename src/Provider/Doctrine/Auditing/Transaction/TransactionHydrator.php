@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 
 use DH\Auditor\Model\TransactionInterface;
+use DH\Auditor\Provider\Doctrine\Auditing\Root\RootResolver;
+use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
@@ -26,6 +28,8 @@ final class TransactionHydrator implements TransactionHydratorInterface
      */
     private array $inverseSideFields = [];
 
+    private ?RootResolver $rootResolver = null;
+
     public function __construct(private DoctrineProvider $provider) {}
 
     /**
@@ -41,6 +45,39 @@ final class TransactionHydrator implements TransactionHydratorInterface
         $this->hydrateWithScheduledCollectionDeletions($transaction, $em);
         $this->hydrateInverseSideAssociations($transaction, $em);
         $this->hydrateInverseSideDissociationsOfDeletedEntities($transaction, $em);
+        $this->hydrateRoots($transaction, $em);
+    }
+
+    /**
+     * Collects the audit roots of the entities of the flush while their associations, the old values of the
+     * associations the flush changes and the identifiers of the entities it deletes are still known.
+     */
+    private function hydrateRoots(Transaction $transaction, EntityManagerInterface $entityManager): void
+    {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        if (!$configuration->hasRoots()) {
+            return;
+        }
+
+        $this->rootResolver ??= new RootResolver($this->provider);
+        $uow = $entityManager->getUnitOfWork();
+
+        $entities = [];
+        foreach ([$transaction->getInserted(), $transaction->getUpdated(), $transaction->getRemoved(), $transaction->getAssociated(), $transaction->getDissociated()] as $dtos) {
+            foreach ($dtos as $dto) {
+                $entities[spl_object_id($dto->source)] = $dto->source;
+            }
+        }
+
+        foreach ($entities as $entity) {
+            if (!$configuration->hasRoots(DoctrineHelper::getRealClassName($entity))) {
+                continue;
+            }
+
+            $changeset = $uow->isScheduledForInsert($entity) || $uow->isScheduledForUpdate($entity) ? $uow->getEntityChangeSet($entity) : [];
+            $transaction->addRoots($entity, $this->rootResolver->resolve($entityManager, $entity, $changeset));
+        }
     }
 
     private function hydrateWithScheduledInsertions(Transaction $transaction, EntityManagerInterface $entityManager): void

@@ -208,6 +208,25 @@ php bin/console audit:export --blame-id=7
 
 Each line or row is an `Entry::toArray()`: the same columns for legacy and schema v2 entries.
 
+#### `audit:roots:rebuild`
+
+Indexes the existing audit entries under their audit roots (`#[AuditRoot]`, `roots` entity option), in the
+`audit_root` table: after declaring a new root, or after migrating audit tables to schema v2.
+
+```bash
+php bin/console audit:roots:rebuild
+php bin/console audit:roots:rebuild --entity='App\Entity\Comment' --dry-run
+```
+
+| Option      | Description                                                    |
+|-------------|----------------------------------------------------------------|
+| `--entity`  | Entities whose entries are indexed (repeatable), all by default |
+| `--dry-run` | Count the missing index rows, write nothing                    |
+
+Only missing rows are written and no row is deleted, so the command can be run again and rows written by hand are
+kept. See
+[Histories](../../querying/history.md#rebuilding-the-index).
+
 #### `audit:snapshot`
 
 Records the current state of existing entities, so that their history does not start at their first change

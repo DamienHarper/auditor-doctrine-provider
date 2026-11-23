@@ -477,16 +477,17 @@ trait AuditTrait
             $pkName = $meta->getSingleIdentifierFieldName();
         }
 
-        $hasToString = self::$hasToStringCache[$entityClass] ??= method_exists($entity, '__toString');
-        if ($hasToString) {
+        // the "entity_label_resolver" comes first, then the string representation of the entity, then Class#id
+        $label = $this->resolveEntityLabel($entity);
+        if (null === $label && (self::$hasToStringCache[$entityClass] ??= method_exists($entity, '__toString'))) {
             try {
                 $label = (string) $entity;
             } catch (\Throwable) {
-                $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
+                $label = null;
             }
-        } else {
-            $label = DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
         }
+
+        $label ??= DoctrineHelper::getRealClassName($entity).(null === $pkValue ? '' : '#'.$pkValue);
 
         if ('id' !== $pkName) {
             $extra['pkName'] = $pkName;
@@ -498,6 +499,26 @@ trait AuditTrait
             'label' => $label,
             'table' => $meta->getTableName(),
         ] + $extra;
+    }
+
+    /**
+     * Label of an entity given by the "entity_label_resolver", null without resolver or when it has no label for it.
+     */
+    private function resolveEntityLabel(object $entity): ?string
+    {
+        $configuration = $this->provider->getConfiguration();
+        if (!$configuration instanceof Configuration) {
+            return null;
+        }
+
+        $resolver = $configuration->getEntityLabelResolver();
+        if (null === $resolver) {
+            return null;
+        }
+
+        $label = $resolver($entity);
+
+        return \is_string($label) || $label instanceof \Stringable ? (string) $label : null;
     }
 
     /**
@@ -524,6 +545,7 @@ trait AuditTrait
             $userProvider = $this->provider->getAuditor()->getConfiguration()->getUserProvider();
             $user = null === $userProvider ? null : $userProvider();
         }
+
         if ($user instanceof UserInterface) {
             $user_id = $user->identifier;
             $username = $user->username;

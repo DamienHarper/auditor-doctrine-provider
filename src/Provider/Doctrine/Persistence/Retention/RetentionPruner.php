@@ -27,6 +27,8 @@ use Doctrine\ORM\Mapping\ClassMetadata;
  * restricted to the entity's own entries through the "discriminator" column, so that the policy of a class
  * never deletes entries of another one.
  *
+ * Rows of the audit root index that no longer match an entry of the table are deleted along with the entries.
+ *
  * @see RetentionPrunerTest
  */
 final readonly class RetentionPruner
@@ -190,7 +192,36 @@ final readonly class RetentionPruner
             }
         }
 
+        if ([] !== $statements && $this->hasRootIndex($connection, $configuration)) {
+            $statements[] = $this->pruneRootIndex($connection, $configuration->getRootIndexTableName(), $auditTable, $dryRun);
+        }
+
         return $statements;
+    }
+
+    /**
+     * Deletes the index rows of an audit table whose entry is gone.
+     */
+    private function pruneRootIndex(Connection $connection, string $indexTable, string $auditTable, bool $dryRun): string
+    {
+        $queryBuilder = $connection->createQueryBuilder();
+        $queryBuilder
+            ->delete($indexTable)
+            ->where('audit_table = :audit_table')
+            ->andWhere(\sprintf(
+                'NOT EXISTS (SELECT 1 FROM %1$s e WHERE e.object_id = %2$s.object_id AND e.transaction_id = %2$s.transaction_id)',
+                $auditTable,
+                $indexTable,
+            ))
+            ->setParameter('audit_table', $auditTable)
+        ;
+
+        return $this->execute($queryBuilder, $connection, $dryRun);
+    }
+
+    private function hasRootIndex(Connection $connection, Configuration $configuration): bool
+    {
+        return $configuration->hasRoots() && $connection->createSchemaManager()->tablesExist([$configuration->getRootIndexTableName()]);
     }
 
     private function isSingleTableInheritance(string $entity): bool

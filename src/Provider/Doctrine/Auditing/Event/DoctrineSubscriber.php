@@ -61,7 +61,7 @@ final class DoctrineSubscriber implements ResetInterface
     /**
      * Audit tables stored on another connection than each entity manager's one, grouped by connection.
      *
-     * @var array<int, list<array{Connection, list<string>}>>
+     * @var array<int, list<array{Connection, list<string>, bool}>>
      */
     private array $remoteAuditTables = [];
 
@@ -161,6 +161,10 @@ final class DoctrineSubscriber implements ResetInterface
 
         foreach ($pending->getAssociated() as $dto) {
             $transaction->associate($dto->source, $dto->getTarget(), $dto->getMapping());
+        }
+
+        foreach ($pending->getAllRoots() as $entity => $roots) {
+            $transaction->addRoots($entity, array_values($roots));
         }
 
         foreach ($pending->getDissociated() as $dto) {
@@ -310,9 +314,13 @@ final class DoctrineSubscriber implements ResetInterface
         }
 
         $logger = $this->provider->getLogger();
-        $driver->addRollbackHandler(static function () use ($remoteAuditTables, $transactionId, $logger): void {
-            foreach ($remoteAuditTables as [$connection, $auditTables]) {
-                foreach ($auditTables as $auditTable) {
+        $configuration = $this->provider->getConfiguration();
+        \assert($configuration instanceof Configuration);   // helps PHPStan
+        $indexTable = $configuration->getRootIndexTableName();
+        $driver->addRollbackHandler(static function () use ($remoteAuditTables, $transactionId, $logger, $indexTable): void {
+            foreach ($remoteAuditTables as [$connection, $auditTables, $hasRoots]) {
+                // the index rows of the transaction go with its entries
+                foreach ($hasRoots ? [...$auditTables, $indexTable] : $auditTables as $auditTable) {
                     try {
                         $connection->executeStatement(\sprintf('DELETE FROM %s WHERE transaction_id = ?', $auditTable), [$transactionId]);
                     } catch (\Throwable $throwable) {
@@ -358,7 +366,7 @@ final class DoctrineSubscriber implements ResetInterface
      * Audit tables of the audited entities stored on another connection than the entity manager's one. Deleting
      * by transaction id in a table this transaction did not write to is harmless.
      *
-     * @return list<array{Connection, list<string>}>
+     * @return list<array{Connection, list<string>, bool}> connection, audit tables, whether an entity stored there has roots
      */
     private function remoteAuditTables(EntityManagerInterface $entityManager): array
     {
@@ -385,8 +393,9 @@ final class DoctrineSubscriber implements ResetInterface
             }
 
             if ($storageConnection !== $connection) {
-                $remoteAuditTables[spl_object_id($storageConnection)] ??= [$storageConnection, []];
+                $remoteAuditTables[spl_object_id($storageConnection)] ??= [$storageConnection, [], false];
                 $remoteAuditTables[spl_object_id($storageConnection)][1][] = $auditTable;
+                $remoteAuditTables[spl_object_id($storageConnection)][2] = $remoteAuditTables[spl_object_id($storageConnection)][2] || $configuration->hasRoots((string) $entity);
             }
         }
 

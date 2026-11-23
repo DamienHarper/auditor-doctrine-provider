@@ -10,6 +10,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\ClassLevelAttri
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DiffLabelEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\AuditRoot\Document;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\ClassLevelWithoutField\ClassLevelIgnoreWithoutFieldEntity;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\PropertyLevelWithField\PropertyLevelDiffLabelWithFieldEntity;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\Retention\InvalidRetentionEntity;
@@ -52,6 +53,21 @@ final class AttributeLoaderTest extends TestCase
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
         $this->assertCount(5, $loaded);
+    }
+
+    public function testAuditRootsAreLoaded(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../Fixtures/Entity/AuditRoot',
+            ],
+            'default'
+        );
+
+        $loaded = new AttributeLoader($entityManager)->load();
+
+        $this->assertSame(['owner', 'folder', 'folder.owner'], $loaded[Document::class]['roots'], 'Roots of the parent classes come first, duplicates are removed.');
     }
 
     public function testDiffLabelResolversAreLoaded(): void

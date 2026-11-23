@@ -13,7 +13,9 @@ Filters allow you to restrict the results returned by a `Query`. They can be add
 | `RangeFilter`      | `RangeFilter`     | Filter by a numeric range                      |
 | `NullFilter`       | `NullFilter`      | Filter for NULL / NOT NULL values              |
 | `JsonFilter`       | `JsonFilter`      | Filter by a value inside the diffs JSON column |
-| `ChangedFieldFilter` | `ChangedFieldFilter` | Entries whose diff touches a given field    |
+| `ChangedFieldFilter` | `ChangedFieldFilter` | Entries whose diff touches a given field (or one of several) |
+| `BlameOriginFilter` | `BlameOriginFilter` | Entries made from some origins: web request, console, worker, system |
+| `RootFilter`       | `RootFilter`      | Entries indexed under an audit root (see [Histories](history.md)) |
 
 All filter classes live under:
 
@@ -172,6 +174,9 @@ $query->addFilter(new ChangedFieldFilter('tags'));
 
 // Fields of embeddables use their dotted name
 $query->addFilter(new ChangedFieldFilter('address.street'));
+
+// Entries that changed any of several fields
+$query = $reader->createQuery(Post::class, ['changed_field' => ['title', 'body']]);
 ```
 
 The field name must be a Doctrine field name (letters, digits and underscores, dotted for embeddables), otherwise an `InvalidArgumentException` is thrown. It is always passed to the database as a bound parameter.
@@ -181,6 +186,28 @@ The field name must be a Doctrine field name (letters, digits and underscores, d
 
 > [!TIP]
 > The predicate cannot use an index: the database reads the `diffs` of every row left by the other filters. Combine it with `object_id` or a date range on large audit tables.
+
+## 🧭 BlameOriginFilter
+
+Keeps the entries made from some origins (`DH\Auditor\History\BlameOrigin`): `http` (a web request with a
+firewall), `console`, `messenger` (blame context types) or `system` (anything else). Several origins are combined
+with `OR`. It reads the `blame` JSON column, so it needs native JSON support and a schema v2 table.
+
+```php
+use DH\Auditor\History\BlameOrigin;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\BlameOriginFilter;
+
+$query->addFilter(new BlameOriginFilter([BlameOrigin::Console, BlameOrigin::Messenger]));
+
+// Or through the createQuery() option
+$query = $reader->createQuery(Post::class, ['blame_origin' => 'http']);
+```
+
+## 🌳 RootFilter
+
+Keeps the entries indexed under an audit root, optionally through some paths only. It reads the `audit_root` index
+table: use it through `Reader::createRootQuery()`, which sets the index table and merges the tables of every entity
+(see [Histories](history.md)).
 
 ## 🔗 Combining Filters
 

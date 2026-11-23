@@ -6,6 +6,7 @@ namespace DH\Auditor\Provider\Doctrine;
 
 use DH\Auditor\Provider\ConfigurationInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
@@ -40,6 +41,7 @@ final class Configuration implements ConfigurationInterface
     private readonly bool $fullSnapshotOnRemove;
 
     private readonly int $batchSize;
+
     private readonly bool $compression;
 
     private readonly bool $skipDisabledEntities;
@@ -62,6 +64,21 @@ final class Configuration implements ConfigurationInterface
      * @var null|callable(object): mixed
      */
     private $ignoredColumnsResolver;
+
+    /**
+     * @var null|callable(object): mixed
+     */
+    private $rootResolver;
+
+    /**
+     * @var null|callable(object): ?string
+     */
+    private $entityLabelResolver;
+
+    /**
+     * @var null|callable(Query, string): void
+     */
+    private $readScope;
 
     private array $attributeLoaded = [];
 
@@ -91,6 +108,9 @@ final class Configuration implements ConfigurationInterface
         $this->compression = $config['compression'];
         $this->storageMapper = $config['storage_mapper'];
         $this->ignoredColumnsResolver = $config['ignored_columns_resolver'];
+        $this->rootResolver = $config['root_resolver'];
+        $this->entityLabelResolver = $config['entity_label_resolver'];
+        $this->readScope = $config['read_scope'];
     }
 
     public static function isViewerEnabledInConfig(mixed $config): bool
@@ -326,6 +346,131 @@ final class Configuration implements ConfigurationInterface
     }
 
     /**
+     * Audit root paths of an entity (#[AuditRoot] and the "roots" entity option), such as ["property", "visit.property"].
+     *
+     * @return list<string>
+     */
+    public function getRoots(string $entity): array
+    {
+        $roots = $this->getEntities()[$entity]['roots'] ?? [];
+
+        return \is_array($roots) ? array_values(array_filter($roots, \is_string(...))) : [];
+    }
+
+    /**
+     * Tells whether an entity declares audit roots, or whether any entity does when $entity is null. A root resolver
+     * counts for every entity.
+     */
+    public function hasRoots(?string $entity = null): bool
+    {
+        if (null !== $this->rootResolver) {
+            return true;
+        }
+
+        if (null !== $entity) {
+            return [] !== $this->getRoots($entity);
+        }
+
+        return array_any(array_keys($this->getEntities()), fn (int|string $class): bool => [] !== $this->getRoots((string) $class));
+    }
+
+    /**
+     * Name of the table that indexes audit entries under their roots.
+     */
+    public function getRootIndexTableName(): string
+    {
+        return $this->tablePrefix.'audit_root';
+    }
+
+    /**
+     * Sets the callable that returns extra audit roots of an entity, as path or role => root entity (null roots are
+     * skipped), or removes it with null.
+     *
+     * @param null|callable(object): mixed $resolver
+     */
+    public function setRootResolver(?callable $resolver): self
+    {
+        $this->rootResolver = $resolver;
+
+        return $this;
+    }
+
+    public function getRootResolver(): ?callable
+    {
+        return $this->rootResolver;
+    }
+
+    /**
+     * Returns the roots the "root_resolver" gives for $entity, as path or role => root entity.
+     *
+     * @return array<string, object>
+     *
+     * @throws \UnexpectedValueException when the resolver does not return an array of objects keyed by string
+     */
+    public function resolveRoots(object $entity): array
+    {
+        if (null === $this->rootResolver) {
+            return [];
+        }
+
+        $resolved = ($this->rootResolver)($entity);
+        if (!\is_array($resolved)) {
+            throw new \UnexpectedValueException(\sprintf('The root resolver must return an array of root entities keyed by path, %s returned for "%s".', get_debug_type($resolved), $entity::class));
+        }
+
+        $roots = [];
+        foreach ($resolved as $path => $root) {
+            if (null === $root) {
+                continue;
+            }
+
+            if (!\is_string($path) || '' === $path || !\is_object($root)) {
+                throw new \UnexpectedValueException(\sprintf('The root resolver must return an array of root entities keyed by path, an entry %s => %s returned for "%s".', get_debug_type($path), get_debug_type($root), $entity::class));
+            }
+
+            $roots[$path] = $root;
+        }
+
+        return $roots;
+    }
+
+    /**
+     * Sets the callable that builds the label of an entity written in the "source" and "target" blocks of the diffs
+     * (see EntityLabelResolverInterface), or removes it with null.
+     *
+     * @param null|callable(object): ?string $resolver
+     */
+    public function setEntityLabelResolver(?callable $resolver): self
+    {
+        $this->entityLabelResolver = $resolver;
+
+        return $this;
+    }
+
+    public function getEntityLabelResolver(): ?callable
+    {
+        return $this->entityLabelResolver;
+    }
+
+    /**
+     * Sets the callable applied to every query the reader creates, to restrict what can be read (for instance the
+     * entries of the current tenant), or removes it with null.
+     *
+     * @param null|callable(Query, string): void $scope receives the query and the FQCN of the entity it reads
+     */
+    public function setReadScope(?callable $scope): self
+    {
+        $this->readScope = $scope;
+
+        return $this;
+    }
+
+    public function getReadScope(): ?callable
+    {
+        return $this->readScope;
+    }
+
+    /**
      * Get the value of entities.
      */
     public function getEntities(): array
@@ -510,6 +655,9 @@ final class Configuration implements ConfigurationInterface
                 'skip_disabled_entities' => false,
                 'compression' => false,
                 'ignored_columns_resolver' => null,
+                'root_resolver' => null,
+                'entity_label_resolver' => null,
+                'read_scope' => null,
             ])
             ->setAllowedTypes('table_prefix', 'string')
             ->setAllowedTypes('table_suffix', 'string')
@@ -526,6 +674,9 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('skip_disabled_entities', 'bool')
             ->setAllowedTypes('compression', 'bool')
             ->setAllowedTypes('ignored_columns_resolver', ['null', 'callable'])
+            ->setAllowedTypes('root_resolver', ['null', 'callable'])
+            ->setAllowedTypes('entity_label_resolver', ['null', 'callable'])
+            ->setAllowedTypes('read_scope', ['null', 'callable'])
         ;
     }
 }

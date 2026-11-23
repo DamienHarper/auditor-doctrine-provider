@@ -10,6 +10,7 @@ use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
@@ -103,6 +104,25 @@ final class RemoteStorageRollbackTest extends TestCase
         $this->assertSame(1, $this->countRows('author_audit', $this->storageConnection()), 'The audit entries of a committed transaction must be kept.');
     }
 
+    public function testTheRootIndexRowsOfARolledBackCommitAreDeleted(): void
+    {
+        $this->commitFailure->failNextCommit('40001');
+
+        try {
+            $entityManager = $this->auditingEntityManager();
+            $author = new Author()->setFullname('John Doe')->setEmail('author@example.com');
+            $entityManager->persist($author);
+            $entityManager->persist(new Post()->setTitle('Hello')->setBody('Body')->setCreatedAt(new \DateTimeImmutable('2026-01-01'))->setAuthor($author));
+            $entityManager->flush();
+            $this->fail('The flush must fail.');
+        } catch (\Throwable $throwable) {
+            $this->assertNotInstanceOf(AssertionFailedError::class, $throwable);
+        }
+
+        $this->assertSame(0, $this->countRows('post_audit', $this->storageConnection()));
+        $this->assertSame(0, $this->countRows('audit_root', $this->storageConnection()), 'The index rows go with the audit entries.');
+    }
+
     public function testAFailedDeletionOfAuditEntriesIsLogged(): void
     {
         $logger = new class extends AbstractLogger {
@@ -154,6 +174,7 @@ final class RemoteStorageRollbackTest extends TestCase
     {
         $this->provider->getConfiguration()->setEntities([
             Author::class => ['enabled' => true],
+            Post::class => ['enabled' => true, 'roots' => ['author']],
         ]);
     }
 
