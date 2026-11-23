@@ -29,6 +29,9 @@ use DH\Auditor\User\User;
 use Doctrine\DBAL\Configuration as DbalConfiguration;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Exception as DbalException;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\UnderscoreNamingStrategy;
@@ -142,25 +145,44 @@ final class MigrationEndToEndTest extends TestCase
     }
 
     /**
-     * A run that fails half-way (here, on a row whose diffs cannot be decoded) is resumed by the next one.
+     * A run that fails half-way, while converting the diffs of the second batch of a table, is resumed by the next one.
      */
     public function testFailedRunIsResumed(): void
     {
         $connection = $this->connection(Environment::PRIMARY);
         $table = 'e2e_translation_audit';
         $row = $this->snapshot[Environment::PRIMARY][$table][800];
-        $connection->update($table, ['diffs' => '{not json'], ['id' => $row['id']]);
+        $platform = $connection->getDatabasePlatform();
+
+        if ($platform instanceof SQLitePlatform) {
+            // SQLite stores JSON as text: the row cannot be decoded
+            $connection->update($table, ['diffs' => '{not json'], ['id' => $row['id']]);
+            $restore = static fn (): int|string => $connection->update($table, ['diffs' => $row['diffs']], ['id' => $row['id']]);
+        } else {
+            // the other platforms only accept valid JSON: a constraint refuses the converted diffs of the row
+            // (MySQL and MariaDB do not let a CHECK constraint refer to the auto-increment id)
+            $diffs = $platform instanceof PostgreSQLPlatform ? 'diffs::text' : 'CAST(diffs AS CHAR)';
+            $connection->executeStatement(\sprintf(
+                "ALTER TABLE %s ADD CONSTRAINT e2e_failing_row CHECK (object_id <> '%s' OR %s NOT LIKE '%%\"changes\"%%')",
+                $table,
+                $row['object_id'],
+                $diffs,
+            ));
+            $restore = static fn (): int|string => $connection->executeStatement(\sprintf('ALTER TABLE %s DROP CONSTRAINT e2e_failing_row', $table));
+        }
 
         try {
             $this->migrate(['--force' => true, '--convert-all' => true]);
-            $this->fail('The migration was expected to fail on the corrupted row.');
-        } catch (\JsonException) {
+            $this->fail('The migration was expected to fail on row '.$row['id'].'.');
+        } catch (\JsonException|DbalException) {
         }
 
-        // rows of the failing batch are left unconverted
-        $this->assertSame(1, (int) $connection->fetchOne(\sprintf('SELECT schema_version FROM %s WHERE id = ?', $table), [$row['id']]));
+        // the rows of the failing batch are left unconverted, those of the previous batch are converted
+        $versions = $connection->fetchAllKeyValue(\sprintf('SELECT id, schema_version FROM %s WHERE id IN (?, ?)', $table), [$row['id'], 1]);
+        $this->assertSame(1, (int) $versions[$row['id']], 'row of the failing batch');
+        $this->assertSame(2, (int) $versions[1], 'row of the first batch');
 
-        $connection->update($table, ['diffs' => $row['diffs']], ['id' => $row['id']]);
+        $restore();
         $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-all' => true]));
         $this->assertMigrated();
     }
