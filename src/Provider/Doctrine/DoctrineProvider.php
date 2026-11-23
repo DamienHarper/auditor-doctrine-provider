@@ -536,7 +536,7 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
             // Roles given in the configuration take precedence over the #[Security] ones, scope by scope: an empty
             // array or a scope missing from the configuration (e.g. a typo) never lifts a #[Security] restriction.
-            if (\is_array($entities[$entity]['roles'] ?? null) && [] !== $entities[$entity]['roles']) {
+            if (\is_array($entities[$entity]['roles'] ?? null)) {
                 $attributeRoles = $merged[$entity]['roles'] ?? null;
                 $merged[$entity]['roles'] = array_replace(\is_array($attributeRoles) ? $attributeRoles : [], $entities[$entity]['roles']);
             }
