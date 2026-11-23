@@ -19,17 +19,14 @@ class Comment implements \Stringable
     #[ORM\GeneratedValue(strategy: 'IDENTITY')]
     public ?int $id = null;
 
-    #[ORM\Column(type: Types::TEXT)]
-    public string $body = '';
-
     #[ORM\ManyToOne(targetEntity: Post::class, inversedBy: 'comments')]
     #[ORM\JoinColumn(name: 'post_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
     public ?Post $post = null;
 
-    public function __construct(string $body)
-    {
-        $this->body = $body;
-    }
+    public function __construct(
+        #[ORM\Column(type: Types::TEXT)]
+        public string $body
+    ) {}
 
     public function __toString(): string
     {

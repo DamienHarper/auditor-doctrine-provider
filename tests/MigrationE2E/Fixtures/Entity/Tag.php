@@ -21,16 +21,13 @@ class Tag implements \Stringable
     #[ORM\GeneratedValue(strategy: 'IDENTITY')]
     public ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 255)]
-    public string $title = '';
-
     /** @var Collection<int, Post> */
     #[ORM\ManyToMany(targetEntity: Post::class, mappedBy: 'tags')]
     public Collection $posts;
 
-    public function __construct(string $title)
+    public function __construct(#[ORM\Column(type: Types::STRING, length: 255)]
+        public string $title)
     {
-        $this->title = $title;
         $this->posts = new ArrayCollection();
     }
 

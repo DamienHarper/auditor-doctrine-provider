@@ -1,0 +1,138 @@
+name: auditor-doctrine-provider migration end-to-end test
+
+# Provider 1.x writes audit entries, then audit:schema:migrate converts them and every row is compared with what
+# 1.x wrote (tests/MigrationE2E). Runs when the code involved in the migration changes, nightly, and on demand.
+# To keep it on demand only, remove the pull_request, push and schedule triggers.
+
+on:
+  workflow_dispatch:
+    inputs:
+      v1_version:
+        description: 'Version of auditor-doctrine-provider 1.x that writes the audit entries (Composer constraint)'
+        required: false
+        default: '1.x-dev'
+  schedule:
+    - cron: 30 0 * * *
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/Provider/Doctrine/Persistence/Command/MigrateSchemaCommand.php'
+      - 'src/Provider/Doctrine/Persistence/Command/UpdateSchemaCommand.php'
+      - 'src/Provider/Doctrine/Persistence/Helper/**'
+      - 'src/Provider/Doctrine/Persistence/Schema/**'
+      - 'src/Provider/Doctrine/Persistence/Reader/**'
+      - 'src/Provider/Doctrine/Auditing/Root/**'
+      - 'tests/MigrationE2E/**'
+      - 'tools/migration-e2e/**'
+      - 'composer.json'
+      - '.github/workflows/migration-e2e.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/Provider/Doctrine/Persistence/Command/MigrateSchemaCommand.php'
+      - 'src/Provider/Doctrine/Persistence/Command/UpdateSchemaCommand.php'
+      - 'src/Provider/Doctrine/Persistence/Helper/**'
+      - 'src/Provider/Doctrine/Persistence/Schema/**'
+      - 'src/Provider/Doctrine/Persistence/Reader/**'
+      - 'src/Provider/Doctrine/Auditing/Root/**'
+      - 'tests/MigrationE2E/**'
+      - 'tools/migration-e2e/**'
+      - 'composer.json'
+      - '.github/workflows/migration-e2e.yml'
+
+jobs:
+  migration:
+    name: Migration from 1.x, ${{ matrix.db }}
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: auditor
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: auditor
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: auditor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    strategy:
+      matrix:
+        db:
+          - 'sqlite'
+          - 'mysql'
+          - 'mariadb'
+          - 'pgsql'
+      fail-fast: false
+
+    steps:
+      - name: Configure Database
+        run: |
+          if [ "${{ matrix.db }}" = "sqlite" ]; then
+            echo "DATABASE_URL=sqlite:///:memory:" >> $GITHUB_ENV
+          elif [ "${{ matrix.db }}" = "mysql" ]; then
+            echo "DATABASE_URL=mysql://root:password@127.0.0.1/auditor?serverVersion=8&charset=utf8mb4" >> $GITHUB_ENV
+          elif [ "${{ matrix.db }}" = "mariadb" ]; then
+            echo "DATABASE_URL=mysql://root:password@127.0.0.1:3307/auditor?serverVersion=11.8.2-MariaDB&charset=utf8mb4" >> $GITHUB_ENV
+          elif [ "${{ matrix.db }}" = "pgsql" ]; then
+            echo "DATABASE_URL=pgsql://postgres:password@localhost/auditor?serverVersion=15&charset=utf8" >> $GITHUB_ENV
+          fi
+
+      - name: Shutdown Ubuntu MySQL (SUDO)
+        run: sudo service mysql stop
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: composer:v2
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --no-progress --ansi --prefer-stable
+
+      - name: Install provider 1.x
+        env:
+          V1_VERSION: ${{ inputs.v1_version || '1.x-dev' }}
+        run: |
+          composer require --no-update --working-dir=tools/migration-e2e/v1 "damienharper/auditor-doctrine-provider:${V1_VERSION}"
+          composer update --no-progress --ansi --working-dir=tools/migration-e2e/v1
+
+      - name: Run the migration end-to-end test
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: vendor/bin/phpunit -c phpunit.xml --no-coverage --group migration-e2e

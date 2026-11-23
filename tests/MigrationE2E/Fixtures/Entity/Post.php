@@ -23,9 +23,6 @@ class Post implements \Stringable
     #[ORM\GeneratedValue(strategy: 'IDENTITY')]
     public ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 255)]
-    public string $title = '';
-
     #[ORM\Column(type: Types::TEXT, nullable: true)]
     public ?string $body = null;
 
@@ -48,9 +45,9 @@ class Post implements \Stringable
     #[ORM\OneToMany(targetEntity: Comment::class, mappedBy: 'post')]
     public Collection $comments;
 
-    public function __construct(string $title)
+    public function __construct(#[ORM\Column(type: Types::STRING, length: 255)]
+        public string $title)
     {
-        $this->title = $title;
         $this->tags = new ArrayCollection();
         $this->comments = new ArrayCollection();
     }

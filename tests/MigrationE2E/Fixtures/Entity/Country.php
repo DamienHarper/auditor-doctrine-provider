@@ -14,18 +14,13 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Table(name: 'e2e_country')]
 class Country implements \Stringable
 {
-    #[ORM\Id]
-    #[ORM\Column(name: 'iso_code', type: Types::STRING, length: 2)]
-    public string $isoCode;
-
-    #[ORM\Column(type: Types::STRING, length: 255)]
-    public string $name;
-
-    public function __construct(string $isoCode, string $name)
-    {
-        $this->isoCode = $isoCode;
-        $this->name = $name;
-    }
+    public function __construct(
+        #[ORM\Id]
+        #[ORM\Column(name: 'iso_code', type: Types::STRING, length: 2)]
+        public string $isoCode,
+        #[ORM\Column(type: Types::STRING, length: 255)]
+        public string $name
+    ) {}
 
     public function __toString(): string
     {

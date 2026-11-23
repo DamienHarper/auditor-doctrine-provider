@@ -53,9 +53,23 @@ composer agent-qa          # agent-rector + agent-cs-fix + agent-phpstan
 make tests php=8.5 db=pgsql             # PHPUnit in Docker; db: sqlite (default), mysql, pgsql, mariadb
 make tests args='--filter=ReaderTest'
 make qa                                 # rector + cs-fix + phpstan in Docker
+make migration-e2e db=mysql             # end-to-end test of the 1.x → 2.x migration (see below)
 make help                               # all targets and options
 ```
 CI runs PHP 8.4/8.5/8.6 (Symfony 8.2, plus 8.1 on PHP 8.4/SQLite) on SQLite, MySQL and PostgreSQL; MariaDB is only covered by `make tests db=mariadb`.
+
+### Migration end-to-end test (`tests/MigrationE2E`)
+Provider 1.x, installed as its own Composer project in `tools/migration-e2e/v1` (default `1.x-dev`), writes audit
+entries (`generate.php`, shared fixtures and `Scenario` in `tests/MigrationE2E/Fixtures`); `MigrationEndToEndTest`
+then runs `audit:schema:migrate` on the same databases and compares every row with what 1.x wrote. It is excluded
+from the default suite (group `migration-e2e`):
+```bash
+composer install --working-dir=tools/migration-e2e/v1
+vendor/bin/phpunit --group migration-e2e   # DATABASE_URL as for the other tests; the secondary storage is an SQLite file
+```
+CI: `.github/workflows/migration-e2e.yml`, on changes to the migration, schema or reader code, nightly and on demand
+(input `v1_version` to start from a given 1.x release). The console lock needs semaphores: in a sandbox where they
+are denied, the commands print "already running in another process" and do nothing.
 
 ### Git worktrees (Makefile)
 Parallel work happens in worktrees under `.claude/worktrees/<name>/` (git-ignored), each with its
