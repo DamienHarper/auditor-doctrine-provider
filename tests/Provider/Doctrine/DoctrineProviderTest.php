@@ -521,6 +521,7 @@ final class DoctrineProviderTest extends TestCase
         $provider = new DoctrineProvider($this->createProviderConfiguration([
             'entities' => [
                 AuditedEntityWithAttribute::class => ['enabled' => false],
+                AuditableButUnauditedEntity::class => ['roles' => ['view' => ['ROLE_ADMIN']]],
             ],
         ]));
         $provider->registerStorageService(new StorageService('default', $entityManager));
@@ -529,6 +530,12 @@ final class DoctrineProviderTest extends TestCase
         $auditor->registerProvider($provider);
 
         $this->assertFalse($provider->isAudited(AuditedEntityWithAttribute::class), 'Disabled in the configuration.');
+
+        $configuration = $provider->getConfiguration();
+        $this->assertInstanceOf(Configuration::class, $configuration);
+        $options = $configuration->getEntities()[AuditableButUnauditedEntity::class];
+        $this->assertIsArray($options);
+        $this->assertSame(['view' => ['ROLE_ADMIN']], $options['roles']);
     }
 
     #[Depends('testIsAuditedHonorsEnabledFlag')]
