@@ -32,8 +32,8 @@ For each audited entity, a corresponding audit table is created:
 | Column           | Type          | Description                                                       |
 |------------------|---------------|-------------------------------------------------------------------|
 | `id`             | `bigint`      | Auto-increment primary key                                        |
-| `schema_version` | `tinyint`     | Diffs format version: `1` (legacy) or `2` (current)              |
-| `type`           | `string(10)`  | Action type (insert/update/remove/associate/dissociate)           |
+| `schema_version` | `smallint`    | Diffs format version: `1` (legacy) or `2` (current)              |
+| `type`           | `string(11)`  | Action type (insert/update/remove/associate/dissociate)           |
 | `object_id`      | `string(255)` | ID of the audited entity                                          |
 | `discriminator`  | `string(255)` | Entity class (for inheritance hierarchies)                        |
 | `transaction_id` | `char(26)`    | ULID grouping related changes from the same flush                 |

@@ -13,7 +13,6 @@
 | doctrine/orm              | >= 3.7   |
 | symfony/cache             | >= 8.1   |
 | symfony/lock              | >= 8.1   |
-| symfony/event-dispatcher  | >= 8.1   |
 | damienharper/auditor      | >= 5.0   |
 
 Tested with PHP 8.4, 8.5 and 8.6, and Symfony 8.1 and 8.2.
@@ -49,7 +48,7 @@ composer require damienharper/auditor-bundle
 | `doctrine/orm`                      | Object-relational mapper              |
 | `symfony/cache`                     | Attribute metadata cache              |
 | `symfony/lock`                      | Schema update locking                 |
-| `symfony/event-dispatcher`          | LifecycleEvent dispatching            |
+| `psr/log`                           | Logging of failed clean-ups           |
 | `symfony/options-resolver`          | Configuration option handling         |
 
 ---

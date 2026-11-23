@@ -63,6 +63,7 @@ $query = $reader->createQuery(App\Entity\Post::class, [
 | `blame_origin`     | `string\|BlameOrigin\|array` | `null` | Entries made from these origins (see [BlameOriginFilter](filters.md#-blameoriginfilter)) |
 | `page`             | `int\|null`             | `1`     | Page number (1-based)                     |
 | `page_size`        | `int\|null`             | `50`    | Number of entries per page                |
+| `strict`           | `bool`                  | `true`  | With single table inheritance, keep only the entries of the queried class (filter on the discriminator) |
 
 ## 📄 Executing a Query
 
@@ -99,15 +100,15 @@ foreach ($result['results'] as $entry) {
 }
 ```
 
-## 🔎 Querying by Transaction Hash
+## 🔎 Querying by Transaction
 
-Retrieve all audit entries related to the same flush batch across all configured entities:
+Retrieve all audit entries related to the same database transaction across all configured entities:
 
 ```php
 <?php
 
 // Get all entries that belong to the same transaction
-$byEntity = $reader->getAuditsByTransactionHash('abc123def456...');
+$byEntity = $reader->getAuditsByTransactionId('01JH8Z6Q3C2V5W7X9Y0A1B2C3D');
 
 // Returns: ['App\Entity\Post' => [Entry, ...], 'App\Entity\Comment' => [Entry, ...]]
 foreach ($byEntity as $entityClass => $entries) {
@@ -119,7 +120,9 @@ foreach ($byEntity as $entityClass => $entries) {
 ```
 
 > [!NOTE]
-> `getAuditsByTransactionHash()` silently skips entities for which the current user does not have the `view` role.
+> `getAuditsByTransactionId()` silently skips entities for which the current user does not have the `view` role.
+> `getAuditsByTransactionHash()` is deprecated: it forwards to `getAuditsByTransactionId()`, which also finds the
+> rows of tables not migrated yet by their legacy `transaction_hash`.
 
 ## 🔍 Filtering Examples
 
@@ -200,7 +203,8 @@ foreach ($entries as $entry) {
 ```
 
 > [!IMPORTANT]
-> `$entry->extraData` and `$entry->diffs` are **already decoded** — they return `?array`, not a JSON string. Do not call `json_decode()` on them.
+> `$entry->extraData` is **already decoded**: it returns `?array`, not a JSON string. Do not call `json_decode()`
+> on it. Read the diffs with `$entry->getDiffs()`.
 
 See [Entry Reference](entry.md) for a complete description.
 

@@ -2,7 +2,7 @@
 
 [![Latest Stable Version](https://poser.pugx.org/damienharper/auditor-doctrine-provider/v/stable)](https://packagist.org/packages/damienharper/auditor-doctrine-provider)
 [![Latest Unstable Version](https://poser.pugx.org/damienharper/auditor-doctrine-provider/v/unstable)](https://packagist.org/packages/damienharper/auditor-doctrine-provider)
-[![auditor-doctrine-provider 1.x CI](https://github.com/DamienHarper/auditor-doctrine-provider/actions/workflows/ci-1.x.yml/badge.svg)](https://github.com/DamienHarper/auditor-doctrine-provider/actions/workflows/ci-1.x.yml)
+[![auditor-doctrine-provider 2.x CI](https://github.com/DamienHarper/auditor-doctrine-provider/actions/workflows/ci-2.x.yml/badge.svg)](https://github.com/DamienHarper/auditor-doctrine-provider/actions/workflows/ci-2.x.yml)
 [![codecov](https://codecov.io/gh/DamienHarper/auditor-doctrine-provider/branch/main/graph/badge.svg)](https://app.codecov.io/gh/DamienHarper/auditor-doctrine-provider/branch/main)
 [![License](https://poser.pugx.org/damienharper/auditor-doctrine-provider/license)](https://packagist.org/packages/damienharper/auditor-doctrine-provider)
 [![Total Downloads](https://poser.pugx.org/damienharper/auditor-doctrine-provider/downloads)](https://packagist.org/packages/damienharper/auditor-doctrine-provider)
@@ -12,7 +12,7 @@
 
 
 ## Official Documentation
-`auditor-doctrine-provider` documentation can be found locally in the [docs/](docs/) folder.
+`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/) or locally in the [docs/](docs/) folder.
 
 
 ## Version Information
@@ -21,7 +21,7 @@
 | 2.x     | Active development :rocket: | PHP >= 8.4, Doctrine DBAL >= 4.6, Doctrine ORM >= 3.7, auditor >= 5.0                 |
 | 1.x     | Bug and security fixes      | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1                 |
 
-Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade).
+Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade/).
 
 
 ## Contributing

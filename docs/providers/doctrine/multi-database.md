@@ -34,7 +34,34 @@ Set up two EntityManagers: one for your application, one for the audit database.
 // $auditEntityManager → writes audit rows to a separate database
 ```
 
-### Step 2: Register Services
+> [!IMPORTANT]
+> The connection of the application EntityManager (the auditing one) must be created with the `AuditorMiddleware`
+> (see the [Quick Start](../../getting-started/quick-start.md)): the audit entries are written when its transaction
+> is committed.
+
+### Step 2: Configure the Provider
+
+Since there is only one storage service, no storage mapper is needed — all audits go to `'audit'` automatically:
+
+```php
+<?php
+
+use DH\Auditor\Provider\Doctrine\Configuration;
+use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+
+$configuration = new Configuration([
+    'table_suffix' => '_audit',
+    'entities'     => [
+        App\Entity\User::class => ['enabled' => true],
+        App\Entity\Post::class => ['enabled' => true],
+    ],
+    // No storage_mapper needed when there is only one StorageService
+]);
+
+$provider = new DoctrineProvider($configuration);
+```
+
+### Step 3: Register Services
 
 ```php
 <?php
@@ -49,25 +76,6 @@ $provider->registerAuditingService(
 $provider->registerStorageService(
     new StorageService('audit', $auditEntityManager)
 );
-```
-
-### Step 3: Configure the Provider
-
-Since there is only one storage service, no storage mapper is needed — all audits go to `'audit'` automatically:
-
-```php
-<?php
-
-use DH\Auditor\Provider\Doctrine\Configuration;
-
-$configuration = new Configuration([
-    'table_suffix' => '_audit',
-    'entities'     => [
-        App\Entity\User::class => ['enabled' => true],
-        App\Entity\Post::class => ['enabled' => true],
-    ],
-    // No storage_mapper needed when there is only one StorageService
-]);
 ```
 
 ### Step 4: Update Audit Schema

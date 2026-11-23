@@ -39,7 +39,7 @@ $configuration = new Configuration([
 | `ignored_columns`| `array`           | `[]`       | Properties to ignore globally across all entities |
 | `entities`       | `array`           | `[]`       | Entity-specific configuration                    |
 | `viewer`         | `bool\|array`     | `true`     | Enable/configure the audit viewer                |
-| `storage_mapper` | `callable\|null`  | `null`     | Callback to route audits to storage services     |
+| `storage_mapper` | `callable\|class-string\|null` | `null` | Callback, or class name of an invokable class without constructor arguments, routing audits to storage services |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
 | `full_snapshot_on_remove` | `bool`   | `false`    | Record every audited field of a removed entity (see below) |
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |

@@ -20,8 +20,8 @@ Each audit table created by the current provider has the following structure:
 ```sql
 CREATE TABLE posts_audit (
     id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    schema_version   TINYINT UNSIGNED NOT NULL DEFAULT 2,
-    type             VARCHAR(10)  NOT NULL,
+    schema_version   SMALLINT UNSIGNED NOT NULL DEFAULT 2,
+    type             VARCHAR(11)  NOT NULL,
     object_id        VARCHAR(255) NOT NULL,
     discriminator    VARCHAR(255) NULL,
     transaction_id   CHAR(26)     NULL,
@@ -39,13 +39,17 @@ CREATE TABLE posts_audit (
 );
 ```
 
+The SQL is illustrative: the actual index names are generated from a hash of the table name
+(`type_<md5>_idx`…), and the column types depend on the platform (JSON on MySQL / MariaDB, JSONB on PostgreSQL,
+TEXT on SQLite).
+
 ### Column Details
 
 | Column           | Type                | Description                                                       |
 |------------------|---------------------|-------------------------------------------------------------------|
 | `id`             | BIGINT (PK)         | Auto-increment primary key                                        |
-| `schema_version` | TINYINT             | Diffs format version: `1` (legacy) or `2` (current)              |
-| `type`           | VARCHAR(10)         | Action: insert, update, remove, associate, dissociate             |
+| `schema_version` | SMALLINT            | Diffs format version: `1` (legacy) or `2` (current)              |
+| `type`           | VARCHAR(11)         | Action: insert, update, remove, associate, dissociate             |
 | `object_id`      | VARCHAR(255)        | The primary key of the audited entity                             |
 | `discriminator`  | VARCHAR(255)        | Entity class (used in inheritance hierarchies)                    |
 | `transaction_id` | CHAR(26)            | ULID grouping changes from the same flush batch                   |
@@ -117,7 +121,7 @@ $schemaManager->updateAuditSchema();
 
 ### Console Commands
 
-Three console commands are available.
+Six console commands are available.
 
 #### `audit:schema:update`
 
@@ -286,31 +290,23 @@ When not using auditor-bundle, register the commands manually:
 use DH\Auditor\Provider\Doctrine\Persistence\Command\CleanAuditLogsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\ExportAuditLogsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
+use DH\Auditor\Provider\Doctrine\Persistence\Command\RebuildRootsCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\SnapshotCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Command\UpdateSchemaCommand;
 use Symfony\Component\Console\Application;
 
 $application = new Application();
 
-$updateCommand = new UpdateSchemaCommand();
-$updateCommand->setAuditor($auditor);
-$application->add($updateCommand);
-
-$migrateCommand = new MigrateSchemaCommand();
-$migrateCommand->setAuditor($auditor);
-$application->add($migrateCommand);
-
-$cleanCommand = new CleanAuditLogsCommand();
-$cleanCommand->setAuditor($auditor);
-$application->add($cleanCommand);
-
-$snapshotCommand = new SnapshotCommand();
-$snapshotCommand->setAuditor($auditor);
-$application->add($snapshotCommand);
-
-$exportCommand = new ExportAuditLogsCommand();
-$exportCommand->setAuditor($auditor);
-$application->add($exportCommand);
+foreach ([
+    new UpdateSchemaCommand(),
+    new MigrateSchemaCommand(),
+    new CleanAuditLogsCommand(),
+    new SnapshotCommand(),
+    new ExportAuditLogsCommand(),
+    new RebuildRootsCommand(),
+] as $command) {
+    $application->addCommand($command->setAuditor($auditor));
+}
 
 $application->run();
 ```
@@ -330,7 +326,7 @@ $schemaManager->updateAuditSchema();
 
 // Execute with a progress callback
 $schemaManager->updateAuditSchema(null, function (array $progress) {
-    echo sprintf('Updated: %s', $progress['table'] ?? '');
+    echo sprintf('Progress: %d / %d', $progress['current'], $progress['total']);
 });
 ```
 
