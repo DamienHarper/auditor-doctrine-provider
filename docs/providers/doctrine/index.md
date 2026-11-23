@@ -32,7 +32,7 @@ For each audited entity, a corresponding audit table is created:
 | Column           | Type          | Description                                                       |
 |------------------|---------------|-------------------------------------------------------------------|
 | `id`             | `bigint`      | Auto-increment primary key                                        |
-| `schema_version` | `tinyint`     | Diffs format version: `1` (legacy) or `2` (current)              |
+| `schema_version` | `smallint`    | Diffs format version: `1` (legacy) or `2` (current)              |
 | `type`           | `string(11)`  | Action type (insert/update/remove/associate/dissociate)           |
 | `object_id`      | `string(255)` | ID of the audited entity                                          |
 | `discriminator`  | `string(255)` | Entity class (for inheritance hierarchies)                        |
