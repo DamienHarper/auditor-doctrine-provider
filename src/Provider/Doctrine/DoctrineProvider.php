@@ -534,13 +534,9 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
                 $merged[$entity]['enabled'] = false;
             }
 
-            // Roles given in the configuration take precedence over the #[Security] ones, scope by scope.
+            // Roles given in the configuration take precedence over the #[Security] ones.
             if (\is_array($entities[$entity]['roles'] ?? null)) {
-                $attributeRoles = $merged[$entity]['roles'] ?? null;
-                $merged[$entity]['roles'] = [
-                    ...(\is_array($attributeRoles) ? $attributeRoles : []),
-                    ...$entities[$entity]['roles'],
-                ];
+                $merged[$entity]['roles'] = $entities[$entity]['roles'];
             }
 
             // Properties ignored in the configuration are added to the #[Ignore] ones: neither can audit a property

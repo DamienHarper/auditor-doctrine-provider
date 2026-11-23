@@ -231,7 +231,7 @@ For an entity marked `#[Auditable]`, the configured options combine with the att
 
 - `enabled: false` disables the entity despite `#[Auditable]`; `enabled: true` does not re-enable an
   `#[Auditable(enabled: false)]` entity.
-- `roles` take precedence over `#[Security]`, scope by scope (`roles: null` keeps the attribute value).
+- `roles` take precedence over `#[Security]` (`roles: null` keeps the attribute value).
 - `ignored_columns` and `roots` are added to the `#[Ignore]` and `#[AuditRoot]` ones; `audited_columns` only exists
   in the configuration.
 
