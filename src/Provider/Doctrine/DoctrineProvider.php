@@ -226,7 +226,8 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         $payload = $event->getPayload();
         $auditTable = $payload['table'];
         $entity = $payload['entity'];
-        unset($payload['table'], $payload['entity']);
+        $roots = \is_array($payload['roots'] ?? null) ? $payload['roots'] : [];
+        unset($payload['table'], $payload['entity'], $payload['roots']);
 
         \assert($this->configuration instanceof Configuration);   // helps PHPStan
         $buffer = $this->activeBuffer;
@@ -236,6 +237,9 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             try {
                 $connection = $this->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
                 $buffer->add($connection, $auditTable, $this->row($payload), $batchSize);
+                foreach ($this->rootRows($roots, $auditTable, $payload) as $rootRow) {
+                    $buffer->add($connection, $this->rootIndexTable(), $rootRow, $batchSize, AuditInsertBuffer::ROOT_COLUMNS);
+                }
             } catch (\Throwable $throwable) {
                 // the auditor ignores this exception: the buffer reports it when the transaction is committed
                 $buffer->fail($throwable);
@@ -293,7 +297,25 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             $id = $connection->lastInsertId();
         }
 
-        // let's get the last inserted ID from the database so other providers can use that info
+        $rootRows = $this->rootRows($roots, $auditTable, $payload);
+        if ([] !== $rootRows) {
+            $rootCacheKey = spl_object_id($connection).'.'.$this->rootIndexTable();
+            $this->preparedStatements[$rootCacheKey] ??= $connection->prepare(\sprintf(
+                'INSERT INTO %s (%s) VALUES (%s)',
+                $this->rootIndexTable(),
+                implode(', ', AuditInsertBuffer::ROOT_COLUMNS),
+                implode(', ', array_fill(0, \count(AuditInsertBuffer::ROOT_COLUMNS), '?')),
+            ));
+
+            foreach ($rootRows as $rootRow) {
+                foreach ($rootRow as $index => $value) {
+                    $this->preparedStatements[$rootCacheKey]->bindValue($index + 1, $value);
+                }
+
+                $this->preparedStatements[$rootCacheKey]->executeStatement();
+            }
+        }
+
         $payload = $event->getPayload();
         $payload['id'] = is_numeric($id) ? (int) $id : 0;
         $event->setPayload($payload);
@@ -466,6 +488,15 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
                 ]));
             }
 
+            // Roots given in the configuration are added to the #[AuditRoot] ones.
+            if (\is_array($entities[$entity]['roots'] ?? null)) {
+                $attributeRoots = $merged[$entity]['roots'] ?? [];
+                $merged[$entity]['roots'] = array_values(array_unique([
+                    ...(\is_array($attributeRoots) ? $attributeRoots : []),
+                    ...$entities[$entity]['roots'],
+                ]));
+            }
+
             // The allowlist only exists in the configuration.
             if (\array_key_exists('audited_columns', $entities[$entity])) {
                 $merged[$entity]['audited_columns'] = $entities[$entity]['audited_columns'];
@@ -475,6 +506,43 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         $this->configuration->setEntities($merged);
 
         return $this;
+    }
+
+    /**
+     * Rows of the audit root index for an audit entry, ordered like AuditInsertBuffer::ROOT_COLUMNS.
+     *
+     * @param array<array-key, mixed> $roots
+     * @param array<array-key, mixed> $payload
+     *
+     * @return list<list<mixed>>
+     */
+    private function rootRows(array $roots, string $auditTable, array $payload): array
+    {
+        $rows = [];
+        foreach ($roots as $root) {
+            if (!\is_array($root)) {
+                continue;
+            }
+
+            $rows[] = [
+                $root['root_class'] ?? null,
+                $root['root_id'] ?? null,
+                $root['root_path'] ?? null,
+                $auditTable,
+                $payload['object_id'],
+                $payload['transaction_id'],
+                $payload['created_at'],
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function rootIndexTable(): string
+    {
+        \assert($this->configuration instanceof Configuration);   // helps PHPStan
+
+        return $this->configuration->getRootIndexTableName();
     }
 
     /**

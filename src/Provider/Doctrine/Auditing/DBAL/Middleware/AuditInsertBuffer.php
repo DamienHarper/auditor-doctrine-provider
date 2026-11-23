@@ -48,6 +48,19 @@ final class AuditInsertBuffer implements \Countable
     public const array JSON_COLUMNS = ['diffs', 'extra_data', 'blame'];
 
     /**
+     * Columns of the audit root index table, in the order of the values of its rows.
+     */
+    public const array ROOT_COLUMNS = [
+        'root_class',
+        'root_id',
+        'root_path',
+        'audit_table',
+        'object_id',
+        'transaction_id',
+        'created_at',
+    ];
+
+    /**
      * Rows per statement on SQLite: 999 bound parameters at most before SQLite 3.32.
      */
     private const int SQLITE_MAX_ROWS = 99;
@@ -71,7 +84,7 @@ final class AuditInsertBuffer implements \Countable
     /**
      * Buffered rows grouped by connection and audit table, in the order of their first row.
      *
-     * @var array<string, array{Connection, string, list<list<mixed>>}>
+     * @var array<string, array{Connection, string, list<list<mixed>>, list<string>}>
      */
     private array $groups = [];
 
@@ -87,12 +100,14 @@ final class AuditInsertBuffer implements \Countable
 
     /**
      * Buffers a row of $auditTable (a table name as it appears in SQL, possibly schema-qualified and quoted),
-     * whose values are ordered like COLUMNS, and writes every buffered row once $batchSize rows are buffered.
+     * whose values are ordered like $columns (COLUMNS for an audit table, ROOT_COLUMNS for the audit root index), and
+     * writes every buffered row once $batchSize rows are buffered.
      *
      * @param list<mixed>  $row
      * @param positive-int $batchSize
+     * @param list<string> $columns
      */
-    public function add(Connection $connection, string $auditTable, array $row, int $batchSize): void
+    public function add(Connection $connection, string $auditTable, array $row, int $batchSize, array $columns = self::COLUMNS): void
     {
         if ($this->failure instanceof \Throwable) {
             // the commit is going to fail: these rows will never be written
@@ -100,7 +115,7 @@ final class AuditInsertBuffer implements \Countable
         }
 
         $key = spl_object_id($connection).'.'.$auditTable;
-        $this->groups[$key] ??= [$connection, $auditTable, []];
+        $this->groups[$key] ??= [$connection, $auditTable, [], $columns];
         $this->groups[$key][2][] = $row;
         ++$this->count;
 
@@ -176,17 +191,17 @@ final class AuditInsertBuffer implements \Countable
         $this->groups = [];
         $this->count = 0;
 
-        foreach ($groups as [$connection, $auditTable, $rows]) {
+        foreach ($groups as [$connection, $auditTable, $rows, $columns]) {
             $platform = $connection->getDatabasePlatform();
             $maxRows = $this->maxRowsPerStatement($platform);
 
-            $placeholders = $this->rowPlaceholders($platform);
+            $placeholders = $this->rowPlaceholders($platform, $columns);
             foreach ($this->chunks($rows, $maxRows) as $chunk) {
                 $connection->executeStatement(
                     \sprintf(
                         'INSERT INTO %s (%s) VALUES %s',
                         $auditTable,
-                        implode(', ', self::COLUMNS),
+                        implode(', ', $columns),
                         implode(', ', array_fill(0, \count($chunk), $placeholders))
                     ),
                     array_merge(...$chunk)
@@ -243,13 +258,16 @@ final class AuditInsertBuffer implements \Countable
         };
     }
 
-    private function rowPlaceholders(AbstractPlatform $platform): string
+    /**
+     * @param list<string> $columns
+     */
+    private function rowPlaceholders(AbstractPlatform $platform, array $columns): string
     {
         $jsonCast = $platform instanceof PostgreSQLPlatform ? '::jsonb' : '';
 
         return '('.implode(', ', array_map(
             static fn (string $column): string => \in_array($column, self::JSON_COLUMNS, true) ? '?'.$jsonCast : '?',
-            self::COLUMNS
+            $columns
         )).')';
     }
 }

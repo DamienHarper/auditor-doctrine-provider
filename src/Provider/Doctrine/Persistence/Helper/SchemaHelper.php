@@ -237,6 +237,75 @@ abstract class SchemaHelper
         );
     }
 
+    /**
+     * Returns columns of the audit root index table.
+     *
+     * The string columns that take part in composite indices are 191 characters long, so that the indices fit in the
+     * 3072 bytes InnoDB allows with utf8mb4.
+     *
+     * @return array<string, array{type: string, options: array<string, mixed>}>
+     */
+    public static function getRootIndexTableColumns(array $defaultTableOptions = []): array
+    {
+        $string = static fn (int $length, bool $fixed = false): array => [
+            'type' => Types::STRING,
+            'options' => [
+                'notnull' => true,
+                'length' => $length,
+                'fixed' => $fixed,
+                'platformOptions' => $defaultTableOptions,
+            ],
+        ];
+
+        return [
+            'id' => [
+                'type' => Types::BIGINT,
+                'options' => [
+                    'autoincrement' => true,
+                    'unsigned' => true,
+                ],
+            ],
+            'root_class' => $string(191),
+            'root_id' => $string(191),
+            'root_path' => $string(255),
+            'audit_table' => $string(191),
+            'object_id' => $string(255),
+            'transaction_id' => $string(26, true),
+            'created_at' => [
+                'type' => Types::DATETIME_IMMUTABLE,
+                'options' => [
+                    'notnull' => true,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * Returns indices of the audit root index table: entries of a root, and roots of an entry.
+     *
+     * @return array<string, array{type: string, name: string, columns?: list<string>}|array{type: string}>
+     */
+    public static function getRootIndexTableIndices(string $tablename): array
+    {
+        $hash = md5($tablename);
+
+        return [
+            'id' => [
+                'type' => 'primary',
+            ],
+            '__composite_root' => [
+                'type' => 'index',
+                'columns' => ['root_class', 'root_id', 'audit_table', 'transaction_id'],
+                'name' => 'root_'.$hash.'_idx',
+            ],
+            '__composite_entry' => [
+                'type' => 'index',
+                'columns' => ['audit_table', 'object_id', 'transaction_id'],
+                'name' => 'entry_'.$hash.'_idx',
+            ],
+        ];
+    }
+
     public static function isValidPayload(array $payload): bool
     {
         return array_all(array_keys(self::getAuditTableColumns()), static fn (string $columnName): bool => 'id' === $columnName || \array_key_exists($columnName, $payload));

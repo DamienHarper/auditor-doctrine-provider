@@ -248,6 +248,27 @@ final readonly class SchemaManager
                 }
             }
 
+            // The audit root index lives next to the audit tables of the entities that declare roots.
+            $hasRoots = array_any(array_keys($classes), static fn (int|string $entityFQCN): bool => $configuration->hasRoots((string) $entityFQCN));
+            if ($hasRoots) {
+                $rootIndexTablename = $this->rootIndexTableName();
+                if ($storageSchema->hasTable($rootIndexTablename)) {
+                    $currentTable = $storageSchema->getTable($rootIndexTablename);
+                    $expectedTable = $this->applyAuditTableStructure(
+                        $currentTable,
+                        SchemaHelper::getRootIndexTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
+                        SchemaHelper::getRootIndexTableIndices($rootIndexTablename),
+                        $connection,
+                    );
+                    $tableDiff = $comparator->compareTables($currentTable, $expectedTable);
+                    if (!$tableDiff->isEmpty()) {
+                        array_push($alterSqls, ...$platform->getAlterTableSQL($tableDiff));
+                    }
+                } else {
+                    $createdTables[] = $this->buildRootIndexTable($connection, $schemaConfig);
+                }
+            }
+
             $sqls[$name] = [
                 ...array_values(array_map($platform->getCreateSchemaSQL(...), $createdNamespaces)),
                 ...([] === $createdTables ? [] : $platform->getCreateTablesSQL($createdTables)),
@@ -277,11 +298,16 @@ final readonly class SchemaManager
         $configuration = $this->provider->getConfiguration();
         $auditTablename = $this->resolveAuditTableName($entity, $configuration);
 
+        $schemaConfig = $connection->createSchemaManager()->createSchemaConfig();
+        if ($configuration->hasRoots($entity) && !$schema->hasTable($this->rootIndexTableName())) {
+            $schema = $schema->edit()->addTable($this->buildRootIndexTable($connection, $schemaConfig))->create();
+        }
+
         if (null === $auditTablename || $schema->hasTable($auditTablename)) {
             return $schema;
         }
 
-        $auditTable = $this->buildAuditTable($auditTablename, $connection, $connection->createSchemaManager()->createSchemaConfig());
+        $auditTable = $this->buildAuditTable($auditTablename, $connection, $schemaConfig);
 
         return $schema->edit()->addTable($auditTable)->create();
     }
@@ -303,6 +329,16 @@ final readonly class SchemaManager
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
         $auditTablename = $this->resolveAuditTableName($entity, $configuration);
+
+        if ($configuration->hasRoots($entity) && !$schema->hasTable($this->rootIndexTableName())) {
+            $this->populateLegacyAuditTable(
+                // @phpstan-ignore method.deprecated (mutable schema of an ORM not using the schema editor API)
+                $schema->createTable($this->rootIndexTableName()),
+                $this->rootIndexTableName(),
+                $storageService->getEntityManager()->getConnection(),
+                true,
+            );
+        }
 
         if (null === $auditTablename || $schema->hasTable($auditTablename)) {
             return;
@@ -353,6 +389,17 @@ final readonly class SchemaManager
             ->addTable($updatedTable)
             ->create()
         ;
+    }
+
+    /**
+     * Name of the audit root index table.
+     */
+    public function rootIndexTableName(): string
+    {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+
+        return $configuration->getRootIndexTableName();
     }
 
     /**
@@ -548,8 +595,43 @@ final readonly class SchemaManager
      */
     private function buildAuditTable(string $auditTablename, Connection $connection, SchemaConfig $schemaConfig): Table
     {
+        return $this->buildTable(
+            $auditTablename,
+            SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
+            SchemaHelper::getAuditTableIndices($auditTablename),
+            $connection,
+            $schemaConfig,
+        );
+    }
+
+    /**
+     * Builds the audit root index table, detached from any schema.
+     *
+     * @throws Exception
+     */
+    private function buildRootIndexTable(Connection $connection, SchemaConfig $schemaConfig): Table
+    {
+        $tableName = $this->rootIndexTableName();
+
+        return $this->buildTable(
+            $tableName,
+            SchemaHelper::getRootIndexTableColumns(PlatformHelper::getColumnPlatformOptions($connection)),
+            SchemaHelper::getRootIndexTableIndices($tableName),
+            $connection,
+            $schemaConfig,
+        );
+    }
+
+    /**
+     * @param array<string, array{type: string, options: array<string, mixed>}>                   $columns
+     * @param array<string, array{type: string, name?: string, columns?: non-empty-list<string>}> $indices
+     *
+     * @throws Exception
+     */
+    private function buildTable(string $tablename, array $columns, array $indices, Connection $connection, SchemaConfig $schemaConfig): Table
+    {
         $editor = Table::editor()
-            ->setName(Parsers::parseOptionallyQualifiedName($auditTablename))
+            ->setName(Parsers::parseOptionallyQualifiedName($tablename))
             // Schema::createTable() used to apply the default table options of the schema configuration
             ->setOptions($schemaConfig->getDefaultTableOptions())
             ->setConfiguration($schemaConfig->toTableConfiguration())
@@ -557,7 +639,7 @@ final readonly class SchemaManager
 
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
         $isCompressionEnabled = $this->isCompressionEnabled($connection);
-        foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
+        foreach ($columns as $columnName => $struct) {
             $editor->addColumn($this->compressColumn(
                 SchemaHelper::buildColumn($columnName, $this->resolveColumnType($struct['type'], $isJsonSupported), $struct['options']),
                 $connection,
@@ -565,7 +647,7 @@ final readonly class SchemaManager
             ));
         }
 
-        $this->addAuditTableIndices($editor, null, SchemaHelper::getAuditTableIndices($auditTablename), $connection);
+        $this->addAuditTableIndices($editor, null, $indices, $connection);
 
         return $editor->create();
     }
@@ -688,12 +770,15 @@ final readonly class SchemaManager
      *
      * Only used for schemas of an ORM that does not use the schema editor API, see addAuditTableToSchema().
      */
-    private function populateLegacyAuditTable(Table $auditTable, string $auditTablename, Connection $connection): void
+    private function populateLegacyAuditTable(Table $auditTable, string $auditTablename, Connection $connection, bool $isRootIndex = false): void
     {
         // Add columns to audit table
         $isJsonSupported = PlatformHelper::isJsonSupported($connection);
         $isCompressionEnabled = $this->isCompressionEnabled($connection);
-        foreach (SchemaHelper::getAuditTableColumns(PlatformHelper::getColumnPlatformOptions($connection)) as $columnName => $struct) {
+        $platformOptions = PlatformHelper::getColumnPlatformOptions($connection);
+        $columns = $isRootIndex ? SchemaHelper::getRootIndexTableColumns($platformOptions) : SchemaHelper::getAuditTableColumns($platformOptions);
+        $indices = $isRootIndex ? SchemaHelper::getRootIndexTableIndices($auditTablename) : SchemaHelper::getAuditTableIndices($auditTablename);
+        foreach ($columns as $columnName => $struct) {
             $type = $this->resolveColumnType($struct['type'], $isJsonSupported);
             $options = $struct['options'];
             $columnDefinition = $this->compressColumn(SchemaHelper::buildColumn($columnName, $type, $options), $connection, $isCompressionEnabled)->getColumnDefinition();
@@ -706,7 +791,7 @@ final readonly class SchemaManager
         }
 
         // Add indices to audit table
-        foreach (SchemaHelper::getAuditTableIndices($auditTablename) as $columnName => $struct) {
+        foreach ($indices as $columnName => $struct) {
             \assert(\is_string($columnName));
             if ('primary' === $struct['type']) {
                 DoctrineHelper::setPrimaryKey($auditTable, $columnName);

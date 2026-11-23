@@ -163,6 +163,10 @@ final class DoctrineSubscriber implements ResetInterface
             $transaction->associate($dto->source, $dto->getTarget(), $dto->getMapping());
         }
 
+        foreach ($pending->getAllRoots() as $entity => $roots) {
+            $transaction->addRoots($entity, array_values($roots));
+        }
+
         foreach ($pending->getDissociated() as $dto) {
             $target = $dto->getTarget();
             $transaction->dissociate($dto->source, $target, $dto->getMapping());

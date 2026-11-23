@@ -8,6 +8,8 @@ use DH\Auditor\Blame\BlameContext;
 use DH\Auditor\Event\LifecycleEvent;
 use DH\Auditor\Model\TransactionInterface;
 use DH\Auditor\Model\TransactionType;
+use DH\Auditor\Provider\Doctrine\Auditing\Root\RootReference;
+use DH\Auditor\Provider\Doctrine\Auditing\Root\RootResolver;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
@@ -36,6 +38,13 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     private ?string $flushExtraData = null;
 
+    // Transaction and entity manager being written — the source of the audit roots of each entry
+    private ?Transaction $currentTransaction = null;
+
+    private ?EntityManagerInterface $currentEntityManager = null;
+
+    private ?RootResolver $rootResolver = null;
+
     public function __construct(private DoctrineProvider $provider) {}
 
     /**
@@ -46,11 +55,19 @@ final class TransactionProcessor implements TransactionProcessorInterface
         $em = $transaction->getEntityManager();
         $blameContext = $transaction->getBlameContext();
         $this->preComputeFlushContext($this->blame($blameContext?->user), $blameContext);
-        $this->processInsertions($transaction, $em);
-        $this->processUpdates($transaction, $em);
-        $this->processAssociations($transaction, $em);
-        $this->processDissociations($transaction, $em);
-        $this->processDeletions($transaction, $em);
+        $this->currentTransaction = $transaction;
+        $this->currentEntityManager = $em;
+
+        try {
+            $this->processInsertions($transaction, $em);
+            $this->processUpdates($transaction, $em);
+            $this->processAssociations($transaction, $em);
+            $this->processDissociations($transaction, $em);
+            $this->processDeletions($transaction, $em);
+        } finally {
+            $this->currentTransaction = null;
+            $this->currentEntityManager = null;
+        }
     }
 
     /**
@@ -79,6 +96,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
         }
 
         $count = 0;
+        $this->currentEntityManager = $entityManager;
         foreach ($byClass as $class => $classEntities) {
             $meta = $entityManager->getClassMetadata($class);
             $ids = [];
@@ -118,6 +136,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
                 ]);
             }
         }
+
+        $this->currentEntityManager = null;
 
         return $count;
     }
@@ -372,8 +392,76 @@ final class TransactionProcessor implements TransactionProcessorInterface
             'created_at' => $this->flushCreatedAt,
         ];
 
+        $roots = $this->roots($entityClass, $entityObject);
+        if ([] !== $roots) {
+            $payload['roots'] = $roots;
+        }
+
         // send an `AuditEvent` event
         $this->notify($payload, $entityObject);
+    }
+
+    /**
+     * Audit roots of an entry: the ones collected when the flush started, or, for entries written outside of a flush
+     * (snapshots, soft deletes), the ones found now.
+     *
+     * @return list<array{root_class: string, root_id: string, root_path: string}>
+     */
+    private function roots(string $entityClass, ?object $entity): array
+    {
+        $entityManager = $this->currentEntityManager;
+        if (null === $entity || !$entityManager instanceof EntityManagerInterface) {
+            return [];
+        }
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        if (!$configuration->hasRoots($entityClass)) {
+            return [];
+        }
+
+        if ($this->currentTransaction instanceof Transaction && $this->currentTransaction->hasRoots($entity)) {
+            $references = $this->currentTransaction->getRoots($entity);
+        } else {
+            $this->rootResolver ??= new RootResolver($this->provider);
+            $references = $this->rootResolver->resolve($entityManager, $entity);
+        }
+
+        $roots = [];
+        foreach ($references as $reference) {
+            $id = $reference->id ?? $this->rootId($entityManager, $reference);
+            if (null === $id || '' === $id) {
+                continue;
+            }
+
+            $roots[$reference->path."\0".$reference->class."\0".$id] = [
+                'root_class' => $reference->class,
+                'root_id' => $id,
+                'root_path' => $reference->path,
+            ];
+        }
+
+        return array_values($roots);
+    }
+
+    private function rootId(EntityManagerInterface $entityManager, RootReference $reference): ?string
+    {
+        try {
+            $identifier = $entityManager->getUnitOfWork()->getEntityIdentifier($reference->root);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $values = [];
+        foreach ($identifier as $value) {
+            if (!\is_scalar($value) && !$value instanceof \Stringable) {
+                return null;
+            }
+
+            $values[] = (string) $value;
+        }
+
+        return [] === $values ? null : implode('-', $values);
     }
 
     // Avoid warning (and dismissal) of objects in input array when using mb_convert_encoding

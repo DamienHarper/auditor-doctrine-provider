@@ -104,6 +104,8 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 | `AttributeLoader` | `Auditing/Attribute/AttributeLoader.php` | Reads `#[Auditable]`, `#[Ignore]`, `#[Security]` |
 | `SchemaManager` | `Persistence/Schema/SchemaManager.php` | Creates and updates the audit tables |
 | `Reader` / `Query` / `Filter\*` | `Persistence/Reader/` | Read model: queries, filters, pagination |
+| `RootResolver` / `RootIndexRebuilder` | `Auditing/Root/` | Audit roots (`#[AuditRoot]`, `roots`, `root_resolver`) resolved at onFlush; `audit:roots:rebuild` |
+| `RootQuery` / `RootPage` | `Persistence/Reader/` | History of a root across audit tables (`Reader::createRootQuery()`), cursor pagination |
 | `RetentionPruner` | `Persistence/Retention/RetentionPruner.php` | Audit retention |
 | Commands | `Persistence/Command/` | `audit:schema:update`, `audit:schema:migrate`, `audit:clean`, export |
 
@@ -112,6 +114,7 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 - `transaction_id` (ULID), `blame` (JSON: `username`, `user_fqdn`, `user_firewall`, `ip`), `diffs` and `extra_data` (JSON), `schema_version` (`1` legacy, `2` current). `audit:schema:migrate` upgrades v1 tables (`--convert-diffs` rewrites legacy diffs); `audit:schema:update` refuses v1 tables.
 - JSON columns: native JSON on MySQL/MariaDB, JSONB on PostgreSQL (inserts need the `::jsonb` cast), TEXT where the platform has no JSON support. JSON search and `ChangedFieldFilter` need native JSON and a v2 table.
 - Charset/collation column options are applied on MySQL/MariaDB only: on PostgreSQL they cause false schema diffs.
+- `{table_prefix}audit_root` (one per storage, created when an entity has roots) indexes entries under their roots: `root_class` (root entity name), `root_id`, `root_path`, `audit_table`, `object_id`, `transaction_id`, `created_at`. Written by `DoctrineProvider::persist()` (buffered with `batch_size`), read through `RootFilter` (an `EXISTS` subquery, needs `Query::setRootIndexTable()`).
 
 ## Testing conventions
 

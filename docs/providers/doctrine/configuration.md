@@ -24,6 +24,9 @@ $configuration = new Configuration([
     'skip_disabled_entities' => false,
     'compression'     => false,
     'ignored_columns_resolver' => null,
+    'root_resolver'   => null,
+    'entity_label_resolver' => null,
+    'read_scope'      => null,
 ]);
 ```
 
@@ -43,6 +46,9 @@ $configuration = new Configuration([
 | `skip_disabled_entities` | `bool`    | `false`    | No audit table for entities disabled by their configuration (see below) |
 | `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
 | `ignored_columns_resolver` | `callable\|null` | `null` | Returns the properties to ignore for a given entity object (see below) |
+| `root_resolver`  | `callable\|null`  | `null`     | Returns extra audit roots of an entity object (see [Histories](../../querying/history.md)) |
+| `entity_label_resolver` | `callable\|null` | `null` | Builds the label of an entity written in the diffs (see [Histories](../../querying/history.md#-entity-labels)) |
+| `read_scope`     | `callable\|null`  | `null`     | Applied to every query the reader creates, to restrict what can be read (see [Histories](../../querying/history.md#-read-scope)) |
 
 ## 📛 Table Naming
 
@@ -215,6 +221,7 @@ $configuration = new Configuration([
 | `roles`           | `array`    | `null`  | View permissions (`['view' => ['ROLE_X']]`)     |
 | `max_age`         | `?string`  | `null`  | Retention: ISO 8601 duration applied by `audit:clean` instead of the global cutoff |
 | `max_entries`     | `?int`     | `null`  | Retention: number of most recent entries kept by `audit:clean` |
+| `roots`           | `list<string>` | `[]` | Audit root paths, merged with `#[AuditRoot]` (see [Histories](../../querying/history.md)) |
 
 `max_age` and `max_entries` take precedence over the `#[Auditable(maxAge: ..., maxEntries: ...)]` values, key by key:
 setting only `max_age` keeps the attribute `maxEntries`, and an explicit `null` disables the attribute value.

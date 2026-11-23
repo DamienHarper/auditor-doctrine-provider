@@ -59,7 +59,8 @@ $query = $reader->createQuery(App\Entity\Post::class, [
 | `blame_id`         | `int\|string\|array`    | `null`  | Filter by user ID(s) who made changes     |
 | `user_id`          | `int\|string\|array`    | `null`  | Alias for `blame_id`                      |
 | `transaction_id`   | `string\|array`         | `null`  | Filter by transaction ID(s) (ULID)        |
-| `changed_field`    | `string`                | `null`  | Entries whose diff touches this field (see [ChangedFieldFilter](filters.md#-changedfieldfilter)) |
+| `changed_field`    | `string\|list<string>`  | `null`  | Entries whose diff touches this field, or one of these fields (see [ChangedFieldFilter](filters.md#-changedfieldfilter)) |
+| `blame_origin`     | `string\|BlameOrigin\|array` | `null` | Entries made from these origins (see [BlameOriginFilter](filters.md#-blameoriginfilter)) |
 | `page`             | `int\|null`             | `1`     | Page number (1-based)                     |
 | `page_size`        | `int\|null`             | `50`    | Number of entries per page                |
 
@@ -222,5 +223,6 @@ try {
 ## Next Steps
 
 - 🔧 [Filters Reference](filters.md)
+- 🌳 [Histories](history.md): the history of a root across tables, last change of each field
 - 📦 [Entry Reference](entry.md)
 - 💡 [Extra Data](../extra-data.md)

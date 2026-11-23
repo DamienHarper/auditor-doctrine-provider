@@ -27,6 +27,8 @@ use Doctrine\DBAL\Platforms\SQLitePlatform;
  *
  * Removes recorded without a full snapshot carry no field and never match.
  *
+ * Given several fields, an entry matches when it touches any of them.
+ *
  * The audit table must have the schema v2 structure (`schema_version` column): run
  * `audit:schema:migrate` on legacy tables first. Requires native JSON support
  * (see JsonPlatformHelper::isJsonSearchSupported()).
@@ -43,11 +45,28 @@ final readonly class ChangedFieldFilter implements PlatformAwareFilterInterface
     /**
      * @throws InvalidArgumentException If the field name is not a valid Doctrine field name
      */
-    public function __construct(private string $field)
+    /**
+     * @var non-empty-list<string>
+     */
+    private array $fields;
+
+    /**
+     * @param list<string>|string $field one field, or several fields of which any must be touched
+     */
+    public function __construct(array|string $field)
     {
-        if (1 !== preg_match(self::FIELD_PATTERN, $this->field)) {
-            throw new InvalidArgumentException(\sprintf('Invalid field name "%s".', $this->field));
+        $fields = \is_array($field) ? array_values(array_unique($field)) : [$field];
+        if ([] === $fields) {
+            throw new InvalidArgumentException('A changed field filter needs at least one field.');
         }
+
+        foreach ($fields as $name) {
+            if (!\is_string($name) || 1 !== preg_match(self::FIELD_PATTERN, $name)) {
+                throw new InvalidArgumentException(\sprintf('Invalid field name "%s".', \is_string($name) ? $name : get_debug_type($name)));
+            }
+        }
+
+        $this->fields = $fields;
     }
 
     public function getName(): string
@@ -55,9 +74,20 @@ final readonly class ChangedFieldFilter implements PlatformAwareFilterInterface
         return Query::DIFFS;
     }
 
+    /**
+     * Returns the field, or the first field when several are given.
+     */
     public function getField(): string
     {
-        return $this->field;
+        return $this->fields[0];
+    }
+
+    /**
+     * @return non-empty-list<string>
+     */
+    public function getFields(): array
+    {
+        return $this->fields;
     }
 
     /**
@@ -98,8 +128,26 @@ final readonly class ChangedFieldFilter implements PlatformAwareFilterInterface
             throw new InvalidArgumentException(\sprintf('Filtering on a changed field is not supported on %s.', JsonPlatformHelper::getPlatformName($connection)));
         }
 
+        $sqls = [];
+        $params = [];
+        foreach ($this->fields as $field) {
+            [$fieldSql, $fieldParams] = $this->fieldSql($field, $changed, $legacyChanged, $associated);
+            $sqls[] = $fieldSql;
+            $params += $fieldParams;
+        }
+
+        $sql = 1 === \count($sqls) ? $sqls[0] : '('.implode(' OR ', $sqls).')';
+
+        return ['sql' => $sql, 'params' => $params];
+    }
+
+    /**
+     * @return array{0: string, 1: array<string, string>}
+     */
+    private function fieldSql(string $field, string $changed, string $legacyChanged, string $associated): array
+    {
         // Suffix the parameter names with the field so that several filters can share a query.
-        $param = 'changed_field_'.hash('xxh32', $this->field);
+        $param = 'changed_field_'.hash('xxh32', $field);
         $changed = str_replace(':changed_field', ':'.$param, $changed);
         $legacyChanged = str_replace(':changed_field', ':'.$param, $legacyChanged);
         $associated = str_replace(':changed_field', ':'.$param, $associated);
@@ -113,12 +161,12 @@ final readonly class ChangedFieldFilter implements PlatformAwareFilterInterface
 
         // The field name only holds letters, digits, underscores and dots, so quoting it as a
         // single JSON path member keeps dotted embeddable fields (e.g. "address.street") whole.
-        $params = [$param => $this->field];
+        $params = [$param => $field];
         if (str_contains($sql, ':'.$param.'_path')) {
-            $params[$param.'_path'] = \sprintf('$.changes."%s"', $this->field);
-            $params[$param.'_legacy_path'] = \sprintf('$."%s"', $this->field);
+            $params[$param.'_path'] = \sprintf('$.changes."%s"', $field);
+            $params[$param.'_legacy_path'] = \sprintf('$."%s"', $field);
         }
 
-        return ['sql' => $sql, 'params' => $params];
+        return [$sql, $params];
     }
 }

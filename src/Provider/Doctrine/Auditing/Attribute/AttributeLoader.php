@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DH\Auditor\Provider\Doctrine\Auditing\Attribute;
 
 use DH\Auditor\Attribute\Auditable;
+use DH\Auditor\Attribute\AuditRoot;
 use DH\Auditor\Attribute\DiffLabel;
 use DH\Auditor\Attribute\Ignore;
 use DH\Auditor\Attribute\Security;
@@ -81,14 +82,39 @@ final readonly class AttributeLoader
         // Are there any DiffLabel attributes?
         $diffLabelResolvers = $this->getDiffLabelResolvers($reflection);
 
+        // Are there any AuditRoot attributes? (repeatable, inherited from parent classes)
+        $roots = $this->getRoots($reflection);
+
         return [
             'ignored_columns' => $ignoredColumns,
+            'roots' => $roots,
             'enabled' => $auditableAttribute->enabled,
             'roles' => $roles,
             'diff_label_resolvers' => $diffLabelResolvers,
             'max_age' => $auditableAttribute->maxAge,
             'max_entries' => $auditableAttribute->maxEntries,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function getRoots(\ReflectionClass $reflection): array
+    {
+        $roots = [];
+        foreach ($reflection->getAttributes(AuditRoot::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
+            try {
+                $roots[] = $attribute->newInstance()->path;
+            } catch (\InvalidArgumentException $exception) {
+                throw new InvalidArgumentException(\sprintf('Invalid #[AuditRoot] attribute on "%s": %s', $reflection->getName(), $exception->getMessage()), 0, $exception);
+            }
+        }
+
+        if (false !== $reflection->getParentClass()) {
+            $roots = [...$this->getRoots($reflection->getParentClass()), ...$roots];
+        }
+
+        return array_values(array_unique($roots));
     }
 
     /**
