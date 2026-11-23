@@ -80,7 +80,7 @@ association, such as imported or legacy entries) are kept. Roots returned by a `
 Run it after declaring a new root, or after migrating audit tables to schema v2
 (`audit:schema:migrate --convert-diffs --convert-transaction-hash`): entries in schema v1 or without a transaction id
 are skipped and counted. The command fails when an `--entity` is not audited, when it already runs, or when the diffs
-of an entry cannot be read. Rows that no longer match the configuration (a removed path) are not cleaned up: delete
+of an entry cannot be read; in the last case the rows of the other entries are still written. Rows that no longer match the configuration (a removed path) are not cleaned up: delete
 them with SQL if needed.
 
 ## 📜 The history of a root
@@ -133,7 +133,7 @@ entities indexed under it. Use the `read_scope` option to restrict them further.
 ```php
 // last change of each field, or the creation (or snapshot) for a field never changed since
 $changes = $reader->getLastChanges(Property::class, 42, ['price', 'status']);
-$changes['price']?->getValue('price');  // value of the field: after the change, or at the creation
+$changes['price']?->getValue('price');  // value of the field: after the change, or at the creation (deep diff tree for a JSON field)
 $changes['price']?->getLabel('price');  // its label (#[DiffLabel], association), if any
 $changes['price']?->entry->username;    // who, when: the Entry of the change
 $changes['price']?->entry->createdAt;
@@ -144,8 +144,9 @@ $entries = $reader->getFieldHistory(Property::class, null, 'price')->execute();
 ```
 
 `getLastChanges()` returns `array<string, ?Change>` (null when nothing was audited). For a field never changed, the
-change is the creation of the object, which holds every field: read the value with `getValue($field)` rather than
-`new`. It reads the entries that
+change is the creation of the object, which holds the requested fields: read the value with `getValue($field)` rather
+than `new`. For a JSON field changed since, `getValue()` returns the deep diff tree of the last change, not the whole
+value (`ChangeKind::Json`). It reads the entries that
 changed one of the fields when the platform has native JSON support, and scans the history of the object otherwise.
 `getFieldHistory()` returns a `Query` with a `ChangedFieldFilter`, which needs native JSON support.
 

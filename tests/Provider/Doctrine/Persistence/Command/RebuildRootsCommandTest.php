@@ -11,6 +11,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -99,6 +100,46 @@ final class RebuildRootsCommandTest extends TestCase
 
         $this->assertSame(1, $tester->getStatusCode());
         $this->assertStringContainsString('could not be read', $tester->getDisplay());
+    }
+
+    public function testUnreadableDiffsOfATableOnThePathFail(): void
+    {
+        if (!$this->connection()->getDatabasePlatform() instanceof SQLitePlatform) {
+            $this->markTestSkipped('Only a platform without a JSON type stores invalid diffs.');
+        }
+
+        // post.author of a comment goes through the audit table of the post
+        $this->connection()->executeStatement("UPDATE post_audit SET diffs = '{not json' WHERE type = 'insert'");
+
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute(['--entity' => [Comment::class]]);
+
+        $this->assertSame(1, $tester->getStatusCode());
+        $this->assertStringContainsString('could not be read', $tester->getDisplay());
+    }
+
+    public function testAClassGoneSinceTheEntryKeepsItsName(): void
+    {
+        $connection = $this->connection();
+        $cast = $connection->getDatabasePlatform() instanceof PostgreSQLPlatform ? '?::jsonb' : '?';
+        foreach ($connection->fetchAllAssociative('SELECT id, diffs FROM post_audit') as $row) {
+            $diffs = json_decode((string) $row['diffs'], true, 512, JSON_THROW_ON_ERROR);
+            array_walk_recursive($diffs, static function (mixed &$value): void {
+                $value = Author::class === $value ? 'App\Removed\Author' : $value;
+            });
+            $connection->executeStatement(\sprintf('UPDATE post_audit SET diffs = %s WHERE id = ?', $cast), [json_encode($diffs, JSON_THROW_ON_ERROR), $row['id']]);
+        }
+
+        $connection->executeStatement('DELETE FROM audit_root');
+
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute([]);
+
+        $tester->assertCommandIsSuccessful();
+
+        $classes = array_unique(array_column($this->rows(), 0));
+        $this->assertContains('App\Removed\Author', $classes);
+        $this->assertContains(Post::class, $classes, 'The other roots are still written.');
     }
 
     public function testAnotherRunIsRefused(): void

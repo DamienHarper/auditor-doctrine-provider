@@ -80,7 +80,7 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
 
     /**
      * Root index rows already written for the current transaction id: an object with several entries in one
-     * transaction (an insert and associations, several flushes) is indexed once per root.
+     * transaction (an insert and associations, several flushes) is indexed once per root and path.
      *
      * @var array<string, true>
      */

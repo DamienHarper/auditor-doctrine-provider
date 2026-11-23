@@ -9,7 +9,7 @@ use DH\Auditor\Exception\MappingException;
 use DH\Auditor\Provider\Doctrine\Auditing\Transaction\AuditTrait;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
-use DH\Auditor\Tests\Provider\Doctrine\Auditing\Root\ObjectIdentifierTest;
+use DH\Auditor\Tests\Provider\Doctrine\Auditing\Root\RootIdentityTest;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -17,7 +17,7 @@ use Doctrine\ORM\EntityManagerInterface;
  * index, the reader and the templates agree (backed enums, types converted for the audit, identity through a foreign
  * entity).
  *
- * @see ObjectIdentifierTest
+ * @see RootIdentityTest
  */
 final class ObjectIdentifier
 {

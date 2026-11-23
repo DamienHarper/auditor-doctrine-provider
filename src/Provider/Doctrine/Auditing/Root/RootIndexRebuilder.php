@@ -32,6 +32,11 @@ final class RootIndexRebuilder
      */
     private array $timelines = [];
 
+    /**
+     * Entries of the tables a path goes through whose diffs cannot be decoded.
+     */
+    private int $unreadableInTimelines = 0;
+
     public function __construct(private readonly DoctrineProvider $provider) {}
 
     /**
@@ -90,6 +95,7 @@ final class RootIndexRebuilder
         $entries = 0;
         $legacy = 0;
         $unreadable = 0;
+        $unreadableBefore = $this->unreadableInTimelines;
 
         /** @var array<string, array<string, ?array{string, string}>> $state object id => field => value */
         $state = [];
@@ -193,6 +199,9 @@ final class RootIndexRebuilder
             });
         }
 
+        // unreadable diffs of the tables a path goes through count with the first table that reads them
+        $unreadable += $this->unreadableInTimelines - $unreadableBefore;
+
         return ['entries' => $entries, 'rows' => \count($rows), 'legacy' => $legacy, 'unreadable' => $unreadable];
     }
 
@@ -237,7 +246,14 @@ final class RootIndexRebuilder
                     continue;
                 }
 
-                $change = ($this->changes($row['diffs']) ?? [])[$field] ?? null;
+                $changes = $this->changes($row['diffs']);
+                if (null === $changes) {
+                    ++$this->unreadableInTimelines;
+
+                    continue;
+                }
+
+                $change = $changes[$field] ?? null;
                 if (\is_array($change) && \array_key_exists('new', $change)) {
                     $timeline[(string) $row['object_id']][] = [$row['created_at'].' '.$row['transaction_id'], $this->reference($change['new'])];
                 }
@@ -300,7 +316,12 @@ final class RootIndexRebuilder
     {
         $entityManager = $this->provider->getAuditingServiceForEntity($entity)->getEntityManager();
 
-        return $entityManager->getMetadataFactory()->isTransient($class) ? $class : $entityManager->getClassMetadata($class)->rootEntityName;
+        // a class renamed or deleted since the entry was written keeps its name
+        if (!class_exists($class) || $entityManager->getMetadataFactory()->isTransient($class)) {
+            return $class;
+        }
+
+        return $entityManager->getClassMetadata($class)->rootEntityName;
     }
 
     private function configuration(): Configuration

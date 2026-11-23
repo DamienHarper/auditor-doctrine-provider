@@ -55,7 +55,8 @@ final class RebuildRootsCommand extends Command
                 so the command can be run again safely, and rows written by hand or by a "root_resolver" are kept.
                 Entries in schema v1, or without a transaction id, are skipped: migrate them first
                 (audit:schema:migrate --convert-diffs --convert-transaction-hash). Roots of a "root_resolver" cannot
-                be replayed. The command fails when an entry cannot be read.
+                be replayed. The command fails when an --entity is not audited, when it already runs,
+                or when the diffs of an entry cannot be read (the rows of the other entries are still written).
                 HELP)
         ;
     }

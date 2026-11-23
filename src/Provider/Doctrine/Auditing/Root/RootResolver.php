@@ -142,6 +142,8 @@ final class RootResolver
             $entityManager->getUnitOfWork()->initializeObject($entity);
         } catch (EntityNotFoundException) {
             // an uninitialized proxy whose row is gone: no root to follow
+            $this->provider->getLogger()->warning('auditor: the audit root of {class} is not indexed, its row is gone.', ['class' => $meta->getName(), 'field' => $field]);
+
             return null;
         }
 

@@ -10,6 +10,7 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\History\BlameOrigin;
 use DH\Auditor\History\ChangeKind;
 use DH\Auditor\Model\Entry;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RootFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
@@ -208,6 +209,21 @@ final class RootQueryTest extends TestCase
         $changes = $reader->getLastChanges(Post::class, $this->id($this->post), ['title']);
         $this->assertSame(ChangeKind::Created, $changes['title']?->kind, 'The update of the title is out of the scope.');
         $this->assertSame('Hello', $changes['title']->getValue('title'));
+    }
+
+    public function testAReadScopeWithItsOwnRootFilter(): void
+    {
+        $post = $this->id($this->post);
+        // a scope made of a root filter: only the entries of the history of the post
+        $this->provider->getConfiguration()->setReadScope(static function (Query $query, string $entity) use ($post): void {
+            $query->addFilter(new RootFilter(Post::class, $post));
+        });
+
+        $entries = iterator_to_array($this->reader()->createRootQuery(Author::class, $this->id($this->alice))->iterate(), false);
+
+        $this->assertNotEmpty($entries);
+        $this->assertSame([Comment::class], array_values(array_unique(array_map(static fn (Entry $entry): string => (string) $entry->entity, $entries))), 'Only the comments are in both histories.');
+        $this->assertSame(['post.author'], array_values(array_unique(array_map(static fn (Entry $entry): ?string => $entry->rootPath, $entries))), 'The path is the one of the history, not of the scope.');
     }
 
     public function testSeveralFlushesInOneTransaction(): void

@@ -138,7 +138,7 @@ final readonly class Reader implements ReaderInterface
     /**
      * Returns the last change of each field of an entity, or its creation (or snapshot) for a field never changed
      * since, or null when nothing was audited. Read the value of a field with Change::getValue($field), whatever the
-     * kind of the change.
+     * kind of the change (a JSON field changed since gives its deep diff tree).
      *
      * Reads the entries that changed one of the fields when the platform supports JSON search, otherwise scans the
      * entries of the entity.
