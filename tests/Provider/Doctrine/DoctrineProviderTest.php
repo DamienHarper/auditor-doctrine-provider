@@ -16,6 +16,7 @@ use DH\Auditor\Security\RoleCheckerInterface;
 use DH\Auditor\Security\SecurityProviderInterface;
 use DH\Auditor\Tests\Fixtures\Provider\AuditNoStorageProvider;
 use DH\Auditor\Tests\Fixtures\Provider\StorageNoAuditProvider;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditableButUnauditedEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditedEntity as AuditedEntityWithAttribute;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -453,6 +454,69 @@ final class DoctrineProviderTest extends TestCase
         $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'id'), 'Field "'.AuditedEntityWithAttribute::class.'::$id" is audited.');
     }
 
+    public function testConfiguredRolesApplyToAnAuditableEntityWithoutSecurityAttribute(): void
+    {
+        // AuditedEntity carries #[Auditable] but no #[Security]
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => ['view' => ['ROLE_ADMIN']]], AuditedEntityWithAttribute::class);
+
+        $this->assertSame(['view' => ['ROLE_ADMIN']], $options['roles']);
+        $this->assertContains('ignoredField', $options['ignored_columns'], 'The #[Ignore] attributes are kept.');
+    }
+
+    public function testConfiguredRolesTakePrecedenceOverTheSecurityAttribute(): void
+    {
+        // AuditableButUnauditedEntity carries #[Security(view: ['ROLE1', 'ROLE2'])]
+        $options = $this->loadAttributeEntityWith(['roles' => ['view' => ['ROLE_SUPER_ADMIN']]], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['view' => ['ROLE_SUPER_ADMIN']], $options['roles']);
+    }
+
+    public function testSecurityAttributeIsKeptWithoutConfiguredRoles(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => null], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['view' => ['ROLE1', 'ROLE2']], $options['roles']);
+    }
+
+    public function testEntityDisabledInTheConfigurationStaysDisabledDespiteTheAttribute(): void
+    {
+        // AuditedEntity carries #[Auditable], enabled by default
+        $options = $this->loadAttributeEntityWith(['enabled' => false], AuditedEntityWithAttribute::class);
+
+        $this->assertFalse($options['enabled']);
+    }
+
+    public function testConfiguredEnabledDoesNotReEnableADisabledAuditableEntity(): void
+    {
+        // AuditableButUnauditedEntity carries #[Auditable(enabled: false)]; auditor-bundle sets enabled: true by default
+        $options = $this->loadAttributeEntityWith(['enabled' => true], AuditableButUnauditedEntity::class);
+
+        $this->assertFalse($options['enabled']);
+    }
+
+    public function testDisabledInTheConfigurationIsHonouredByTheProvider(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+        $auditor = $this->createAuditor();
+        $provider = new DoctrineProvider($this->createProviderConfiguration([
+            'entities' => [
+                AuditedEntityWithAttribute::class => ['enabled' => false],
+            ],
+        ]));
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+
+        $auditor->registerProvider($provider);
+
+        $this->assertFalse($provider->isAudited(AuditedEntityWithAttribute::class), 'Disabled in the configuration.');
+    }
+
     #[Depends('testIsAuditedHonorsEnabledFlag')]
     public function testEnableAuditFor(): void
     {
@@ -642,6 +706,40 @@ final class DoctrineProviderTest extends TestCase
         $entityManager = $this->createEntityManager();
 
         return new EntityManager($entityManager->getConnection(), $entityManager->getConfiguration(), $eventManager);
+    }
+
+    /**
+     * @param array<string, mixed> $configuredOptions
+     * @param class-string         $entity
+     *
+     * @return array<string, mixed>
+     */
+    private function loadAttributeEntityWith(array $configuredOptions, string $entity): array
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+
+        $auditor = $this->createAuditor();
+        $provider = new DoctrineProvider($this->createProviderConfiguration());
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+
+        $auditor->registerProvider($provider);
+
+        $provider->loadAttributes($entityManager, [$entity => $configuredOptions]);
+
+        $configuration = $provider->getConfiguration();
+        $this->assertInstanceOf(Configuration::class, $configuration);
+        $options = $configuration->getEntities()[$entity];
+        \assert(\is_array($options));
+
+        /** @var array<string, mixed> $options */
+        return $options;
     }
 }
 
