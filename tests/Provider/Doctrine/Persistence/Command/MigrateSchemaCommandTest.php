@@ -25,8 +25,8 @@ use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
-use Symfony\Component\Console\Command\LockableTrait;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Command\LockableTrait;
 use Symfony\Component\Console\Tester\CommandTester;
 
 /**
