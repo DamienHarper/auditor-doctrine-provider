@@ -83,7 +83,24 @@ $auditor->registerProvider($provider);
 ```
 
 > [!NOTE]
-> `registerAuditingService()` automatically registers the `DoctrineSubscriber` on the Doctrine event system. No additional wiring is needed.
+> `registerAuditingService()` registers the `DoctrineSubscriber` on the event manager of the entity manager.
+
+> [!IMPORTANT]
+> The audit entries are written when the database transaction of the flush is committed, by the DBAL
+> `AuditorMiddleware`. **Add it to the configuration of every connection used by an auditing entity manager**,
+> before the connection is created: without it, nothing is audited. auditor-bundle does it for you.
+>
+> ```php
+> use DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditorMiddleware;
+> use Doctrine\DBAL\Configuration as DbalConfiguration;
+> use Doctrine\DBAL\DriverManager;
+>
+> $dbalConfiguration = new DbalConfiguration();
+> $dbalConfiguration->setMiddlewares([new AuditorMiddleware()]);
+> $connection = DriverManager::getConnection($connectionParams, $dbalConfiguration);
+> // then create the EntityManager on $connection
+> ```
+
 
 ## 3️⃣ Step 3: Mark Entities as Auditable
 

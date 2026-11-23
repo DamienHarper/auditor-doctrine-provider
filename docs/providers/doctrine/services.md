@@ -17,7 +17,7 @@ Both services extend `DoctrineService` and wrap a Doctrine `EntityManagerInterfa
 
 The `AuditingService` wraps the EntityManager whose entities should be audited.
 
-When `DoctrineProvider::registerAuditingService()` is called, it registers the `DoctrineSubscriber` on Doctrine's event system and wires the `AuditorMiddleware` into the DBAL layer.
+When `DoctrineProvider::registerAuditingService()` is called, it registers the `DoctrineSubscriber` on the event manager of the entity manager. The `AuditorMiddleware` is **not** added for you: it must be in the middlewares of the DBAL connection (see below).
 
 ### Namespace
 
@@ -38,12 +38,20 @@ $auditingService = new AuditingService(
 
 ```php
 $provider->registerAuditingService($auditingService);
-// ↑ This wires DoctrineSubscriber onto onFlush and AuditorMiddleware onto the DBAL connection.
-//   No additional setup is needed.
+// ↑ This attaches DoctrineSubscriber to the event manager of the entity manager (onFlush, postFlush).
+//   The connection must have been created with the AuditorMiddleware.
 ```
 
 > [!IMPORTANT]
-> The EntityManager must be configured **before** the provider is registered with the auditor. The `AuditorMiddleware` must be present in the DBAL middleware stack for the transactional flush callback to work.
+> The EntityManager must be configured **before** the provider is registered with the auditor. The `AuditorMiddleware` must be present in the DBAL middleware stack for the transactional flush callback to work: without it, nothing is audited.
+>
+> ```php
+> $dbalConfiguration = new \Doctrine\DBAL\Configuration();
+> $dbalConfiguration->setMiddlewares([new \DH\Auditor\Provider\Doctrine\Auditing\DBAL\Middleware\AuditorMiddleware()]);
+> $connection = \Doctrine\DBAL\DriverManager::getConnection($connectionParams, $dbalConfiguration);
+> ```
+>
+> auditor-bundle adds it to the connections of the auditing entity managers.
 
 ### Attaching the listeners yourself
 

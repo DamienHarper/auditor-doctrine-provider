@@ -140,11 +140,11 @@ $application = new Application();
 
 $updateCommand = new UpdateSchemaCommand();
 $updateCommand->setAuditor($auditor);
-$application->add($updateCommand);
+$application->addCommand($updateCommand);
 
 $cleanCommand = new CleanAuditLogsCommand();
 $cleanCommand->setAuditor($auditor);
-$application->add($cleanCommand);
+$application->addCommand($cleanCommand);
 
 $application->run();
 ```
