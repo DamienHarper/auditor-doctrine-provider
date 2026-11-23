@@ -247,24 +247,23 @@ class User
 ## 🔀 Combining with Programmatic Configuration
 
 > [!TIP]
-> Attributes can be combined with or overridden by programmatic configuration.
+> Some attribute options can be overridden by programmatic configuration.
+
+For an entity marked `#[Auditable]`, only `enabled: false` and `roles` (which take precedence over `#[Security]`)
+are read from the configuration (`roles` scope by scope); the other options, such as `ignored_columns`, come from the attributes.
 
 ```php
 use DH\Auditor\Provider\Doctrine\Configuration;
 
 $configuration = new Configuration([
     'entities' => [
-        // Override the Security attribute — more restrictive
+        // Override the Security attribute, scope by scope — more restrictive
         User::class => [
             'roles' => ['view' => ['ROLE_SUPER_ADMIN']],
         ],
 
-        // Add additional ignored properties on top of attribute-defined ones
-        Post::class => [
-            'ignored_columns' => ['viewCount'],
-        ],
-
         // Completely disable auditing despite #[Auditable]
+        // (enabled: true cannot re-enable an #[Auditable(enabled: false)] entity)
         DraftPost::class => [
             'enabled' => false,
         ],

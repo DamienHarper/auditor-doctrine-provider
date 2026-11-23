@@ -202,10 +202,15 @@ $provider->isAuditedField(App\Entity\Post::class, 'password'); // false (if igno
 ## 🔀 Configuration Merging
 
 > [!TIP]
-> Configuration from PHP attributes and programmatic config are merged intelligently.
+> Configuration from PHP attributes and programmatic config are merged.
 
-1. PHP attributes on entities are loaded first (via `AttributeLoader`)
-2. Programmatic configuration (the `entities` array) takes precedence over attributes
+1. PHP attributes on entities are loaded first (via `AttributeLoader`): for an entity with `#[Auditable]`, they
+   provide its options, including `ignored_columns` (`#[Ignore]`)
+2. For such an entity, only two options of the programmatic configuration (the `entities` array) are read:
+   `enabled: false` disables it despite `#[Auditable]` (`enabled: true` cannot re-enable an
+   `#[Auditable(enabled: false)]` entity), and `roles` take precedence over `#[Security]`, scope by scope (`roles:
+   null`, an empty array or a missing `view` key keeps the attribute value). Its other configured options, such as
+   `ignored_columns`, are not read: use `#[Ignore]`
 3. Global `ignored_columns` are combined with entity-specific ones
 
 ```php
@@ -223,14 +228,13 @@ $configuration = new Configuration([
     'ignored_columns' => ['updatedAt'],
     'entities' => [
         Post::class => [
-            'ignored_columns' => ['slug'],
             'roles' => ['view' => ['ROLE_ADMIN']],  // Overrides attribute
         ],
     ],
 ]);
 
 // Final configuration for Post:
-// - ignored_columns: ['cached', 'slug', 'updatedAt']
+// - ignored_columns: ['cached'] (+ the global 'updatedAt')
 // - roles: ['view' => ['ROLE_ADMIN']]
 ```
 
