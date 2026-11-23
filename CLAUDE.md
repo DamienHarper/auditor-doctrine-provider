@@ -100,7 +100,7 @@ Compare back to back, with the same `BENCH_N` and `XDEBUG_MODE=off`. See `docs/c
 
 ### How auditing works
 
-`DoctrineProvider` (`src/Provider/Doctrine/DoctrineProvider.php`) extends the core `AbstractProvider` and registers, on each auditing entity manager, `DoctrineSubscriber` (`onFlush`, `postFlush`, and Gedmo's `postSoftDelete` when Gedmo is installed) plus two schema listeners.
+`DoctrineProvider` (`src/Provider/Doctrine/DoctrineProvider.php`) extends the core `AbstractProvider` and registers, on each auditing entity manager, `DoctrineSubscriber` (`onFlush`, `postFlush`, and Gedmo's `postSoftDelete` when Gedmo is installed) plus two schema listeners. One subscriber (`getDoctrineSubscriber()`) is shared by all the auditing entity managers: its state is keyed by `spl_object_id()` of the entity manager and cleared by `reset()`. After `disableListenerAttachment()`, `registerAuditingService()` attaches nothing and the caller declares the listeners (the bundle does it, as lazy Doctrine listeners, so that flushes made before the provider is built are audited).
 
 1. `onFlush`: `TransactionManager::populate()` → `TransactionHydrator` turns the UnitOfWork changesets into insert / update / remove / associate / dissociate entries on the entity manager's `Transaction` model.
 2. On the first flush of a database transaction, the subscriber registers a flusher with `AuditorDriver::addFlusher()`.
