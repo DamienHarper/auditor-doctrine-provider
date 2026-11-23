@@ -119,6 +119,43 @@ final class RootIndexTest extends TestCase
         $this->assertContains([Bundle::class, (string) $bundle->getId(), 'first_bundle', 'inverse_side_deletion_bundle_tag_audit', (string) $tag->getId()], $this->rows());
     }
 
+    public function testARootWithoutIdentifierIsSkipped(): void
+    {
+        $this->provider->getConfiguration()->setRootResolver(static fn (object $entity): array => $entity instanceof BundleTag
+            ? ['detached' => new Bundle('never persisted')]
+            : []);
+
+        $em = $this->entityManager();
+        $em->persist(new BundleTag());
+        $em->flush();
+
+        $this->assertSame([], array_filter($this->rows(), static fn (array $row): bool => 'detached' === $row[2]));
+    }
+
+    public function testTheRootResolverMustReturnRootsByPath(): void
+    {
+        $this->provider->getConfiguration()->setRootResolver(static fn (object $entity): mixed => $entity instanceof BundleTag ? 'not an array' : []);
+
+        $em = $this->entityManager();
+        $em->persist(new BundleTag());
+
+        $this->expectException(\UnexpectedValueException::class);
+
+        $em->flush();
+    }
+
+    public function testTheRootResolverMustReturnEntities(): void
+    {
+        $this->provider->getConfiguration()->setRootResolver(static fn (object $entity): array => $entity instanceof BundleTag ? ['path' => 'not an entity'] : []);
+
+        $em = $this->entityManager();
+        $em->persist(new BundleTag());
+
+        $this->expectException(\UnexpectedValueException::class);
+
+        $em->flush();
+    }
+
     public function testACollectionCannotBeARoot(): void
     {
         $this->provider->getConfiguration()->setEntities([Bundle::class => ['enabled' => true, 'roots' => ['items']]] + $this->entities);

@@ -183,6 +183,13 @@ final class ChangedFieldFilterTest extends TestCase
         $this->assertCount(0, $reader->createQuery(Post::class, ['changed_field' => 'address', 'page_size' => null])->execute());
     }
 
+    public function testAtLeastOneField(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new ChangedFieldFilter([]);
+    }
+
     /**
      * @param array<Entry> $entries
      *

@@ -15,6 +15,9 @@ use Doctrine\DBAL\Platforms\SQLitePlatform;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
+use Symfony\Component\Lock\LockFactory;
+use Symfony\Component\Lock\Store\FlockStore;
+use Symfony\Component\Lock\Store\SemaphoreStore;
 
 /**
  * @internal
@@ -96,6 +99,36 @@ final class RebuildRootsCommandTest extends TestCase
 
         $this->assertSame(1, $tester->getStatusCode());
         $this->assertStringContainsString('could not be read', $tester->getDisplay());
+    }
+
+    public function testAnotherRunIsRefused(): void
+    {
+        // the store LockableTrait picks
+        $lock = new LockFactory(SemaphoreStore::isSupported() ? new SemaphoreStore() : new FlockStore())->createLock('audit:roots:rebuild');
+        $this->assertTrue($lock->acquire());
+
+        try {
+            $tester = new CommandTester($this->createCommand());
+            $tester->execute([]);
+
+            $this->assertSame(1, $tester->getStatusCode());
+            $this->assertStringContainsString('already running', $tester->getDisplay());
+        } finally {
+            $lock->release();
+        }
+    }
+
+    public function testEntriesWithoutTransactionIdAreSkipped(): void
+    {
+        $this->connection()->executeStatement('DELETE FROM audit_root');
+        $this->connection()->executeStatement("UPDATE comment_audit SET transaction_id = NULL WHERE type = 'insert'");
+
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute([]);
+
+        $tester->assertCommandIsSuccessful();
+        $this->assertMatchesRegularExpression('/comment_audit\s+\d+\s+\d+\s+1\s/', $tester->getDisplay(), 'The insert of the comment is counted as skipped.');
+        $this->assertNotContains('', array_column($this->rows(), 5));
     }
 
     public function testDryRun(): void

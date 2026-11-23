@@ -253,6 +253,13 @@ final class RootQueryTest extends TestCase
         $this->assertSame(12, $reader->createRootQuery(Author::class, $id, ['blame_origin' => BlameOrigin::Http])->count());
     }
 
+    public function testThePageSizeIsPositive(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->reader()->createRootQuery(Author::class, $this->id($this->alice))->fetch(0);
+    }
+
     public function testInvalidOptions(): void
     {
         $this->expectException(InvalidArgumentException::class);
