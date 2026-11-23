@@ -45,6 +45,26 @@ $provider->registerAuditingService($auditingService);
 > [!IMPORTANT]
 > The EntityManager must be configured **before** the provider is registered with the auditor. The `AuditorMiddleware` must be present in the DBAL middleware stack for the transactional flush callback to work.
 
+### Attaching the listeners yourself
+
+`registerAuditingService()` attaches the listeners when it runs, that is when the provider is built: a flush run before
+that is not audited. A dependency injection container can declare them instead, as lazy listeners of the event
+managers, so that they are attached as soon as an entity manager is created (auditor-bundle does it):
+
+```php
+$provider->disableListenerAttachment();   // before registerAuditingService()
+$provider->registerAuditingService(new AuditingService('default', $entityManager));
+
+// then, on the event manager of each auditing entity manager:
+// - $provider->getDoctrineSubscriber() on onFlush, postFlush (and Gedmo's postSoftDelete)
+// - new CreateSchemaListener($provider) on postGenerateSchemaTable
+```
+
+> [!WARNING]
+> Doctrine's `ContainerAwareEventManager` drops a listener attached while it initializes its lazy listeners of the
+> same event: a lazy `onFlush` listener that only builds the provider would lose the subscriber. Declare the
+> subscriber itself as the listener.
+
 ## 💾 StorageService
 
 The `StorageService` wraps the EntityManager used to write audit rows. This can be the same EntityManager as the auditing service (single database) or a different one (multi-database).
