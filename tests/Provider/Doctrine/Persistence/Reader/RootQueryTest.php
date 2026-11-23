@@ -14,6 +14,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RootFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\RootQuery;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
@@ -183,6 +184,17 @@ final class RootQueryTest extends TestCase
         $this->assertIsString($first->lastCursor);
 
         $this->assertFalse($query->fetch(50, $first->lastCursor)->isEmpty(), 'A cursor read from the database is accepted.');
+    }
+
+    public function testIsCursor(): void
+    {
+        $page = $this->reader()->createRootQuery(Author::class, $this->id($this->alice))->fetch(1);
+        $this->assertIsString($page->firstCursor);
+
+        $this->assertTrue(RootQuery::isCursor($page->firstCursor));
+        $this->assertFalse(RootQuery::isCursor(''));
+        $this->assertFalse(RootQuery::isCursor('not-a-cursor'));
+        $this->assertFalse(RootQuery::isCursor(mb_rtrim(strtr(base64_encode(json_encode(['x', '', Author::class, 1], JSON_THROW_ON_ERROR)), '+/', '-_'), '=')));
     }
 
     public function testOnlyTheRolesOfTheRootAreChecked(): void
