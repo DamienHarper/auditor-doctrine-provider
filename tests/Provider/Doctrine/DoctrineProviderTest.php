@@ -524,7 +524,6 @@ final class DoctrineProviderTest extends TestCase
         ]));
         $provider->registerStorageService(new StorageService('default', $entityManager));
         $provider->registerAuditingService(new AuditingService('default', $entityManager));
-
         $auditor->registerProvider($provider);
 
         $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'auditedField'), 'An allowlisted field is audited.');
@@ -660,8 +659,11 @@ final class DoctrineProviderTest extends TestCase
     {
         $provider = $this->createDoctrineProvider();
 
-        // Seed the subscriber's transaction cache via reflection
+        // Seed the transaction cache of the subscriber attached to the entity manager via reflection
         $subscriber = $provider->getDoctrineSubscriber();
+        $auditingService = $provider->getAuditingServices()['default'];
+        $this->assertInstanceOf(AuditingService::class, $auditingService);
+        $this->assertContains($subscriber, $auditingService->getEntityManager()->getEventManager()->getListeners(Events::onFlush));
         $transactionsReflection = new \ReflectionProperty($subscriber, 'transactions');
         $transactionsReflection->setValue($subscriber, [42 => 'stale_transaction']);
 

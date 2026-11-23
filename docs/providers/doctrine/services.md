@@ -49,7 +49,8 @@ $provider->registerAuditingService($auditingService);
 
 `registerAuditingService()` attaches the listeners when it runs, that is when the provider is built: a flush run before
 that is not audited. A dependency injection container can declare them instead, as lazy listeners of the event
-managers, so that they are attached as soon as an entity manager is created (auditor-bundle does it):
+managers: they are registered with the event manager when it is created, and the provider is built on the first flush
+(auditor-bundle does it):
 
 ```php
 $provider->disableListenerAttachment();   // before registerAuditingService()
@@ -58,12 +59,16 @@ $provider->registerAuditingService(new AuditingService('default', $entityManager
 // then, on the event manager of each auditing entity manager:
 // - $provider->getDoctrineSubscriber() on onFlush, postFlush (and Gedmo's postSoftDelete)
 // - new CreateSchemaListener($provider) on postGenerateSchemaTable
+// (TableSchemaListener does nothing any more: it is not needed)
 ```
 
+The subscriber is shared by all the auditing entity managers, whose state it keeps apart: entity managers sharing an
+event manager (as on one DoctrineBundle connection) get it once.
+
 > [!WARNING]
-> Doctrine's `ContainerAwareEventManager` drops a listener attached while it initializes its lazy listeners of the
-> same event: a lazy `onFlush` listener that only builds the provider would lose the subscriber. Declare the
-> subscriber itself as the listener.
+> Before 6.4.44, 7.4.17 and 8.1.5, the `ContainerAwareEventManager` of Symfony's doctrine-bridge drops a listener
+> attached while it initializes its lazy listeners of the same event: a lazy `onFlush` listener that only builds the
+> provider would lose the subscriber. Declare the subscriber itself as the listener.
 
 ## 💾 StorageService
 
