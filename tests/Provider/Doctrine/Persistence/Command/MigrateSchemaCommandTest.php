@@ -616,6 +616,14 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $audits = new Reader($this->provider)->getAuditsByTransactionId(sha1('post_auditupdate1'));
         $this->assertCount(2, $audits[Post::class] ?? []);
+
+        // a row already converted belongs to its ULID, not to its legacy hash any more
+        $connection = $this->auditConnection();
+        $converted = (int) $connection->fetchOne('SELECT MIN(id) FROM post_audit');
+        $connection->update('post_audit', ['transaction_id' => '01HXYZ1234567890ABCDEFGHIJ'], ['id' => $converted]);
+        $audits = new Reader($this->provider)->getAuditsByTransactionId(sha1('post_auditupdate1'));
+        $this->assertCount(1, $audits[Post::class] ?? []);
+        $this->assertNotSame($converted, $audits[Post::class][0]->id);
     }
 
     /**
