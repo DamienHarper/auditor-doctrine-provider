@@ -41,6 +41,7 @@ final class Configuration implements ConfigurationInterface
     private readonly bool $fullSnapshotOnRemove;
 
     private readonly int $batchSize;
+
     private readonly bool $compression;
 
     private readonly bool $skipDisabledEntities;

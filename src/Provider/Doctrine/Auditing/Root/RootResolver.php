@@ -85,9 +85,7 @@ final class RootResolver
             }
         } else {
             $value = $this->value($entityManager, $meta, $entity, $first);
-            if (null === $value) {
-                $value = $this->findOwner($entityManager, $meta, $entity, $first);
-            }
+            $value ??= $this->findOwner($entityManager, $meta, $entity, $first);
 
             if (null !== $value) {
                 $starts[] = $value;

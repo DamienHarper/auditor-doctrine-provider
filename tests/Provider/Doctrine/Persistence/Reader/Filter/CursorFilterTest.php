@@ -32,9 +32,9 @@ final class CursorFilterTest extends TestCase
         $all = new CursorFilter('2026-11-23 10:00:00', '01TX', CursorFilter::TIE_ALL, before: false)->getSQL();
         $none = new CursorFilter('2026-11-23 10:00:00', '01TX', CursorFilter::TIE_NONE, before: false)->getSQL();
 
-        $this->assertStringContainsString('at.created_at > :cursor_after_date', $all['sql']);
-        $this->assertStringContainsString('= :cursor_after_tx AND 1 = 1)', $all['sql']);
-        $this->assertStringContainsString('= :cursor_after_tx AND 1 = 0)', $none['sql']);
+        $this->assertStringContainsString('at.created_at > :cursor_after_date', (string) $all['sql']);
+        $this->assertStringContainsString('= :cursor_after_tx AND 1 = 1)', (string) $all['sql']);
+        $this->assertStringContainsString('= :cursor_after_tx AND 1 = 0)', (string) $none['sql']);
         $this->assertArrayNotHasKey('cursor_after_id', $all['params']);
     }
 

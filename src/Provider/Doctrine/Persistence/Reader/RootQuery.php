@@ -20,15 +20,15 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\RootQueryTest;
  *
  * @see RootQueryTest
  */
-final class RootQuery
+final readonly class RootQuery
 {
     /**
      * @param list<array{entity: string, query: Query}> $sources one query per audit table, with the FQCN of its entity
      */
     public function __construct(
-        private readonly string $rootClass,
-        private readonly string $rootId,
-        private readonly array $sources,
+        private string $rootClass,
+        private string $rootId,
+        private array $sources,
     ) {}
 
     public function getRootClass(): string
@@ -140,8 +140,8 @@ final class RootQuery
      */
     private function stream(?string $after, ?string $since, int $batchSize): \Generator
     {
-        $afterPosition = null === $after ? null : self::decode($after);
-        $sincePosition = null === $since ? null : self::decode($since);
+        $afterPosition = null === $after ? null : $this->decode($after);
+        $sincePosition = null === $since ? null : $this->decode($since);
 
         /** @var list<\Generator<int, array{string, Entry, string}>> $streams */
         $streams = [];
@@ -183,7 +183,7 @@ final class RootQuery
     private function sourceStream(string $entity, Query $base, ?array $after, ?array $since, int $batchSize): \Generator
     {
         $position = $after;
-        $tie = null === $after ? null : self::tie($entity, $after[2], true);
+        $tie = null === $after ? null : $this->tie($entity, $after[2], true);
 
         do {
             $query = clone $base;
@@ -200,7 +200,7 @@ final class RootQuery
             }
 
             if (null !== $since) {
-                $query->addFilter(new CursorFilter($since[0], $since[1], self::tie($entity, $since[2], false), $since[3], false));
+                $query->addFilter(new CursorFilter($since[0], $since[1], $this->tie($entity, $since[2], false), $since[3], false));
             }
 
             $read = 0;
@@ -218,7 +218,7 @@ final class RootQuery
                 $position = [$createdAt, $transactionId, $entity, $id];
                 $tie = CursorFilter::TIE_ID;
 
-                yield [self::sortKey($createdAt, $transactionId, $entity, $id), $entry, self::encode($position)];
+                yield [$this->sortKey($createdAt, $transactionId, $entity, $id), $entry, $this->encode($position)];
             }
         } while ($read === $batchSize);
     }
@@ -226,7 +226,7 @@ final class RootQuery
     /**
      * How the entries of the cursor's transaction compare to the cursor, in an audit table of $entity.
      */
-    private static function tie(string $entity, string $cursorEntity, bool $before): string
+    private function tie(string $entity, string $cursorEntity, bool $before): string
     {
         $comparison = strcmp($entity, $cursorEntity);
 
@@ -241,7 +241,7 @@ final class RootQuery
      * Sort key of an entry: the raw created_at is normalized to the microsecond, so that audit tables stored on
      * different connections compare too.
      */
-    private static function sortKey(string $createdAt, string $transactionId, string $entity, int $id): string
+    private function sortKey(string $createdAt, string $transactionId, string $entity, int $id): string
     {
         try {
             $date = new \DateTimeImmutable($createdAt, new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
@@ -255,7 +255,7 @@ final class RootQuery
     /**
      * @param array{string, string, string, int} $position
      */
-    private static function encode(array $position): string
+    private function encode(array $position): string
     {
         return mb_rtrim(strtr(base64_encode(json_encode($position, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
     }
@@ -263,7 +263,7 @@ final class RootQuery
     /**
      * @return array{string, string, string, int}
      */
-    private static function decode(string $cursor): array
+    private function decode(string $cursor): array
     {
         $json = base64_decode(strtr($cursor, '-_', '+/'), true);
 

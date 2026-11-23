@@ -242,7 +242,7 @@ final class RootQueryTest extends TestCase
 
     private function id(object $entity): int
     {
-        \assert(method_exists($entity, 'getId'));
+        $this->assertTrue(method_exists($entity, 'getId'));
         $id = $entity->getId();
         \assert(\is_int($id));
 

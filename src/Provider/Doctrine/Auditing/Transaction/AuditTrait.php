@@ -545,6 +545,7 @@ trait AuditTrait
             $userProvider = $this->provider->getAuditor()->getConfiguration()->getUserProvider();
             $user = null === $userProvider ? null : $userProvider();
         }
+
         if ($user instanceof UserInterface) {
             $user_id = $user->identifier;
             $username = $user->username;

@@ -84,6 +84,7 @@ final class RootIndexTest extends TestCase
         $item = new BundleItem($bundle, 'item');
         $em->persist($bundle);
         $em->flush();
+
         $itemId = (string) $item->getId();
 
         $em->remove($item);

@@ -95,7 +95,7 @@ final class RebuildRootsCommandTest extends TestCase
         $rows = array_values(array_unique(array_map(serialize(...), $rows)));
         sort($rows);
 
-        return array_map(static fn (string $row): array => unserialize($row), $rows);
+        return array_map(unserialize(...), $rows);
     }
 
     private function connection(): Connection
