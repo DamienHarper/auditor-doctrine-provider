@@ -639,6 +639,23 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->assertSameDiffs(['title' => ['new' => '🚀 中文', 'old' => 'Zoë']], $this->fetchConvertedDiffs('post_audit', $id)['changes'] ?? null);
     }
 
+    /**
+     * --limit counts converted rows: a row left unconverted, read again by every run, does not use it up.
+     */
+    public function testUnconvertibleRowsDoNotUseUpTheLimit(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $connection = $this->auditConnection();
+        $unconvertible = $this->insertLegacyRow('post_audit', 'merge', '1', ['title' => ['new' => 'Merged']]);
+        $convertible = $this->insertLegacyRow('post_audit', 'update', '2', ['title' => ['old' => 'Old', 'new' => 'New']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-diffs' => true, '--limit' => '1']);
+
+        $this->assertSame(1, (int) $connection->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$unconvertible]));
+        $this->assertSame(2, (int) $connection->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$convertible]), 'The limit must go to a row that can be converted.');
+    }
+
     public function testLimitMustBeAPositiveInteger(): void
     {
         $this->simulateLegacySchema('post_audit');
