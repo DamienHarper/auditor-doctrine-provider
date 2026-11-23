@@ -20,9 +20,11 @@ use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Provider\Service\StorageServiceInterface;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Author;
+use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Bike;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Comment;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Post;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Environment;
+use DH\Auditor\Tests\MigrationE2E\Fixtures\FailingStatementMiddleware;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Type\MoneyType;
 use DH\Auditor\User\User;
 use Doctrine\DBAL\Configuration as DbalConfiguration;
@@ -51,7 +53,7 @@ use Symfony\Component\Uid\Ulid;
  *
  * Not part of the default test suite. Run it with:
  *     composer install --working-dir=tools/migration-e2e/v1
- *     vendor/bin/phpunit --group migration-e2e
+ *     E2E_DATABASE_URL=<url> vendor/bin/phpunit --group migration-e2e   (SQLite files without E2E_DATABASE_URL)
  * or make migration-e2e db=<sqlite|mysql|pgsql|mariadb>.
  *
  * @internal
@@ -82,6 +84,7 @@ final class MigrationEndToEndTest extends TestCase
 
     protected function tearDown(): void
     {
+        FailingStatementMiddleware::$pattern = null;
         foreach ($this->entityManagers as $entityManager) {
             $entityManager->getConnection()->close();
         }
@@ -91,7 +94,7 @@ final class MigrationEndToEndTest extends TestCase
 
     /**
      * The migration documented in the upgrade guide: audit:schema:migrate --force --convert-all,
-     * then audit:schema:update --force.
+     * then audit:schema:update --force, then the check: audit:schema:migrate without options.
      */
     public function testCompleteMigration(): void
     {
@@ -110,6 +113,7 @@ final class MigrationEndToEndTest extends TestCase
         // ...and has nothing left to do afterwards
         $tester = $this->updateSchemaTester(['--dump-sql' => true]);
         $this->assertStringContainsString('Nothing to update', $tester->getDisplay(), 'The migrated tables must match the 2.0 schema.');
+        $this->assertSame(Command::SUCCESS, $this->migrate([]), 'The check of the upgrade guide must pass.');
 
         $this->assertReadable();
         $this->assertRootIndexRebuilt();
@@ -130,12 +134,28 @@ final class MigrationEndToEndTest extends TestCase
     }
 
     /**
-     * Runs limited with --limit (to estimate the duration) keep the legacy columns, then a complete run finishes.
+     * Runs limited with --limit (to estimate the duration) convert what they are allowed to and keep the legacy
+     * columns, then a complete run finishes.
      */
     public function testLimitedRunsThenCompleteRun(): void
     {
+        $convertedRows = 0;
+        $rowsWithTransactionId = 0;
         for ($run = 1; $run <= 3; ++$run) {
             $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-all' => true, '--limit' => '250']), 'limited run '.$run);
+            $this->assertSame(Command::FAILURE, $this->migrate([]), 'The check of the upgrade guide must fail after a limited run.');
+
+            // the diffs of exactly 250 more rows, and more transactions, are converted
+            $this->assertSame($convertedRows + 250, $convertedRows = $this->countRows('schema_version = 2'), 'rows converted by limited run '.$run);
+            $this->assertGreaterThan($rowsWithTransactionId, $rowsWithTransactionId = $this->countRows('transaction_id IS NOT NULL'), 'transactions converted by limited run '.$run);
+
+            if (1 === $run) {
+                // a transaction is found by its id, converted (ULID) or not yet (legacy hash)
+                $unconverted = $this->connection(Environment::PRIMARY)->fetchOne('SELECT transaction_hash FROM e2e_translation_audit WHERE transaction_id IS NULL AND transaction_hash IS NOT NULL');
+                $this->assertIsString($unconverted, 'The first limited run must leave transactions to convert.');
+                $this->assertNotSame([], new Reader($this->provider)->getAuditsByTransactionId($unconverted), 'unconverted transaction');
+            }
+
             foreach ($this->auditTables() as [$connection, $table]) {
                 $this->assertContains('transaction_hash', $this->columns($connection, $table), \sprintf('%s: a limited run must keep the legacy columns.', $table));
 
@@ -157,13 +177,14 @@ final class MigrationEndToEndTest extends TestCase
     {
         $connection = $this->connection(Environment::PRIMARY);
         $table = 'e2e_translation_audit';
+        $first = $this->snapshot[Environment::PRIMARY][$table][0];
         $row = $this->snapshot[Environment::PRIMARY][$table][800];
         $platform = $connection->getDatabasePlatform();
 
         if ($platform instanceof SQLitePlatform) {
             // SQLite cannot add a constraint to an existing table: a trigger refuses the converted diffs of the row
             $connection->executeStatement(\sprintf(
-                "CREATE TRIGGER e2e_failing_row BEFORE UPDATE ON %s WHEN NEW.object_id = '%s' AND NEW.diffs LIKE '%%\"changes\"%%' BEGIN SELECT RAISE(ABORT, 'failing row'); END",
+                "CREATE TRIGGER e2e_failing_row BEFORE UPDATE ON %s WHEN NEW.object_id = '%s' AND NEW.diffs LIKE '%%\"changes\"%%' BEGIN SELECT RAISE(ABORT, 'e2e_failing_row'); END",
                 $table,
                 $row['object_id'],
             ));
@@ -184,15 +205,50 @@ final class MigrationEndToEndTest extends TestCase
         try {
             $this->migrate(['--force' => true, '--convert-all' => true]);
             $this->fail('The migration was expected to fail on row '.$row['id'].'.');
-        } catch (DbalException) {
+        } catch (DbalException $dbalException) {
+            $this->assertStringContainsString('e2e_failing_row', $dbalException->getMessage(), 'The migration must fail on the row made to fail, not on something else.');
         }
 
         // the rows of the failing batch are left unconverted, those of the previous batch are converted
-        $versions = $connection->fetchAllKeyValue(\sprintf('SELECT id, schema_version FROM %s WHERE id IN (?, ?)', $table), [$row['id'], 1]);
+        $versions = $connection->fetchAllKeyValue(\sprintf('SELECT id, schema_version FROM %s WHERE id IN (?, ?)', $table), [$row['id'], $first['id']]);
         $this->assertSame(1, (int) $versions[$row['id']], 'row of the failing batch');
-        $this->assertSame(2, (int) $versions[1], 'row of the first batch');
+        $this->assertSame(2, (int) $versions[$first['id']], 'row of the first batch');
 
         $restore();
+        $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-all' => true]));
+        $this->assertMigrated();
+    }
+
+    /**
+     * A table alteration interrupted in the middle (SQLite rebuilds a table to drop a column) loses nothing on the
+     * platforms whose DDL is transactional, and the next run completes the migration. MySQL and MariaDB commit each
+     * DDL statement: there, the statements are ordered so that the next run completes them.
+     */
+    public function testInterruptedTableAlterationLosesNothing(): void
+    {
+        $connection = $this->connection(Environment::PRIMARY);
+        $platform = $connection->getDatabasePlatform();
+        if (!$platform instanceof SQLitePlatform && !$platform instanceof PostgreSQLPlatform) {
+            $this->markTestSkipped('DDL statements are not transactional on MySQL and MariaDB.');
+        }
+
+        $rows = \count($this->snapshot[Environment::PRIMARY]['e2e_author_audit']);
+        FailingStatementMiddleware::$pattern = $platform instanceof SQLitePlatform
+            ? '/^INSERT INTO e2e_author_audit .*__temp__/is'                      // copying the rows back into the rebuilt table
+            : '/^ALTER TABLE e2e_author_audit\b.*\btransaction_hash\b/is';       // dropping transaction_hash
+
+        try {
+            $this->migrate(['--force' => true, '--convert-all' => true]);
+            $this->fail('The table alteration was expected to fail.');
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertStringContainsString('Statement made to fail', $runtimeException->getMessage());
+        }
+
+        $columns = $this->columns($connection, 'e2e_author_audit');
+        $this->assertContains('transaction_hash', $columns, 'The interrupted alteration must be rolled back.');
+        $this->assertContains('blame_user', $columns, 'The interrupted alteration must be rolled back.');
+        $this->assertSame($rows, (int) $connection->fetchOne('SELECT COUNT(*) FROM e2e_author_audit'), 'No row may be lost.');
+
         $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-all' => true]));
         $this->assertMigrated();
     }
@@ -206,8 +262,81 @@ final class MigrationEndToEndTest extends TestCase
         $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-transaction-hash' => true]));
         $this->assertMigrated(diffsConverted: false);
         $this->assertReadable();
+        $this->assertSame(Command::FAILURE, $this->migrate([]), 'The check of the upgrade guide must fail while diffs are left.');
 
-        // 2.x writes in the half-migrated tables
+        $newRows = $this->writeWithV2();
+
+        $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-diffs' => true]));
+        $this->assertMigrated();
+        $this->assertSame($newRows, $this->rowsWrittenByV2(), 'The 2.x entry must be left as it was written.');
+
+        $this->assertSame(Command::SUCCESS, $this->updateSchema(['--force' => true]));
+        $this->assertMigrated();
+        $this->assertReadable();
+        $this->assertSame(Command::SUCCESS, $this->migrate([]));
+    }
+
+    /**
+     * The other way round: the diffs first, transaction_hash kept, 2.x writing entries in between, then the hashes.
+     */
+    public function testDiffsFirstThenTransactionHashesWithWritesInBetween(): void
+    {
+        $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-diffs' => true]));
+        foreach ($this->auditTables() as [$connection, $table]) {
+            $columns = $this->columns($connection, $table);
+            $this->assertContains('transaction_hash', $columns, $table.': transaction_hash is kept until converted.');
+            $this->assertNotContains('blame_user', $columns, $table.': the migrated blame columns are dropped.');
+        }
+
+        $this->assertSame(Command::FAILURE, $this->migrate([]), 'The check of the upgrade guide must fail while transaction_hash is left.');
+
+        $newRows = $this->writeWithV2();
+        $this->assertNull($newRows[0]['transaction_hash']);
+
+        $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-transaction-hash' => true]));
+        $this->assertMigrated();
+        $this->assertSame(
+            array_map(static fn (array $row): array => array_diff_key($row, ['transaction_hash' => true]), $newRows),
+            $this->rowsWrittenByV2(),
+            'The 2.x entry must be left as it was written.',
+        );
+
+        $this->assertSame(Command::SUCCESS, $this->updateSchema(['--force' => true]));
+        $this->assertMigrated();
+        $this->assertReadable();
+        $this->assertSame(Command::SUCCESS, $this->migrate([]));
+    }
+
+    /**
+     * Two audit tables of the same name on two storages would be converted as one: the migration refuses to start.
+     */
+    public function testAuditTableOnTwoStoragesIsRefused(): void
+    {
+        $this->connection(Environment::SECONDARY)->executeStatement('CREATE TABLE e2e_vehicle_audit (id INTEGER PRIMARY KEY, transaction_hash VARCHAR(40))');
+        $this->provider->getConfiguration()->setStorageMapper(
+            static fn (string $entity, array $storageServices): StorageServiceInterface => $storageServices[
+                Bike::class === $entity || \in_array($entity, Environment::secondaryEntities(), true) ? Environment::SECONDARY : Environment::PRIMARY
+            ]
+        );
+        $state = $this->databaseState();
+
+        try {
+            $this->migrate(['--force' => true, '--convert-all' => true]);
+            $this->fail('The migration was expected to refuse an audit table found on two storages.');
+        } catch (\RuntimeException $runtimeException) {
+            $this->assertStringContainsString('e2e_vehicle_audit exists on several storages', $runtimeException->getMessage());
+        }
+
+        $this->assertSame($state, $this->databaseState(), 'Nothing may have been migrated.');
+    }
+
+    /**
+     * Has 2.x write an entry in the half-migrated tables.
+     *
+     * @return list<array<string, mixed>> the audit row it wrote
+     */
+    private function writeWithV2(): array
+    {
         $this->provider->getAuditor()->getConfiguration()->setUserProvider(static fn (): User => new User('5', 'new.user'));
         $entityManager = $this->entityManagers[Environment::PRIMARY];
         $author = new Author('Written by 2.x');
@@ -216,17 +345,34 @@ final class MigrationEndToEndTest extends TestCase
         $entityManager->persist($author);
         $entityManager->flush();
 
-        $newRows = $this->connection(Environment::PRIMARY)->fetchAllAssociative('SELECT * FROM e2e_author_audit WHERE id > ? ORDER BY id', [\count($this->snapshot[Environment::PRIMARY]['e2e_author_audit'])]);
+        $newRows = $this->rowsWrittenByV2();
         $this->assertCount(1, $newRows);
         $this->assertSame(2, (int) $newRows[0]['schema_version']);
 
-        $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-diffs' => true]));
-        $this->assertMigrated();
-        $this->assertSame($newRows, $this->connection(Environment::PRIMARY)->fetchAllAssociative('SELECT * FROM e2e_author_audit WHERE id > ? ORDER BY id', [\count($this->snapshot[Environment::PRIMARY]['e2e_author_audit'])]), 'The 2.x entry must be left as it was written.');
+        return $newRows;
+    }
 
-        $this->assertSame(Command::SUCCESS, $this->updateSchema(['--force' => true]));
-        $this->assertMigrated();
-        $this->assertReadable();
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function rowsWrittenByV2(): array
+    {
+        $lastLegacyId = max(array_map(static fn (array $row): int => (int) $row['id'], $this->snapshot[Environment::PRIMARY]['e2e_author_audit']));
+
+        return $this->connection(Environment::PRIMARY)->fetchAllAssociative('SELECT * FROM e2e_author_audit WHERE id > ? ORDER BY id', [$lastLegacyId]);
+    }
+
+    /**
+     * Counts the audit rows of every table matching a condition.
+     */
+    private function countRows(string $condition): int
+    {
+        $count = 0;
+        foreach ($this->auditTables() as [$connection, $table]) {
+            $count += (int) $connection->fetchOne(\sprintf('SELECT COUNT(*) FROM %s WHERE %s', $table, $condition));
+        }
+
+        return $count;
     }
 
     /**
@@ -347,14 +493,7 @@ final class MigrationEndToEndTest extends TestCase
                 unset($old['@source']);
                 $this->assertSame(array_keys($old), array_keys($new['changes']), $where.': changed fields');
 
-                // Since auditor 3.2.0, 1.x writes a deep diff for a JSON field when both values are arrays: a tree whose
-                // leaves are {old, new}. Otherwise, and for every change before 3.2.0, a field diff holding the values.
-                $deepDiffs = array_keys(array_filter(
-                    $old,
-                    static fn (array $diff, string $field): bool => \in_array($field, self::JSON_FIELDS, true)
-                        && ([] !== array_diff(array_keys($diff), ['new', 'old']) || self::isDeepDiffTree($diff)),
-                    ARRAY_FILTER_USE_BOTH,
-                ));
+                $deepDiffs = array_keys(array_filter($old, self::isExpectedDeepDiff(...), ARRAY_FILTER_USE_BOTH));
                 $this->assertSame($deepDiffs, $new['deep_diffs'] ?? [], $where.': deep_diffs');
 
                 foreach ($old as $field => $diff) {
@@ -384,7 +523,25 @@ final class MigrationEndToEndTest extends TestCase
     }
 
     /**
-     * A tree of {old, new} leaves, as 1.x writes for a JSON field since auditor 3.2.0.
+     * Since auditor 3.2.0, 1.x writes a deep diff for a JSON field when both values are arrays: a tree whose leaves are
+     * {old, new}, holding at least one change. Otherwise, and for every change before 3.2.0, a field diff holding the
+     * values (which may also be arrays).
+     */
+    private static function isExpectedDeepDiff(array $diff, string $field): bool
+    {
+        if (!\in_array($field, self::JSON_FIELDS, true)) {
+            return false;
+        }
+
+        if ([] !== array_diff(array_keys($diff), ['new', 'old'])) {
+            return true;
+        }
+
+        return self::isDeepDiffTree($diff) && (!\array_key_exists('new', $diff) || !\array_key_exists('old', $diff) || self::holdsAChange($diff));
+    }
+
+    /**
+     * A tree of {old, new} leaves; 1.x writes an empty JSON array or object as is.
      */
     private static function isDeepDiffTree(mixed $node): bool
     {
@@ -393,7 +550,6 @@ final class MigrationEndToEndTest extends TestCase
         }
 
         foreach ($node as $child) {
-            // 1.x writes an empty JSON array or object as is
             $isLeaf = \is_array($child) && [] === array_diff(array_keys($child), ['new', 'old']);
             if (!$isLeaf && !self::isDeepDiffTree($child)) {
                 return false;
@@ -403,8 +559,15 @@ final class MigrationEndToEndTest extends TestCase
         return true;
     }
 
+    private static function holdsAChange(array $node): bool
+    {
+        return array_any($node, static fn ($child): bool => \is_array($child) && [] !== $child && ([] === array_diff(array_keys($child), ['new', 'old']) || self::holdsAChange($child)));
+    }
+
     /**
-     * JSON fields of a legacy entry whose deep diff only has "new" and "old" keys.
+     * JSON fields of a legacy entry that are deep diffs with only "new" and "old" keys: the history API cannot tell
+     * them from field diffs in an unconverted entry. (Field diffs written before auditor 3.2.0 are not among them: they
+     * must be read the same way before and after the conversion.).
      *
      * @param array<string, mixed> $legacy
      *
@@ -421,8 +584,7 @@ final class MigrationEndToEndTest extends TestCase
             self::JSON_FIELDS,
             static fn (string $field): bool => \is_array($diffs[$field] ?? null)
                 && [] === array_diff(array_keys($diffs[$field]), ['new', 'old'])
-                && array_all($diffs[$field], static fn (mixed $value): bool => \is_array($value)),
-            // (a field diff of whole JSON values written before auditor 3.2.0 has the same shape)
+                && self::isExpectedDeepDiff($diffs[$field], $field),
         ));
     }
 
@@ -560,7 +722,7 @@ final class MigrationEndToEndTest extends TestCase
 
         foreach ([Environment::PRIMARY, Environment::SECONDARY] as $storage) {
             $dbal = new DbalConfiguration();
-            $dbal->setMiddlewares([new AuditorMiddleware()]);
+            $dbal->setMiddlewares([new AuditorMiddleware(), new FailingStatementMiddleware()]);
             $orm = ORMSetup::createAttributeMetadataConfig([Environment::entityPath()], true);
             $orm->setNamingStrategy(new UnderscoreNamingStrategy(CASE_LOWER));
             $orm->enableNativeLazyObjects(true);

@@ -180,7 +180,7 @@ migration-e2e: validate_matrix
 	PHP_VERSION=$(php) SYMFONY_VERSION=$(sf) DATABASE_URL=$(DATABASE_URL) \
 	sh -c "docker compose $(compose_files) run --rm --remove-orphans php-cli composer update --working-dir=tools/migration-e2e/v1 --no-progress --quiet"
 	PHP_VERSION=$(php) SYMFONY_VERSION=$(sf) DATABASE_URL=$(DATABASE_URL) \
-	sh -c "docker compose $(compose_files) run --rm --remove-orphans php-cli vendor/bin/phpunit --no-coverage --group migration-e2e $(args)"
+	sh -c "docker compose $(compose_files) run --rm --remove-orphans -e E2E_DATABASE_URL=$(DATABASE_URL) php-cli vendor/bin/phpunit --no-coverage --group migration-e2e $(args)"
 
 # Run Blackfire profiling
 # Requires BLACKFIRE_SERVER_ID, BLACKFIRE_SERVER_TOKEN, BLACKFIRE_CLIENT_ID, BLACKFIRE_CLIENT_TOKEN

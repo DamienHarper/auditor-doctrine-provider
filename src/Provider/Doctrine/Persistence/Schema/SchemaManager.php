@@ -47,8 +47,9 @@ final readonly class SchemaManager
     public function __construct(private DoctrineProvider $provider) {}
 
     /**
-     * Returns the names of audit tables that still carry the legacy v1 schema (transaction_hash
-     * column present). Used by UpdateSchemaCommand to refuse execution until migration is done.
+     * Returns the names of audit tables that still carry the legacy v1 schema: any legacy column (transaction_hash,
+     * blame_user, blame_user_fqdn, blame_user_firewall, ip), on the storage the entity is mapped to, as
+     * audit:schema:migrate sees them. Used by UpdateSchemaCommand to refuse execution until migration is done.
      *
      * @return list<string>
      */
@@ -57,31 +58,26 @@ final readonly class SchemaManager
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
 
-        /** @var StorageService[] $storageServices */
-        $storageServices = $this->provider->getStorageServices();
-
+        $schemas = [];
         $legacy = [];
 
-        foreach ($storageServices as $storageService) {
-            $connection = $storageService->getEntityManager()->getConnection();
-            $schema = $connection->createSchemaManager()->introspectSchema();
+        foreach (array_keys($configuration->getEntities()) as $entity) {
+            $auditTableName = $this->resolveAuditTableName($entity, $configuration);
+            if (null === $auditTableName) {
+                continue;
+            }
 
-            foreach (array_keys($configuration->getEntities()) as $entity) {
-                $auditTableName = $this->resolveAuditTableName($entity, $configuration);
-                if (null === $auditTableName) {
-                    continue;
-                }
+            $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+            $schema = $schemas[spl_object_id($connection)] ??= $connection->createSchemaManager()->introspectSchema();
+            if (!$schema->hasTable($auditTableName)) {
+                continue;
+            }
 
-                if (!$schema->hasTable($auditTableName)) {
-                    continue;
-                }
-
-                // any legacy column: a table that lost transaction_hash (to a Doctrine migration, say) may still hold
-                // the legacy blame columns, which audit:schema:update would drop without migrating them
-                $table = $schema->getTable($auditTableName);
-                if ([] !== array_filter(['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'], $table->hasColumn(...))) {
-                    $legacy[] = $auditTableName;
-                }
+            // any legacy column: a table that lost transaction_hash (to a Doctrine migration, say) may still hold
+            // the legacy blame columns, which audit:schema:update would drop without migrating them
+            $table = $schema->getTable($auditTableName);
+            if ([] !== array_filter(['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'], $table->hasColumn(...))) {
+                $legacy[] = $auditTableName;
             }
         }
 

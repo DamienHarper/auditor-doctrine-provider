@@ -6,6 +6,7 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Provider\Doctrine\Persistence\Command\MigrateSchemaCommand;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Bike;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Inheritance\SingleTable\Car;
@@ -19,6 +20,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\Table;
@@ -106,7 +108,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester->execute(['--force' => true]);
 
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $output);
+        $this->assertStringContainsString('Step done. The migration is not complete', $output);
     }
 
     #[Depends('testExecuteWithLegacySchemaAndForce')]
@@ -304,6 +306,27 @@ final class MigrateSchemaCommandTest extends TestCase
     }
 
     /**
+     * A field diff written before auditor 3.2.0 whose values only hold empty arrays ([] to {"filters": []}) is not a
+     * deep diff: a deep diff with both sides holds at least one change.
+     */
+    public function testConvertDiffsKeepsAFieldDiffOfEmptyArraysWrittenBeforeAuditor32(): void
+    {
+        $this->simulateLegacySchema('dummy_entity_audit');
+        $id = $this->insertLegacyRow('dummy_entity_audit', 'update', '90', [
+            'json_array' => ['new' => ['filters' => []], 'old' => []],
+        ]);
+
+        $this->executeConvertDiffs();
+
+        $this->assertSameDiffs([
+            'source' => ['id' => '90', 'class' => DummyEntity::class, 'label' => DummyEntity::class.'#90', 'table' => 'dummy_entity'],
+            'changes' => [
+                'json_array' => ['new' => ['filters' => []], 'old' => []],
+            ],
+        ], $this->fetchConvertedDiffs('dummy_entity_audit', $id));
+    }
+
+    /**
      * {"new": []} inserted yields the deep diff {"new": []}: 1.x writes an empty JSON array as is.
      */
     public function testConvertDiffsKeepsADeepDiffHoldingAnEmptyArray(): void
@@ -460,7 +483,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true, '--convert-diffs' => true, '--limit' => '700']);
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertStringContainsString('Step done. The migration is not complete', $commandTester->getDisplay(true));
 
         $connection = $this->auditConnection();
         $this->assertSame(
@@ -547,6 +570,75 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->assertStringContainsString('dropped without conversion', $commandTester->getDisplay(true));
     }
 
+    /**
+     * After a run that keeps transaction_hash, the check without options must not report "nothing to migrate".
+     */
+    public function testCheckFailsWhileTransactionHashIsKept(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        foreach ([['--force' => true], ['--force' => true, '--convert-diffs' => true]] as $options) {
+            $this->assertSame(Command::SUCCESS, $commandTester->execute($options));
+            $this->assertStringContainsString('Step done. The migration is not complete', $commandTester->getDisplay(true));
+
+            $this->assertSame(Command::FAILURE, $commandTester->execute([]), 'The check must fail while transaction_hash is kept.');
+            $this->assertStringContainsString('still have transaction_hash', $commandTester->getDisplay(true));
+        }
+    }
+
+    public function testLimitNeedsAConversionAndNoDrop(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+
+        foreach ([['--force' => true, '--limit' => '10'], ['--force' => true, '--convert-diffs' => true, '--drop-transaction-hash' => true, '--limit' => '10']] as $options) {
+            $commandTester = new CommandTester($this->createCommand());
+            $this->assertSame(Command::FAILURE, $commandTester->execute($options));
+            $this->assertStringContainsString('--limit limits the conversions', $commandTester->getDisplay(true));
+        }
+
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('schema_version'), 'Nothing must have been migrated.');
+    }
+
+    /**
+     * In a table being migrated, a row whose transaction_hash is not converted yet is found by that hash.
+     */
+    public function testUnconvertedTransactionIsFoundByItsHash(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'a', 'new' => 'b']]);
+        $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'b', 'new' => 'c']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-diffs' => true]));
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+
+        $audits = new Reader($this->provider)->getAuditsByTransactionId(sha1('post_auditupdate1'));
+        $this->assertCount(2, $audits[Post::class] ?? []);
+    }
+
+    /**
+     * The converted diffs are escaped like the ones the provider writes: ASCII only, whatever the column charset.
+     */
+    public function testConvertedDiffsAreEscaped(): void
+    {
+        $platform = $this->auditConnection()->getDatabasePlatform();
+        if ($platform instanceof PostgreSQLPlatform || ($platform instanceof MySQLPlatform && !$platform instanceof MariaDBPlatform)) {
+            $this->markTestSkipped('A native JSON column returns the JSON it stores in its own form.');
+        }
+
+        $this->simulateLegacySchema('post_audit');
+        $id = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Zoë', 'new' => '🚀 中文']]);
+
+        $this->executeConvertDiffs();
+
+        $diffs = $this->auditConnection()->fetchOne('SELECT diffs FROM post_audit WHERE id = ?', [$id]);
+        $this->assertIsString($diffs);
+        $this->assertMatchesRegularExpression('/^[\x00-\x7F]*$/', $diffs);
+        $this->assertSameDiffs(['title' => ['new' => '🚀 中文', 'old' => 'Zoë']], $this->fetchConvertedDiffs('post_audit', $id)['changes'] ?? null);
+    }
+
     public function testLimitMustBeAPositiveInteger(): void
     {
         $this->simulateLegacySchema('post_audit');
@@ -601,7 +693,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true, '--limit' => '1']);
 
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertStringContainsString('Step done. The migration is not complete', $commandTester->getDisplay(true));
         $this->assertTrue($this->hasLegacyTransactionHashIndex('post_audit'), 'The conversion must still find rows by transaction_hash through its index.');
         $this->assertSame(1, (int) $this->auditConnection()->fetchOne('SELECT COUNT(*) FROM post_audit WHERE transaction_id IS NOT NULL'));
     }
@@ -628,7 +720,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true]);
 
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertMatchesRegularExpression('/(\[OK\] Audit schema migration completed successfully!|Step done\. The migration is not complete)/', $commandTester->getDisplay());
         $this->assertFalse($this->hasLegacyTransactionHashIndex('post_audit'));
         $this->assertFalse($this->auditTable('post_audit')->hasColumn('transaction_hash'));
         $this->assertSame(0, (int) $this->auditConnection()->fetchOne('SELECT COUNT(*) FROM post_audit WHERE transaction_id IS NULL'));
@@ -650,7 +742,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true]);
 
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertMatchesRegularExpression('/(\[OK\] Audit schema migration completed successfully!|Step done\. The migration is not complete)/', $commandTester->getDisplay());
         $this->assertSame('01JZZZZZZZZZZZZZZZZZZZZZZZ', $connection->fetchOne('SELECT transaction_id FROM comment_audit WHERE id = ?', [$commentRow]));
     }
 
@@ -663,7 +755,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true]);
 
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertStringContainsString('Step done. The migration is not complete', $commandTester->getDisplay(true));
         $table = $this->auditTable('post_audit');
         $this->assertFalse($table->hasColumn('blame_user'));
         $this->assertFalse($table->hasIndex($this->legacyBlameUserIndexName('post_audit')), 'The 1.x (blame_user, blame_id) index must not survive the migration.');
@@ -797,7 +889,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
 
-        $this->assertStringContainsString('[OK] Audit schema migration completed successfully!', $commandTester->getDisplay());
+        $this->assertStringContainsString('Step done. The migration is not complete', $commandTester->getDisplay(true));
     }
 
     /**

@@ -19,6 +19,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Helper\JsonPlatformHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\BlameOriginFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ChangedFieldFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\NullFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RootFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\ReaderTest;
@@ -223,20 +224,30 @@ final readonly class Reader implements ReaderInterface
             try {
                 $auditTable = $this->getEntityAuditTableName($entity);
 
-                // Detect which transaction column this table uses (once per table per request).
+                // Detect which transaction columns this table has (once per table per request).
                 if (!isset($transactionColumnCache[$auditTable])) {
                     $connection = $this->provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
                     // only this table is introspected: the whole schema was, once per audit table
-                    $transactionColumnCache[$auditTable] = \in_array(Query::TRANSACTION_ID, SchemaHelper::getTableColumnNames($connection, $auditTable), true)
-                        ? Query::TRANSACTION_ID
-                        : Query::LEGACY_TRANSACTION_HASH;
+                    $transactionColumnCache[$auditTable] = array_values(array_intersect(
+                        [Query::TRANSACTION_ID, Query::LEGACY_TRANSACTION_HASH],
+                        SchemaHelper::getTableColumnNames($connection, $auditTable),
+                    ));
                 }
 
-                $transactionColumn = $transactionColumnCache[$auditTable];
+                $transactionColumns = $transactionColumnCache[$auditTable];
 
-                if (Query::TRANSACTION_ID === $transactionColumn) {
+                if (\in_array(Query::TRANSACTION_ID, $transactionColumns, true)) {
                     // Schema v2: use the standard createQuery path.
                     $audits = $this->createQuery($entity, ['transaction_id' => $transactionId, 'page_size' => null])->execute();
+
+                    if (\in_array(Query::LEGACY_TRANSACTION_HASH, $transactionColumns, true)) {
+                        // A table being migrated: a row whose transaction_hash is not converted yet stands for its
+                        // transaction by that hash (see Entry::fromArray()).
+                        $query = $this->createQuery($entity, ['page_size' => null]);
+                        $query->addFilter(new SimpleFilter(Query::LEGACY_TRANSACTION_HASH, $transactionId));
+                        $query->addFilter(new NullFilter(Query::TRANSACTION_ID));
+                        $audits = [...$audits, ...$query->execute()];
+                    }
                 } else {
                     // Schema v1 (legacy): transaction_id column does not exist yet — filter by transaction_hash.
                     $query = $this->createQuery($entity, ['page_size' => null]);

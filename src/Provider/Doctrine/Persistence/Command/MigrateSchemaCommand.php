@@ -146,6 +146,13 @@ final class MigrateSchemaCommand extends Command
             return Command::FAILURE;
         }
 
+        if (null !== $limit && (!$convertDiffs && !$convertTransactionHash || $dropTransactionHashOption)) {
+            // --limit only limits conversions, and keeps the legacy columns: it would silently ignore the drop
+            $io->error('--limit limits the conversions (--convert-diffs, --convert-transaction-hash, --convert-all): it needs one of them, and cannot be combined with --drop-transaction-hash.');
+
+            return Command::FAILURE;
+        }
+
         /** @var DoctrineProvider $provider */
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
         $provider->getConfiguration();
@@ -205,9 +212,15 @@ final class MigrateSchemaCommand extends Command
         }
 
         if (!$hasDdl && !$convertDiffs && !$convertTransactionHash) {
-            $io->success('Schema is already up to date. Nothing to migrate.');
+            // The legacy tables only keep transaction_hash (kept by a run without --convert-transaction-hash), and
+            // maybe unconverted diffs: nothing to do without a conversion option, but the migration is not complete.
+            $io->caution([
+                \sprintf('%d audit table(s) still have transaction_hash, and %d row(s) legacy diffs (schema_version = 1).', \count($tables), $this->countLegacyDiffsRows($allDiffsTables)),
+                '',
+                \sprintf('Run <info>%s --force --convert-all</info> to convert them, or <info>--force --drop-transaction-hash</info> to drop transaction_hash without converting it.', (string) $this->getName()),
+            ]);
 
-            return Command::SUCCESS;
+            return Command::FAILURE;
         }
 
         if ($dumpSql) {
@@ -307,10 +320,14 @@ final class MigrateSchemaCommand extends Command
 
         $io->newLine();
 
+        // what is left to do once this run is over
+        $legacyTablesLeft = $this->collectLegacyTables($provider, $schemaManager);
+        $legacyDiffsRowsLeft = $this->countLegacyDiffsRows(array_merge($legacyTablesLeft, $this->collectDiffsConversionTables($provider, $schemaManager, $legacyTablesLeft)));
+
         if ([] !== $unconvertible) {
             $lines = [
                 \sprintf('%d row(s) could not be converted and were left as they are (schema_version = 1):', array_sum(array_map(count(...), $unconvertible))),
-                'their diffs are not valid JSON, do not hold the expected structure, or their type is unknown.',
+                'their diffs are not valid JSON, do not decode to an object, hold a field entry that is not an object, or their type is unknown.',
                 '',
             ];
             foreach ($unconvertible as $tableName => $ids) {
@@ -320,8 +337,15 @@ final class MigrateSchemaCommand extends Command
             $lines[] = '';
             $lines[] = 'They stay readable as legacy entries. Fix or delete them, then run the command again.';
             $io->warning($lines);
-        } else {
+        } elseif ([] === $legacyTablesLeft && 0 === $legacyDiffsRowsLeft) {
             $io->success('Audit schema migration completed successfully!');
+        } else {
+            // a step of a migration run in several commands: done, but the migration is not complete
+            $io->info(\sprintf(
+                'Step done. The migration is not complete: %d audit table(s) keep legacy columns, %d row(s) legacy diffs (schema_version = 1).',
+                \count($legacyTablesLeft),
+                $legacyDiffsRowsLeft,
+            ));
         }
 
         if (null !== $limit) {
@@ -418,7 +442,7 @@ final class MigrateSchemaCommand extends Command
 
             if (isset($auditTables[$auditTableName]) && $auditTables[$auditTableName][0] !== $connection) {
                 // the tables are keyed by name: two of them would be migrated as one
-                throw new \RuntimeException(\sprintf('The audit table %s exists on several storages: audit:schema:migrate cannot migrate them. Migrate each storage with its own configuration.', $auditTableName));
+                throw new \RuntimeException(\sprintf('The audit table %s exists on several storages: audit:schema:migrate does not support it, as it would convert them as one table. Give the audited tables distinct names (table_prefix or table_suffix are global, so rename one of the entity tables) before migrating.', $auditTableName));
             }
 
             $auditTables[$auditTableName] = [$connection, $schema->getTable($auditTableName)];
@@ -811,7 +835,7 @@ final class MigrateSchemaCommand extends Command
         }
 
         $startTime = microtime(true);
-        $processedTotal = 0;
+        $convertedTotal = 0;
         $remaining = $limit;
         $unconvertible = [];
 
@@ -821,14 +845,14 @@ final class MigrateSchemaCommand extends Command
             }
 
             $auditedEntity = $auditedEntities[$tableName] ?? ['table' => '', 'classes' => []];
-            [$processedInTable, $skipped] = $this->convertDiffsForTable($tableName, $connection, $jsonFields[$tableName] ?? [], $auditedEntity, $io, $remaining);
-            $processedTotal += $processedInTable;
+            [$convertedInTable, $skipped] = $this->convertDiffsForTable($tableName, $connection, $jsonFields[$tableName] ?? [], $auditedEntity, $io, $remaining);
+            $convertedTotal += $convertedInTable;
             if ([] !== $skipped) {
                 $unconvertible[$tableName] = $skipped;
             }
 
             if (null !== $remaining) {
-                $remaining -= $processedInTable;
+                $remaining -= $convertedInTable;
             }
         }
 
@@ -836,14 +860,15 @@ final class MigrateSchemaCommand extends Command
 
         $io->text(\sprintf(
             '  Converted <info>%d</info> / %d row(s) in %.1fs.',
-            $processedTotal - array_sum(array_map(count(...), $unconvertible)),
+            $convertedTotal,
             $totalRows,
             $elapsed,
         ));
 
-        if (null !== $limit && $processedTotal < $totalRows) {
-            $leftRows = $totalRows - $processedTotal;
-            $estimatedSeconds = $processedTotal > 0 ? (int) round($elapsed * $leftRows / $processedTotal) : 0;
+        // the rows left unconverted are read again by every run, but never converted
+        $leftRows = $totalRows - $convertedTotal - array_sum(array_map(count(...), $unconvertible));
+        if (null !== $limit && 0 < $leftRows) {
+            $estimatedSeconds = $convertedTotal > 0 ? (int) round($elapsed * $leftRows / $convertedTotal) : 0;
             $io->text(\sprintf(
                 '  → Estimated remaining: ~%s (%d row(s) left)',
                 $this->formatSeconds($estimatedSeconds),
@@ -870,22 +895,23 @@ final class MigrateSchemaCommand extends Command
      *
      * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
-     * @param ?int                                        $limit         Maximum number of rows to process (null = no limit)
+     * @param ?int                                        $limit         Maximum number of rows to convert (null = no limit)
      *
-     * @return array{int, list<int|string>} number of rows processed, ids of the rows left unconverted
+     * @return array{int, list<int|string>} number of rows converted, ids of the rows left unconverted
      */
     private function convertDiffsForTable(string $tableName, Connection $connection, array $jsonFields, array $auditedEntity, SymfonyStyle $io, ?int $limit): array
     {
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
-        $processed = 0;
+        $converted = 0;
         $skipped = [];
         $lastId = 0;
 
         while (true) {
             $batchLimit = self::BATCH_SIZE;
             if (null !== $limit) {
-                $remaining = $limit - $processed;
+                // --limit counts converted rows: the rows left unconverted do not use it up
+                $remaining = $limit - $converted;
                 if ($remaining <= 0) {
                     break;
                 }
@@ -909,15 +935,15 @@ final class MigrateSchemaCommand extends Command
 
             $updates = [];
             foreach ($rows as $row) {
-                $converted = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
-                if (null === $converted) {
+                $convertedDiffs = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
+                if (null === $convertedDiffs) {
                     $skipped[] = $row['id'];
 
                     continue;
                 }
 
                 // escaped like the diffs written by the provider, so that the column charset does not matter
-                $updates[] = ['id' => $row['id'], 'diffs' => json_encode($converted, JSON_THROW_ON_ERROR)];
+                $updates[] = ['id' => $row['id'], 'diffs' => json_encode($convertedDiffs, JSON_THROW_ON_ERROR)];
             }
 
             $connection->transactional(static function (Connection $connection) use ($tableName, $updates): void {
@@ -926,7 +952,7 @@ final class MigrateSchemaCommand extends Command
                 }
             });
 
-            $processed += \count($rows);
+            $converted += \count($updates);
             $lastId = $rows[\count($rows) - 1]['id'];
 
             if (\count($rows) < $batchLimit) {
@@ -934,9 +960,9 @@ final class MigrateSchemaCommand extends Command
             }
         }
 
-        $io->text(\sprintf('    Converted <info>%d</info> row(s)%s.', $processed - \count($skipped), [] === $skipped ? '' : \sprintf(', <comment>%d left unconverted</comment>', \count($skipped))));
+        $io->text(\sprintf('    Converted <info>%d</info> row(s)%s.', $converted, [] === $skipped ? '' : \sprintf(', <comment>%d left unconverted</comment>', \count($skipped))));
 
-        return [$processed, $skipped];
+        return [$converted, $skipped];
     }
 
     /**
@@ -1037,7 +1063,25 @@ final class MigrateSchemaCommand extends Command
             return true;
         }
 
+        // Both sides present: a deep diff holds at least one real change, whereas a field diff written before 3.2.0
+        // whose values only hold empty arrays ([] to {"filters": []}) would otherwise pass for a tree of empty leaves.
+        if (\array_key_exists('new', $diff) && \array_key_exists('old', $diff)) {
+            return !self::isDiffNode($diff) || !self::hasChangeLeaf($diff);
+        }
+
         return !self::isDiffNode($diff);
+    }
+
+    /**
+     * Whether a diff node holds at least one leaf that is not empty ({'old': v} and/or {'new': v}).
+     */
+    private static function hasChangeLeaf(array $node): bool
+    {
+        return array_any(
+            $node,
+            static fn (mixed $child): bool => \is_array($child) && [] !== $child
+                && ([] === array_diff(array_keys($child), ['new', 'old']) || self::hasChangeLeaf($child)),
+        );
     }
 
     /**

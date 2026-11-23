@@ -66,8 +66,10 @@ then runs `audit:schema:migrate` on the same databases and compares every row wi
 from the default suite (group `migration-e2e`):
 ```bash
 composer install --working-dir=tools/migration-e2e/v1
-vendor/bin/phpunit --group migration-e2e   # DATABASE_URL as for the other tests; the secondary storage is an SQLite file
+E2E_DATABASE_URL=… vendor/bin/phpunit --group migration-e2e   # SQLite files without it; the secondary storage is always an SQLite file
 ```
+The generator drops every table of the `E2E_DATABASE_URL` database (never `DATABASE_URL`). `E2E_VOLUME` sets the size of
+the volume table, to time the migration.
 CI: `.github/workflows/migration-e2e.yml`, on changes to the migration, schema or reader code, nightly and on demand
 (input `v1_version` to start from a given 1.x release). The console lock needs semaphores: in a sandbox where they
 are denied, the commands print "already running in another process" and fail.
