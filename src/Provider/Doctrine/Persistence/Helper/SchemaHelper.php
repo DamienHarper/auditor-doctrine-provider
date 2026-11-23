@@ -240,8 +240,8 @@ abstract class SchemaHelper
     /**
      * Returns columns of the audit root index table.
      *
-     * The string columns that take part in composite indices are 191 characters long, so that the indices fit in the
-     * 3072 bytes InnoDB allows with utf8mb4.
+     * root_class, root_id and audit_table are 191 characters long and object_id 255, like in the audit tables, so that
+     * the composite indices fit in the 3072 bytes InnoDB allows with utf8mb4.
      *
      * @return array<string, array{type: string, options: array<string, mixed>}>
      */

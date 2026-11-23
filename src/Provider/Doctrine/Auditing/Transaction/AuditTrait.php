@@ -518,7 +518,7 @@ trait AuditTrait
 
         $label = $resolver($entity);
 
-        return \is_string($label) ? $label : null;
+        return \is_string($label) || $label instanceof \Stringable ? (string) $label : null;
     }
 
     /**

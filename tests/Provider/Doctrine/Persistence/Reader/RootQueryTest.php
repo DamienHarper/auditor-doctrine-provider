@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader;
 
+use DH\Auditor\Blame\BlameContext;
 use DH\Auditor\Exception\AccessDeniedException;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\History\BlameOrigin;
 use DH\Auditor\History\ChangeKind;
 use DH\Auditor\Model\Entry;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
@@ -174,6 +177,8 @@ final class RootQueryTest extends TestCase
         $this->assertSame('Hello', $changes['title']->old);
         $this->assertSame('Hello world', $changes['title']->new);
         $this->assertSame(ChangeKind::Created, $changes['body']?->kind, 'A field never changed comes with the creation of the entity.');
+        $this->assertSame('Body', $changes['body']->getValue('body'));
+        $this->assertSame('Hello world', $changes['title']->getValue('title'));
         $this->assertSame([], $this->reader()->getLastChanges(Post::class, $this->id($this->post), []));
         $this->assertSame(['title' => null], $this->reader()->getLastChanges(Post::class, 999, ['title']));
     }
@@ -184,6 +189,75 @@ final class RootQueryTest extends TestCase
 
         $this->assertSame(['Comment#2 update', 'Comment#1 update', 'Comment#1 insert', 'Comment#2 insert'], array_map(static fn (Entry $entry): string => 'Comment#'.$entry->objectId.' '.$entry->type, $entries));
         $this->assertCount(2, $this->reader()->getFieldHistory(Comment::class, $this->id($this->first), 'body')->execute());
+    }
+
+    public function testReadScopeAppliesToEveryQuery(): void
+    {
+        $this->provider->getConfiguration()->setReadScope(static function (Query $query, string $entity): void {
+            $query->addFilter(new SimpleFilter(Query::TYPE, 'insert'));
+        });
+        $reader = $this->reader();
+        $id = $this->id($this->alice);
+
+        $history = $reader->createRootQuery(Author::class, $id);
+        $this->assertSame(4, $history->count());
+        $this->assertCount(4, iterator_to_array($history->iterate(), false));
+        $this->assertSame(['insert'], array_values(array_unique(array_map(static fn (Entry $entry): string => $entry->type, $history->fetch(100, groupKey: false)->entries))));
+        $this->assertCount(2, $reader->createQuery(Comment::class)->execute());
+
+        $changes = $reader->getLastChanges(Post::class, $this->id($this->post), ['title']);
+        $this->assertSame(ChangeKind::Created, $changes['title']?->kind, 'The update of the title is out of the scope.');
+        $this->assertSame('Hello', $changes['title']->getValue('title'));
+    }
+
+    public function testSeveralFlushesInOneTransaction(): void
+    {
+        $reader = $this->reader();
+        $alice = $reader->createRootQuery(Author::class, $this->id($this->alice), ['self' => false])->count();
+        $bob = $reader->createRootQuery(Author::class, $this->id($this->bob), ['self' => false])->count();
+
+        $this->entityManager()->wrapInTransaction(function (EntityManagerInterface $em): void {
+            $this->first->setBody('Edited under Bob');
+            $em->flush();
+
+            $this->post->setAuthor($this->alice);
+            $em->flush();
+        });
+
+        $this->assertSame($bob + 2, $reader->createRootQuery(Author::class, $this->id($this->bob), ['self' => false])->count(), 'The comment edit and the move are in the history of Bob.');
+        $this->assertSame($alice + 1, $reader->createRootQuery(Author::class, $this->id($this->alice), ['self' => false])->count(), 'The move is in the history of Alice.');
+    }
+
+    public function testBlameOrigins(): void
+    {
+        $em = $this->entityManager();
+        $stack = $this->provider->getAuditor()->getConfiguration()->getBlameContextStack();
+        $stack->run(new BlameContext('console', 'app:rename'), function () use ($em): void {
+            $this->alice->setFullname('Alice (console)');
+            $em->flush();
+        });
+        $stack->run(new BlameContext('messenger', 'App\Message\Rename'), function () use ($em): void {
+            $this->alice->setFullname('Alice (messenger)');
+            $em->flush();
+        });
+        $this->provider->getAuditor()->getConfiguration()->setSecurityProvider(static fn (): array => [null, null]);
+        $this->alice->setFullname('Alice (system)');
+        $em->flush();
+
+        $reader = $this->reader();
+        $id = $this->id($this->alice);
+        foreach ([BlameOrigin::Console, BlameOrigin::Messenger, BlameOrigin::System] as $origin) {
+            $this->assertSame(1, $reader->createRootQuery(Author::class, $id, ['blame_origin' => $origin])->count(), $origin->value);
+        }
+
+        $this->assertSame(12, $reader->createRootQuery(Author::class, $id, ['blame_origin' => BlameOrigin::Http])->count());
+    }
+
+    public function testInvalidOptions(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->reader()->createRootQuery(Author::class, $this->id($this->alice), ['paths' => ['unknown']]);
     }
 
     private function configureEntities(): void

@@ -32,7 +32,6 @@ final class RootFilterTest extends TestCase
         $this->assertSame(['App\Author', '7', 'post_audit', ['author']], array_values($data['params']));
 
         $this->assertStringStartsWith('(SELECT MIN(r.root_path) FROM audit_root r', $filter->getRootPathSQL($query)['sql']);
-        $this->assertSame('App\Base', $filter->withRootClass('App\Base')->getRootClass());
     }
 
     public function testTheRootIndexTableMustBeSet(): void

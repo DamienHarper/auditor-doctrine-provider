@@ -9,8 +9,9 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
-use DH\Auditor\Tests\Provider\Doctrine\Auditing\Root\AuditRootTest;
+use DH\Auditor\Tests\Provider\Doctrine\Auditing\Root\RootIndexTest;
 use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\EntityNotFoundException;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Mapping\InverseSideMapping;
 
@@ -23,7 +24,7 @@ use Doctrine\ORM\Mapping\InverseSideMapping;
  *   just assigned: the owner is then looked up among the entities scheduled for insertion or update.
  * - A path whose value is null is skipped.
  *
- * @see AuditRootTest
+ * @see RootIndexTest
  *
  * @internal
  */
@@ -34,7 +35,20 @@ final class RootResolver
      */
     private array $segments = [];
 
-    public function __construct(private readonly DoctrineProvider $provider) {}
+    private readonly ObjectIdentifier $identifier;
+
+    public function __construct(private readonly DoctrineProvider $provider, ?ObjectIdentifier $identifier = null)
+    {
+        $this->identifier = $identifier ?? new ObjectIdentifier($provider);
+    }
+
+    /**
+     * Identifier of a root, in the format of the object_id column; null while the flush has not generated it.
+     */
+    public function identify(EntityManagerInterface $entityManager, object $root): ?string
+    {
+        return $this->identifier->identify($entityManager, $root);
+    }
 
     /**
      * @param array<string, mixed> $changeset changeset of the entity in the current flush, if any
@@ -126,11 +140,12 @@ final class RootResolver
     {
         try {
             $entityManager->getUnitOfWork()->initializeObject($entity);
-            $value = $meta->getFieldValue($entity, $field);
-        } catch (\Throwable) {
+        } catch (EntityNotFoundException) {
             // an uninitialized proxy whose row is gone: no root to follow
             return null;
         }
+
+        $value = $meta->getFieldValue($entity, $field);
 
         return \is_object($value) ? $value : null;
     }
@@ -163,16 +178,8 @@ final class RootResolver
     private function reference(EntityManagerInterface $entityManager, string $path, object $root): RootReference
     {
         $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($root));
-        $unitOfWork = $entityManager->getUnitOfWork();
 
-        $id = null;
-        if ($unitOfWork->isInIdentityMap($root)) {
-            $identifier = $unitOfWork->getEntityIdentifier($root);
-            if ([] !== $identifier) {
-                $id = implode('-', array_map(static fn (mixed $value): string => \is_scalar($value) || $value instanceof \Stringable ? (string) $value : '', $identifier));
-            }
-        }
-
-        return new RootReference($path, $meta->rootEntityName, $root, $id);
+        // captured now: Doctrine resets the generated identifier of an entity deleted by the flush
+        return new RootReference($path, $meta->rootEntityName, $root, $this->identify($entityManager, $root));
     }
 }

@@ -10,7 +10,6 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\RebuildRootsCommandTe
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
-use Doctrine\ORM\Mapping\ClassMetadata;
 
 /**
  * Rebuilds the audit root index of existing audit entries, by replaying their diffs: the value of the first segment
@@ -75,7 +74,10 @@ final class RootIndexRebuilder
      *
      * @param array{connection: Connection, entities: array<string, list<string>>} $table
      *
-     * @return array{entries: int, rows: int, skipped: int} entries read, missing index rows, legacy entries skipped
+     * @return array{entries: int, rows: int, legacy: int, unreadable: int} entries read, missing index rows, entries
+     *                                                                      skipped because they are schema v1 or have
+     *                                                                      no transaction id, entries whose diffs
+     *                                                                      cannot be decoded
      */
     public function rebuild(string $auditTable, array $table, bool $dryRun = false): array
     {
@@ -86,25 +88,34 @@ final class RootIndexRebuilder
 
         $rows = [];
         $entries = 0;
-        $skipped = 0;
+        $legacy = 0;
+        $unreadable = 0;
 
         /** @var array<string, array<string, ?array{string, string}>> $state object id => field => value */
         $state = [];
         $result = $connection->executeQuery(\sprintf('SELECT id, type, object_id, discriminator, transaction_id, diffs, created_at, schema_version FROM %s ORDER BY created_at ASC, transaction_id ASC, id ASC', $auditTable));
         foreach ($result->iterateAssociative() as $row) {
             ++$entries;
-            if (2 > $this->schemaVersion($row) || !\is_string($row['transaction_id'] ?? null)) {
-                ++$skipped;
+            if (2 > $this->schemaVersion($row) || !\is_string($row['transaction_id'] ?? null) || '' === $row['transaction_id']) {
+                ++$legacy;
 
                 continue;
             }
 
-            $entity = $single ? array_key_first($table['entities']) : (\is_string($row['discriminator']) ? $row['discriminator'] : null);
+            // an entity of an inheritance hierarchy is written with its discriminator: only its own paths apply
+            $entity = \is_string($row['discriminator'] ?? null) && '' !== $row['discriminator']
+                ? $row['discriminator']
+                : ($single ? array_key_first($table['entities']) : null);
             $paths = null === $entity ? [] : ($table['entities'][$entity] ?? []);
             $objectId = (string) $row['object_id'];
             $createdAt = (string) $row['created_at'];
             $position = $createdAt.' '.$row['transaction_id'];
             $changes = $this->changes($row['diffs']);
+            if (null === $changes) {
+                ++$unreadable;
+
+                continue;
+            }
 
             $found = [];
             foreach ($paths as $path) {
@@ -131,7 +142,7 @@ final class RootIndexRebuilder
 
                     if (null !== $value) {
                         $key = $value[0]."\0".$value[1]."\0".$path;
-                        $found[$key] = [$this->rootClass($value[0]), $value[1], $path];
+                        $found[$key] = [$this->rootClass($value[0], $entity), $value[1], $path];
                     }
                 }
             }
@@ -182,7 +193,7 @@ final class RootIndexRebuilder
             });
         }
 
-        return ['entries' => $entries, 'rows' => \count($rows), 'skipped' => $skipped];
+        return ['entries' => $entries, 'rows' => \count($rows), 'legacy' => $legacy, 'unreadable' => $unreadable];
     }
 
     /**
@@ -226,7 +237,7 @@ final class RootIndexRebuilder
                     continue;
                 }
 
-                $change = $this->changes($row['diffs'])[$field] ?? null;
+                $change = ($this->changes($row['diffs']) ?? [])[$field] ?? null;
                 if (\is_array($change) && \array_key_exists('new', $change)) {
                     $timeline[(string) $row['object_id']][] = [$row['created_at'].' '.$row['transaction_id'], $this->reference($change['new'])];
                 }
@@ -245,21 +256,25 @@ final class RootIndexRebuilder
     }
 
     /**
-     * @return array<array-key, mixed>
+     * @return null|array<array-key, mixed> the changes of a v2 diff, null when the diffs cannot be decoded
      */
-    private function changes(mixed $diffs): array
+    private function changes(mixed $diffs): ?array
     {
         if (!\is_string($diffs)) {
-            return [];
+            return null;
         }
 
         try {
             $decoded = json_decode($diffs, true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
-            return [];
+            return null;
         }
 
-        return \is_array($decoded) && \is_array($decoded['changes'] ?? null) ? $decoded['changes'] : [];
+        if (!\is_array($decoded)) {
+            return null;
+        }
+
+        return \is_array($decoded['changes'] ?? null) ? $decoded['changes'] : [];
     }
 
     /**
@@ -267,22 +282,25 @@ final class RootIndexRebuilder
      */
     private function reference(mixed $summary): ?array
     {
-        if (!\is_array($summary) || !\is_string($summary['class'] ?? null) || !\is_scalar($summary['id'] ?? null)) {
+        if (!\is_array($summary) || !\is_string($summary['class'] ?? null)) {
             return null;
         }
 
-        return [$summary['class'], (string) $summary['id']];
+        // the summary is keyed by the name of the primary key ("pkName"), "id" by default
+        $key = \is_string($summary['pkName'] ?? null) ? $summary['pkName'] : 'id';
+
+        return \is_scalar($summary[$key] ?? null) ? [$summary['class'], (string) $summary[$key]] : null;
     }
 
-    private function rootClass(string $class): string
+    /**
+     * Root class of the inheritance hierarchy of $class, read from the entity manager of the audited $entity (the
+     * root itself does not have to be audited).
+     */
+    private function rootClass(string $class, string $entity): string
     {
-        try {
-            $metadata = $this->provider->getAuditingServiceForEntity($class)->getEntityManager()->getClassMetadata($class);
-        } catch (\Throwable) {
-            return $class;
-        }
+        $entityManager = $this->provider->getAuditingServiceForEntity($entity)->getEntityManager();
 
-        return $metadata instanceof ClassMetadata ? $metadata->rootEntityName : $class;
+        return $entityManager->getMetadataFactory()->isTransient($class) ? $class : $entityManager->getClassMetadata($class)->rootEntityName;
     }
 
     private function configuration(): Configuration

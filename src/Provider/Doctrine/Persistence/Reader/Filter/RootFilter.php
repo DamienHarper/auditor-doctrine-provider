@@ -11,8 +11,8 @@ use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\Filter\RootFilterTest;
 /**
  * Keeps the audit entries indexed under an audit root (see #[AuditRoot]), optionally through some paths only.
  *
- * The root class is the root class of its inheritance hierarchy: Reader::createRootQuery() and read scopes added
- * through the reader normalize it.
+ * Roots are indexed under the root class of their inheritance hierarchy: Reader::createRootQuery() normalizes the
+ * class, a filter built by hand (in a read scope for instance) must be given that class.
  *
  * @see RootFilterTest
  */
@@ -48,11 +48,6 @@ final readonly class RootFilter implements QueryAwareFilterInterface
     public function getPaths(): array
     {
         return $this->paths;
-    }
-
-    public function withRootClass(string $rootClass): self
-    {
-        return new self($rootClass, $this->rootId, $this->paths);
     }
 
     #[\Deprecated(message: 'Use getSQLForQuery() instead')]

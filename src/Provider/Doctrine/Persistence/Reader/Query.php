@@ -73,6 +73,18 @@ final class Query implements QueryInterface
 
     private array $orderBy = [];
 
+    /**
+     * The root filter of the history this query reads (Reader::createRootQuery()): the path an entry was indexed
+     * under is read from it, whatever the other root filters (a read scope may add some).
+     */
+    private ?RootFilter $historyRoot = null;
+
+    /**
+     * Whether a null transaction id sorts as an empty string, like the cursors of RootQuery (by default, PostgreSQL
+     * sorts nulls first in descending order and MySQL last).
+     */
+    private bool $nullTransactionIdAsEmpty = false;
+
     private int $offset = 0;
 
     private int $limit = 0;
@@ -153,6 +165,30 @@ final class Query implements QueryInterface
         }
 
         $this->orderBy[$field] = $direction;
+
+        return $this;
+    }
+
+    /**
+     * Adds the root filter of the history the query reads.
+     *
+     * @internal
+     */
+    public function setHistoryRoot(RootFilter $filter): self
+    {
+        $this->historyRoot = $filter;
+
+        return $this->addFilter($filter);
+    }
+
+    /**
+     * Sorts a null transaction id as an empty string, on every platform.
+     *
+     * @internal
+     */
+    public function sortNullTransactionIdAsEmpty(): self
+    {
+        $this->nullTransactionIdAsEmpty = true;
 
         return $this;
     }
@@ -263,9 +299,8 @@ final class Query implements QueryInterface
         ;
 
         // entries read through a root filter tell the path they were indexed under
-        $rootFilter = $this->filters[self::ROOT][0] ?? null;
-        if ($withRootPath && $rootFilter instanceof RootFilter) {
-            $data = $rootFilter->getRootPathSQL($this);
+        if ($withRootPath && $this->historyRoot instanceof RootFilter) {
+            $data = $this->historyRoot->getRootPathSQL($this);
             $queryBuilder->select('at.*', $data['sql'].' AS root_path');
             foreach ($data['params'] as $name => $value) {
                 if (\is_array($value)) {
@@ -402,7 +437,7 @@ final class Query implements QueryInterface
     private function buildOrderBy(QueryBuilder $queryBuilder): QueryBuilder
     {
         foreach ($this->orderBy as $field => $direction) {
-            $queryBuilder->addOrderBy($field, $direction);
+            $queryBuilder->addOrderBy(self::TRANSACTION_ID === $field && $this->nullTransactionIdAsEmpty ? "COALESCE(transaction_id, '')" : $field, $direction);
         }
 
         return $queryBuilder;

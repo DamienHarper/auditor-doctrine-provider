@@ -11,6 +11,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -37,7 +38,7 @@ final class RebuildRootsCommandTest extends TestCase
 
         $tester->execute([]);
         $this->assertSame($written, $this->rows(), 'A second run writes nothing.');
-        $this->assertStringContainsString(' 0 ', $tester->getDisplay());
+        $this->assertMatchesRegularExpression('/comment_audit\s+\d+\s+0\s/', $tester->getDisplay(), 'No row written.');
     }
 
     public function testRowsWrittenByHandAreKept(): void
@@ -73,6 +74,30 @@ final class RebuildRootsCommandTest extends TestCase
         $this->assertSame(array_values(array_filter($written, static fn (array $row): bool => 'comment_audit' === $row[3])), $this->rows());
     }
 
+    public function testUnknownEntity(): void
+    {
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute(['--entity' => ['App\Unknown']]);
+
+        $this->assertSame(1, $tester->getStatusCode());
+        $this->assertStringContainsString('Unknown audited entities', $tester->getDisplay());
+    }
+
+    public function testUnreadableDiffsFail(): void
+    {
+        if (!$this->connection()->getDatabasePlatform() instanceof SQLitePlatform) {
+            $this->markTestSkipped('Only a platform without a JSON type stores invalid diffs.');
+        }
+
+        $this->connection()->executeStatement("UPDATE comment_audit SET diffs = '{not json' WHERE type = 'insert'");
+
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute([]);
+
+        $this->assertSame(1, $tester->getStatusCode());
+        $this->assertStringContainsString('could not be read', $tester->getDisplay());
+    }
+
     public function testDryRun(): void
     {
         $this->connection()->executeStatement('DELETE FROM audit_root');
@@ -92,10 +117,9 @@ final class RebuildRootsCommandTest extends TestCase
     {
         $rows = $this->connection()->fetchAllNumeric('SELECT root_class, root_id, root_path, audit_table, object_id, transaction_id, created_at FROM audit_root');
         $rows = array_map(static fn (array $row): array => array_map(strval(...), $row), $rows);
-        $rows = array_values(array_unique(array_map(serialize(...), $rows)));
         sort($rows);
 
-        return array_map(unserialize(...), $rows);
+        return $rows;
     }
 
     private function connection(): Connection

@@ -42,15 +42,8 @@ final readonly class RootQuery
     }
 
     /**
-     * @return list<array{entity: string, query: Query}>
-     */
-    public function getSources(): array
-    {
-        return $this->sources;
-    }
-
-    /**
-     * Adds a filter to the query of every audit table.
+     * Adds a filter to the query of every audit table. Filters only narrow the history: the queries themselves, which
+     * hold the root and read scope filters, are not exposed.
      */
     public function addFilter(FilterInterface $filter): self
     {
@@ -188,6 +181,7 @@ final readonly class RootQuery
         do {
             $query = clone $base;
             $query
+                ->sortNullTransactionIdAsEmpty()
                 ->resetOrderBy()
                 ->addOrderBy(Query::CREATED_AT, 'DESC')
                 ->addOrderBy(Query::TRANSACTION_ID, 'DESC')

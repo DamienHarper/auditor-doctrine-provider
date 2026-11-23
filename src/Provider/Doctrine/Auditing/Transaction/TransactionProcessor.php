@@ -446,22 +446,9 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     private function rootId(EntityManagerInterface $entityManager, RootReference $reference): ?string
     {
-        try {
-            $identifier = $entityManager->getUnitOfWork()->getEntityIdentifier($reference->root);
-        } catch (\Throwable) {
-            return null;
-        }
+        $this->rootResolver ??= new RootResolver($this->provider);
 
-        $values = [];
-        foreach ($identifier as $value) {
-            if (!\is_scalar($value) && !$value instanceof \Stringable) {
-                return null;
-            }
-
-            $values[] = (string) $value;
-        }
-
-        return [] === $values ? null : implode('-', $values);
+        return $this->rootResolver->identify($entityManager, $reference->root);
     }
 
     // Avoid warning (and dismissal) of objects in input array when using mb_convert_encoding

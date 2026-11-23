@@ -43,15 +43,14 @@ final readonly class ChangedFieldFilter implements PlatformAwareFilterInterface
     private const string FIELD_PATTERN = '/^[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*$/u';
 
     /**
-     * @throws InvalidArgumentException If the field name is not a valid Doctrine field name
-     */
-    /**
      * @var non-empty-list<string>
      */
     private array $fields;
 
     /**
      * @param list<string>|string $field one field, or several fields of which any must be touched
+     *
+     * @throws InvalidArgumentException If no field is given, or a field name is not a valid Doctrine field name
      */
     public function __construct(array|string $field)
     {

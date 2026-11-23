@@ -88,6 +88,7 @@ final readonly class Reader implements ReaderInterface
 
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
+        $this->checkRootQueryOptions($configuration, $config['include'], $config['paths']);
         $queryOptions = [
             'type' => $config['type'],
             'blame_id' => $config['blame_id'],
@@ -119,14 +120,14 @@ final readonly class Reader implements ReaderInterface
             if ($config['self'] && [] === $paths && $this->rootEntityName($entity) === $rootClass && !isset($seen['self.'.$table])) {
                 $seen['self.'.$table] = true;
                 $query = $this->buildQuery($entity, ['object_id' => (string) $rootId] + $queryOptions, false);
-                $sources[] = ['entity' => $this->rootEntityName($entity), 'query' => $query];
+                $sources[] = ['entity' => $this->tableEntity($entity), 'query' => $query];
             }
 
             // entries indexed under the root
             if ($configuration->hasRoots($entity) && !isset($seen['root.'.$table])) {
                 $seen['root.'.$table] = true;
                 $query = $this->buildQuery($entity, $queryOptions, false);
-                $query->addFilter(new RootFilter($rootClass, $rootId, $paths));
+                $query->setHistoryRoot(new RootFilter($rootClass, $rootId, $paths));
                 $sources[] = ['entity' => $this->tableEntity($entity), 'query' => $query];
             }
         }
@@ -135,8 +136,9 @@ final readonly class Reader implements ReaderInterface
     }
 
     /**
-     * Returns the last change of each field of an entity (most recent first), or its creation (or snapshot) for a
-     * field never changed since, or null when nothing was audited.
+     * Returns the last change of each field of an entity, or its creation (or snapshot) for a field never changed
+     * since, or null when nothing was audited. Read the value of a field with Change::getValue($field), whatever the
+     * kind of the change.
      *
      * Reads the entries that changed one of the fields when the platform supports JSON search, otherwise scans the
      * entries of the entity.
@@ -392,11 +394,41 @@ final readonly class Reader implements ReaderInterface
     {
         try {
             $metadata = $this->provider->getAuditingServiceForEntity($entity)->getEntityManager()->getClassMetadata($entity);
-        } catch (\Throwable) {
-            return $entity;
+        } catch (InvalidArgumentException $invalidArgumentException) {
+            throw new InvalidArgumentException(\sprintf('"%s" is not an entity of an auditing entity manager.', $entity), 0, $invalidArgumentException);
         }
 
         return $metadata instanceof ORMMetadata ? $metadata->rootEntityName : $entity;
+    }
+
+    /**
+     * An unknown entity in "include", or an unknown path in "paths", would silently read an empty history.
+     *
+     * @param null|list<string> $include
+     * @param list<string>      $paths
+     */
+    private function checkRootQueryOptions(Configuration $configuration, ?array $include, array $paths): void
+    {
+        $entities = array_map(strval(...), array_keys($configuration->getEntities()));
+        $unknown = array_diff($include ?? [], $entities);
+        if ([] !== $unknown) {
+            throw new InvalidArgumentException(\sprintf('Unknown audited entities in "include": %s.', implode(', ', $unknown)));
+        }
+
+        // paths given by a root resolver are free keys: they cannot be checked
+        if ([] === $paths || null !== $configuration->getRootResolver()) {
+            return;
+        }
+
+        $declared = [];
+        foreach ($entities as $entity) {
+            $declared = [...$declared, ...$configuration->getRoots($entity)];
+        }
+
+        $unknown = array_diff($paths, $declared);
+        if ([] !== $unknown) {
+            throw new InvalidArgumentException(\sprintf('Unknown root paths in "paths": %s.', implode(', ', $unknown)));
+        }
     }
 
     /**

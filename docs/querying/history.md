@@ -74,11 +74,14 @@ php bin/console audit:roots:rebuild --entity='App\Entity\VisitReport' --dry-run
 
 The command replays the diffs of the existing schema v2 entries: the first segment of a path is read from the diffs
 of the entry's entity, the next ones from the audit history of the entities the path goes through, as they were when
-the entry was written. It writes the rows the flush would have written and are missing, and never deletes a row:
-it can be run again safely, and rows you write yourself (for entries whose diffs do not hold the association, such
-as imported or legacy entries) are kept. Run it after declaring a new root, or after migrating audit tables to schema v2
-(`audit:schema:migrate --convert-diffs`). Schema v1 entries are skipped. Rows that no longer match the
-configuration (a removed path) are not cleaned up: delete them with SQL if needed.
+the entry was written. It writes the missing rows of the paths declared with `#[AuditRoot]` or `roots`, and never
+deletes a row: it can be run again safely, and rows you write yourself (for entries whose diffs do not hold the
+association, such as imported or legacy entries) are kept. Roots returned by a `root_resolver` cannot be replayed.
+Run it after declaring a new root, or after migrating audit tables to schema v2
+(`audit:schema:migrate --convert-diffs --convert-transaction-hash`): entries in schema v1 or without a transaction id
+are skipped and counted. The command fails when an `--entity` is not audited, when it already runs, or when the diffs
+of an entry cannot be read. Rows that no longer match the configuration (a removed path) are not cleaned up: delete
+them with SQL if needed.
 
 ## 📜 The history of a root
 
@@ -119,6 +122,9 @@ cursor, reading each table by batches; `count()` counts them.
 | `changed_field` | `string\|list<string>` | `null` | Entries that changed one of the fields (native JSON needed) |
 | `blame_origin` | `string\|BlameOrigin\|array` | `null` | `http`, `console`, `messenger`, `system` (native JSON needed) |
 
+An entity in `include` that is not audited, or a path in `paths` that no entity declares (when no `root_resolver` is
+set), throws an `InvalidArgumentException`, as does a root class that no auditing entity manager maps.
+
 Only the `view` role of the **root** is checked: reading the history of a root gives access to the entries of the
 entities indexed under it. Use the `read_scope` option to restrict them further.
 
@@ -127,7 +133,8 @@ entities indexed under it. Use the `read_scope` option to restrict them further.
 ```php
 // last change of each field, or the creation (or snapshot) for a field never changed since
 $changes = $reader->getLastChanges(Property::class, 42, ['price', 'status']);
-$changes['price']?->new;                // value after the change
+$changes['price']?->getValue('price');  // value of the field: after the change, or at the creation
+$changes['price']?->getLabel('price');  // its label (#[DiffLabel], association), if any
 $changes['price']?->entry->username;    // who, when: the Entry of the change
 $changes['price']?->entry->createdAt;
 
@@ -136,7 +143,9 @@ $entries = $reader->getFieldHistory(Property::class, 42, 'price')->execute();
 $entries = $reader->getFieldHistory(Property::class, null, 'price')->execute();
 ```
 
-`getLastChanges()` returns `array<string, ?Change>` (null when nothing was audited). It reads the entries that
+`getLastChanges()` returns `array<string, ?Change>` (null when nothing was audited). For a field never changed, the
+change is the creation of the object, which holds every field: read the value with `getValue($field)` rather than
+`new`. It reads the entries that
 changed one of the fields when the platform has native JSON support, and scans the history of the object otherwise.
 `getFieldHistory()` returns a `Query` with a `ChangedFieldFilter`, which needs native JSON support.
 
@@ -147,7 +156,7 @@ The `changed_field` option of `createQuery()` also takes a list of fields (entri
 
 `read_scope` is a callable applied to every query the reader creates, including each table of a root query. It
 receives the query and the FQCN of the entity it reads, and can add filters, for instance to keep the entries of the
-current tenant:
+current tenant (a `RootFilter` built by hand takes the root class of the inheritance hierarchy):
 
 ```php
 $configuration->setReadScope(static function (Query $query, string $entity) use ($tenant): void {
@@ -159,8 +168,8 @@ $configuration->setReadScope(static function (Query $query, string $entity) use 
 
 `entity_label_resolver` is a callable (see `EntityLabelResolverInterface`) that builds the label of an entity
 written in the `source` and `target` blocks of the diffs, and in association values. Return null to keep the
-default label (the string representation of the entity, otherwise `Class#id`). It runs during the flush and must not
-flush.
+default label (the string representation of the entity, otherwise `Class#id`); a `Stringable` is accepted. It runs
+during the flush and must not flush: an exception it throws aborts the flush and rolls the transaction back.
 
 ## Related
 

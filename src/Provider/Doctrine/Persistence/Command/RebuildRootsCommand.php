@@ -6,6 +6,7 @@ namespace DH\Auditor\Provider\Doctrine\Persistence\Command;
 
 use DH\Auditor\Auditor;
 use DH\Auditor\Provider\Doctrine\Auditing\Root\RootIndexRebuilder;
+use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\RebuildRootsCommandTest;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -52,7 +53,9 @@ final class RebuildRootsCommand extends Command
                 The diffs are replayed: a path is followed through the audit history of the entities it goes through,
                 as they were when each entry was written. Only missing rows are written and no row is ever deleted,
                 so the command can be run again safely, and rows written by hand or by a "root_resolver" are kept.
-                Schema v1 entries are skipped (see audit:schema:migrate --convert-diffs).
+                Entries in schema v1, or without a transaction id, are skipped: migrate them first
+                (audit:schema:migrate --convert-diffs --convert-transaction-hash). Roots of a "root_resolver" cannot
+                be replayed. The command fails when an entry cannot be read.
                 HELP)
         ;
     }
@@ -66,32 +69,52 @@ final class RebuildRootsCommand extends Command
         $entities = $input->getOption('entity');
 
         if (!$this->lock()) {
-            $output->writeln('The command is already running in another process.');
+            $io->error('The command is already running in another process.');
 
-            return Command::SUCCESS;
+            return Command::FAILURE;
         }
 
         /** @var DoctrineProvider $provider */
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
+
+        $configuration = $provider->getConfiguration();
+        \assert($configuration instanceof Configuration);
+        $unknown = array_diff($entities, array_map(strval(...), array_keys($configuration->getEntities())));
+        if ([] !== $unknown) {
+            $io->error(\sprintf('Unknown audited entities: %s.', implode(', ', $unknown)));
+            $this->release();
+
+            return Command::FAILURE;
+        }
+
         $rebuilder = new RootIndexRebuilder($provider);
         $tables = $rebuilder->tables([] === $entities ? null : $entities);
 
         if ([] === $tables) {
-            $io->warning('No audited entity has audit roots.');
+            $io->warning('No audited entity has audit roots declared by path (#[AuditRoot] or the "roots" option).');
             $this->release();
 
             return Command::SUCCESS;
         }
 
         $rows = [];
+        $unreadable = 0;
         foreach ($tables as $auditTable => $table) {
             $result = $rebuilder->rebuild($auditTable, $table, $dryRun);
-            $rows[] = [$auditTable, $result['entries'], $result['rows'], $result['skipped']];
+            $rows[] = [$auditTable, $result['entries'], $result['rows'], $result['legacy'], $result['unreadable']];
+            $unreadable += $result['unreadable'];
         }
 
-        $io->table(['Audit table', 'Entries', $dryRun ? 'Missing rows' : 'Rows written', 'Skipped (schema v1)'], $rows);
-        $io->success($dryRun ? 'Dry run: nothing was written.' : 'Audit root index rebuilt.');
+        $io->table(['Audit table', 'Entries', $dryRun ? 'Missing rows' : 'Rows written', 'Skipped (v1 or no transaction id)', 'Unreadable diffs'], $rows);
         $this->release();
+
+        if (0 < $unreadable) {
+            $io->error(\sprintf('%d entries could not be read: their diffs are not valid JSON.', $unreadable));
+
+            return Command::FAILURE;
+        }
+
+        $io->success($dryRun ? 'Dry run: nothing was written.' : 'Audit root index rebuilt.');
 
         return Command::SUCCESS;
     }

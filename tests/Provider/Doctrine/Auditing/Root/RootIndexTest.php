@@ -6,6 +6,7 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Root;
 
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\InverseSideDeletion\Bundle;
@@ -55,13 +56,20 @@ final class RootIndexTest extends TestCase
         $em->persist($item);
         $em->flush();
 
-        // one row per audit entry: the bundle has an insert entry and associate entries (its cover and its item)
-        $rows = array_unique(array_map(serialize(...), $this->rows()));
+        // one row per object and root, although the bundle has an insert entry and associate entries (its cover and
+        // its item) in the transaction
         $this->assertSame([
             [Bundle::class, (string) $bundle->getId(), 'bundle', 'inverse_side_deletion_bundle_item_audit', (string) $item->getId()],
             [BundleCover::class, (string) $cover->getId(), 'bundle.cover', 'inverse_side_deletion_bundle_item_audit', (string) $item->getId()],
             [BundleCover::class, (string) $cover->getId(), 'cover', 'inverse_side_deletion_bundle_audit', (string) $bundle->getId()],
-        ], array_values(array_map(unserialize(...), $rows)));
+        ], $this->rows());
+    }
+
+    public function testUpdatingTheSchemaLeavesTheIndexTableAlone(): void
+    {
+        $sqls = new SchemaManager($this->provider)->getUpdateAuditSchemaSql();
+
+        $this->assertStringNotContainsString('audit_root', json_encode($sqls, JSON_THROW_ON_ERROR), 'No false diff on the index table.');
     }
 
     public function testTheOwnerOfAnInverseOneToOneIsFoundAmongTheScheduledEntities(): void

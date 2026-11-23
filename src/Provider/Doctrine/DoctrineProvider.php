@@ -78,6 +78,16 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
      */
     private ?AuditInsertBuffer $activeBuffer = null;
 
+    /**
+     * Root index rows already written for the current transaction id: an object with several entries in one
+     * transaction (an insert and associations, several flushes) is indexed once per root.
+     *
+     * @var array<string, true>
+     */
+    private array $writtenRootRows = [];
+
+    private ?string $writtenRootRowsTransaction = null;
+
     public function __construct(ConfigurationInterface $configuration)
     {
         $this->configuration = $configuration;
@@ -518,12 +528,24 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
      */
     private function rootRows(array $roots, string $auditTable, array $payload): array
     {
+        $transactionId = \is_string($payload['transaction_id'] ?? null) ? $payload['transaction_id'] : null;
+        if ($transactionId !== $this->writtenRootRowsTransaction) {
+            $this->writtenRootRows = [];
+            $this->writtenRootRowsTransaction = $transactionId;
+        }
+
         $rows = [];
         foreach ($roots as $root) {
             if (!\is_array($root)) {
                 continue;
             }
 
+            $key = implode("\0", [$root['root_class'] ?? '', $root['root_id'] ?? '', $root['root_path'] ?? '', $auditTable, $payload['object_id'] ?? '']);
+            if (isset($this->writtenRootRows[$key])) {
+                continue;
+            }
+
+            $this->writtenRootRows[$key] = true;
             $rows[] = [
                 $root['root_class'] ?? null,
                 $root['root_id'] ?? null,
