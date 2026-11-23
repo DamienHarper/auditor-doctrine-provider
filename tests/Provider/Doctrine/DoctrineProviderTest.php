@@ -478,6 +478,20 @@ final class DoctrineProviderTest extends TestCase
         $this->assertSame(['view' => ['ROLE1', 'ROLE2']], $options['roles']);
     }
 
+    public function testEmptyConfiguredRolesKeepTheSecurityAttribute(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => []], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['view' => ['ROLE1', 'ROLE2']], $options['roles']);
+    }
+
+    public function testConfiguredRolesWithoutTheViewScopeKeepTheSecurityViewRoles(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => ['View' => ['ROLE_ADMIN']]], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['ROLE1', 'ROLE2'], $options['roles']['view'] ?? null, 'A misspelled scope does not lift the restriction.');
+    }
+
     public function testEntityDisabledInTheConfigurationStaysDisabledDespiteTheAttribute(): void
     {
         // AuditedEntity carries #[Auditable], enabled by default
@@ -494,7 +508,7 @@ final class DoctrineProviderTest extends TestCase
         $this->assertFalse($options['enabled']);
     }
 
-    public function testDisabledInTheConfigurationIsHonouredByTheProvider(): void
+    public function testDisabledAndRestrictedInTheConfigurationAreHonouredByTheProvider(): void
     {
         $entityManager = $this->createEntityManager(
             [
