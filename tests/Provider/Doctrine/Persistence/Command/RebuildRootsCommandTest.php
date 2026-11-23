@@ -169,6 +169,7 @@ final class RebuildRootsCommandTest extends TestCase
 
         $tester->assertCommandIsSuccessful();
         $this->assertMatchesRegularExpression('/comment_audit\s+\d+\s+\d+\s+1\s/', $tester->getDisplay(), 'The insert of the comment is counted as skipped.');
+        $this->assertStringContainsString('1 entries were skipped', $tester->getDisplay(true), 'The skipped entries are reported.');
         $this->assertNotContains('', array_column($this->rows(), 5));
     }
 

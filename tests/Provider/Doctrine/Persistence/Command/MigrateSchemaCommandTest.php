@@ -71,7 +71,7 @@ final class MigrateSchemaCommandTest extends TestCase
 
         $command = $this->createCommand();
         $commandTester = new CommandTester($command);
-        $commandTester->execute([]);
+        $this->assertSame(Command::FAILURE, $commandTester->execute([]), 'A run that did nothing must not report a success.');
 
         $output = $commandTester->getDisplay();
         $this->assertStringContainsString('The command is already running in another process.', $output);
@@ -458,6 +458,71 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester->execute([]);
         $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
         $this->assertStringContainsString('still have legacy diffs', $commandTester->getDisplay(true));
+    }
+
+    /**
+     * --force alone keeps transaction_hash: it is only dropped once converted, or with --drop-transaction-hash.
+     */
+    public function testUnconvertedTransactionHashIsOnlyDroppedOnRequest(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true]));
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'), '--force alone must keep transaction_hash.');
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('blame_user'), 'The migrated blame columns are dropped.');
+        $this->assertStringContainsString('transaction_hash has been kept', $commandTester->getDisplay(true));
+
+        $this->assertSame(Command::FAILURE, $commandTester->execute(['--force' => true, '--convert-all' => true, '--drop-transaction-hash' => true]), 'Converting and dropping without conversion contradict each other.');
+
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--drop-transaction-hash' => true]));
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertStringContainsString('dropped without conversion', $commandTester->getDisplay(true));
+    }
+
+    public function testLimitMustBeAPositiveInteger(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+
+        foreach (['0', '-5', 'abc', '1.5'] as $limit) {
+            $commandTester = new CommandTester($this->createCommand());
+            $this->assertSame(Command::FAILURE, $commandTester->execute(['--force' => true, '--convert-all' => true, '--limit' => $limit]), '--limit='.$limit);
+            $this->assertStringContainsString('--limit must be a positive integer', $commandTester->getDisplay(true));
+        }
+
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'), 'Nothing must have been migrated.');
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('schema_version'), 'Nothing must have been migrated.');
+    }
+
+    /**
+     * A table that lost transaction_hash (to a Doctrine migration, say) but kept the legacy blame columns is still
+     * a legacy table: the blame is migrated before the columns are dropped, and audit:schema:update refuses to run.
+     */
+    public function testTableWithLegacyBlameColumnsOnlyIsMigrated(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $connection = $this->auditConnection();
+        $id = $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+        $connection->update('post_audit', ['blame_user' => 'dark.vador', 'ip' => '1.2.3.4'], ['id' => $id]);
+        foreach ($this->auditTable('post_audit')->getIndexes() as $index) {
+            if (\in_array('transaction_hash', array_map(static fn ($column): string => $column->getColumnName()->getIdentifier()->getValue(), $index->getIndexedColumns()), true)) {
+                $connection->executeStatement($connection->getDatabasePlatform()->getDropIndexSQL($index->getObjectName()->toSQL($connection->getDatabasePlatform()), 'post_audit'));
+            }
+        }
+
+        $connection->executeStatement('ALTER TABLE post_audit DROP COLUMN transaction_hash');
+
+        $updater = new SchemaManager($this->provider);
+        $this->assertContains('post_audit', $updater->collectLegacyAuditTables(), 'audit:schema:update must refuse to run.');
+
+        $commandTester = new CommandTester($this->createCommand());
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-all' => true]));
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('blame_user'));
+        $blame = json_decode((string) $connection->fetchOne('SELECT blame FROM post_audit WHERE id = ?', [$id]), true);
+        $this->assertIsArray($blame);
+        $this->assertSame('dark.vador', $blame['username']);
+        $this->assertSame('1.2.3.4', $blame['ip']);
     }
 
     public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void
