@@ -12,6 +12,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Schema\SchemaManager;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Command\MigrateSchemaCommandTest;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\MariaDBPlatform;
@@ -20,6 +21,8 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\ComparatorConfig;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
+use Doctrine\DBAL\Schema\Name\UnqualifiedName;
+use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Schema\TableEditor;
 use Doctrine\ORM\Mapping\FieldMapping;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -62,6 +65,11 @@ final class MigrateSchemaCommand extends Command
     private const array LEGACY_COLUMNS = ['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'];
 
     /**
+     * Legacy blame columns, gathered in the blame JSON column in v2.
+     */
+    private const array BLAME_COLUMNS = ['blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'];
+
+    /**
      * New columns introduced in schema v2.
      */
     private const array NEW_COLUMNS = ['schema_version', 'transaction_id', 'blame'];
@@ -70,6 +78,12 @@ final class MigrateSchemaCommand extends Command
      * Batch size for converting diffs rows (--convert-diffs).
      */
     private const int BATCH_SIZE = 500;
+
+    /**
+     * Batch size for converting transaction hashes (--convert-transaction-hash): the UPDATE of a batch takes three
+     * parameters per hash, below the 999 parameters of SQLite before 3.32.
+     */
+    private const int HASH_BATCH_SIZE = 300;
 
     private Auditor $auditor;
 
@@ -87,28 +101,56 @@ final class MigrateSchemaCommand extends Command
             ->addOption('force', 'f', InputOption::VALUE_NONE, 'Execute the migration against the database.')
             ->addOption('convert-diffs', null, InputOption::VALUE_NONE, 'Convert legacy diffs JSON to the new {source, changes} envelope (sets schema_version=2 on migrated rows).')
             ->addOption('convert-transaction-hash', null, InputOption::VALUE_NONE, 'Convert legacy transaction_hash (SHA1) values to transaction_id (ULID), preserving transactional grouping across all audit tables.')
-            ->addOption('convert-all', null, InputOption::VALUE_NONE, 'Shorthand for --convert-diffs --convert-transaction-hash.')
+            ->addOption('convert-all', null, InputOption::VALUE_NONE, 'Shorthand for --convert-diffs --convert-transaction-hash (recommended).')
+            ->addOption('drop-transaction-hash', null, InputOption::VALUE_NONE, 'Drop transaction_hash WITHOUT converting it: the legacy rows lose their transaction grouping for good.')
             ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Limit conversions to N unique transaction hashes (--convert-transaction-hash) or N total rows (--convert-diffs). Useful for estimating migration time. When set, legacy columns are NOT dropped so the run can be resumed.')
         ;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        if (!$this->lock()) {
-            $output->writeln('The command is already running in another process.');
-
-            return Command::SUCCESS;
-        }
-
         $io = new SymfonyStyle($input, $output);
 
+        if (!$this->lock()) {
+            // a non-zero exit code: a deployment script must not go on as if the tables had been migrated
+            $io->error('The command is already running in another process.');
+
+            return Command::FAILURE;
+        }
+
+        try {
+            return $this->migrate($input, $io);
+        } finally {
+            $this->release();
+        }
+    }
+
+    private function migrate(InputInterface $input, SymfonyStyle $io): int
+    {
         $dumpSql = true === $input->getOption('dump-sql');
         $force = true === $input->getOption('force');
         $convertAll = true === $input->getOption('convert-all');
         $convertDiffs = $convertAll || true === $input->getOption('convert-diffs');
         $convertTransactionHash = $convertAll || true === $input->getOption('convert-transaction-hash');
+        $dropTransactionHashOption = true === $input->getOption('drop-transaction-hash');
+
         $limitRaw = $input->getOption('limit');
-        $limit = \is_string($limitRaw) ? (int) $limitRaw : null;
+        $limit = null;
+        if (null !== $limitRaw) {
+            if (!\is_string($limitRaw) || 1 !== preg_match('/^[1-9]\d*$/', $limitRaw)) {
+                $io->error('--limit must be a positive integer.');
+
+                return Command::FAILURE;
+            }
+
+            $limit = (int) $limitRaw;
+        }
+
+        if ($convertTransactionHash && $dropTransactionHashOption) {
+            $io->error('--drop-transaction-hash drops transaction_hash without converting it: it cannot be combined with --convert-transaction-hash or --convert-all.');
+
+            return Command::FAILURE;
+        }
 
         /** @var DoctrineProvider $provider */
         $provider = $this->auditor->getProvider(DoctrineProvider::class);
@@ -117,17 +159,13 @@ final class MigrateSchemaCommand extends Command
         $schemaManager = new SchemaManager($provider);
         $tables = $this->collectLegacyTables($provider, $schemaManager);
 
-        // When --convert-diffs is requested but DDL is already complete (transaction_hash already
-        // dropped), find tables that still have schema_version=1 rows so diffs can be converted
-        // independently of the hash conversion step.
-        $diffsOnlyTables = [];
-        if ($convertDiffs && [] === $tables) {
-            $diffsOnlyTables = $this->collectDiffsConversionTables($provider, $schemaManager);
-        }
+        // Tables whose legacy columns are gone but that still hold unconverted diffs (schema_version = 1): left by
+        // a run without --convert-diffs, or by an interrupted one. They are converted along with the legacy tables.
+        $diffsOnlyTables = $this->collectDiffsConversionTables($provider, $schemaManager, $tables);
+        $legacyDiffsRows = $this->countLegacyDiffsRows($diffsOnlyTables);
 
         if ([] === $tables && [] === $diffsOnlyTables) {
             $io->success('All audit tables are already at schema version 2. Nothing to migrate.');
-            $this->release();
 
             return Command::SUCCESS;
         }
@@ -139,8 +177,10 @@ final class MigrateSchemaCommand extends Command
             }
 
             $io->newLine();
-        } elseif ([] !== $diffsOnlyTables) {
-            $io->text(\sprintf('Found <info>%d</info> table(s) with unconverted diffs (schema_version=1):', \count($diffsOnlyTables)));
+        }
+
+        if ([] !== $diffsOnlyTables) {
+            $io->text(\sprintf('Found <info>%d</info> row(s) with unconverted diffs (schema_version = 1) in:', $legacyDiffsRows));
             foreach (array_keys($diffsOnlyTables) as $tableName) {
                 $io->text(\sprintf('  - %s', $tableName));
             }
@@ -148,23 +188,30 @@ final class MigrateSchemaCommand extends Command
             $io->newLine();
         }
 
-        // Drop transaction_hash only when --convert-transaction-hash is used OR when no conversion
-        // flag is given (explicit data-loss acceptance). When --convert-diffs runs alone, preserve
-        // transaction_hash so --convert-transaction-hash can still be run afterwards.
-        $dropTransactionHash = $convertTransactionHash || !$convertDiffs;
+        // transaction_hash is dropped once converted, or when its loss is explicitly accepted (--drop-transaction-hash).
+        // Otherwise it is kept, and the table stays a legacy table until it is converted.
+        $dropTransactionHash = $convertTransactionHash || $dropTransactionHashOption;
 
         $allDdlSqls = $this->generateDdlStatements($tables, $dropTransactionHash);
 
         // Tables to use for diffs conversion: DDL tables + diffs-only tables (already migrated DDL).
         $allDiffsTables = array_merge($tables, $diffsOnlyTables);
 
-        $hasAdditive = [] !== array_filter(array_column($allDdlSqls, 'additive'));
-        $hasDestructive = [] !== array_filter(array_column($allDdlSqls, 'destructive'));
-        $hasDdl = $hasAdditive || $hasDestructive;
+        $hasDdl = [] !== array_filter(array_column($allDdlSqls, 'additive')) || [] !== array_filter(array_column($allDdlSqls, 'destructive'));
+
+        if ([] === $tables && !$convertDiffs) {
+            // Only unconverted diffs are left: this is not "nothing to migrate".
+            $io->caution([
+                \sprintf('%d row(s) still have legacy diffs (schema_version = 1).', $legacyDiffsRows),
+                '',
+                \sprintf('Run <info>%s --force --convert-diffs</info> to convert them.', (string) $this->getName()),
+            ]);
+
+            return Command::FAILURE;
+        }
 
         if (!$hasDdl && !$convertDiffs && !$convertTransactionHash) {
             $io->success('Schema is already up to date. Nothing to migrate.');
-            $this->release();
 
             return Command::SUCCESS;
         }
@@ -202,34 +249,31 @@ final class MigrateSchemaCommand extends Command
         if (!$force) {
             if (!$dumpSql) {
                 $commandName = (string) $this->getName();
-                $totalTableCount = \count($tables) + \count($diffsOnlyTables);
                 $io->caution([
-                    \sprintf('Found <info>%d</info> audit table(s) requiring migration.', $totalTableCount),
+                    \sprintf('Found <info>%d</info> audit table(s) requiring migration.', \count($tables) + \count($diffsOnlyTables)),
                     '',
-                    'Please run with one or more of the following options:',
+                    'Back up the audit tables first: the legacy columns are dropped once converted. Then run:',
                     '',
-                    \sprintf('    <info>%s --force</info>                                         execute the migration', $commandName),
-                    \sprintf('    <info>%s --dump-sql</info>                                       dump the SQL statements', $commandName),
-                    \sprintf('    <info>%s --force --convert-diffs</info>                          also convert legacy diffs format', $commandName),
-                    \sprintf('    <info>%s --force --convert-transaction-hash</info>               also convert transaction_hash to ULID (preserves grouping)', $commandName),
-                    \sprintf('    <info>%s --force --convert-all</info>                            convert both diffs and transaction hash', $commandName),
-                    \sprintf('    <info>%s --force --convert-all --limit=1000</info>               process a sample and estimate remaining time', $commandName),
+                    \sprintf('    <info>%s --force --convert-all</info>                       migrate everything (recommended)', $commandName),
+                    \sprintf('    <info>%s --dump-sql --convert-all</info>                    dump the SQL statements', $commandName),
+                    \sprintf('    <info>%s --force --convert-all --limit=1000</info>          convert a sample on a copy and estimate the duration', $commandName),
+                    \sprintf('    <info>%s --force --convert-transaction-hash</info>          convert the transaction hashes only, the diffs later', $commandName),
+                    \sprintf('    <info>%s --force --convert-diffs</info>                     convert the diffs only, the transaction hashes later', $commandName),
+                    '',
+                    \sprintf('<info>%s --force --drop-transaction-hash</info> drops transaction_hash WITHOUT converting it:', $commandName),
+                    'the legacy rows lose their transaction grouping for good.',
                 ]);
             }
-
-            $this->release();
 
             return $dumpSql ? Command::SUCCESS : Command::FAILURE;
         }
 
-        // Phase 1: additive DDL — add new columns, mark rows, migrate blame, drop old index
+        // Phase 1: additive DDL — add new columns, mark rows, migrate blame
         foreach ($tables as $tableName => $connection) {
             $additiveSqls = $allDdlSqls[$tableName]['additive'] ?? [];
             if ([] !== $additiveSqls) {
                 $io->text(\sprintf('  Applying additive schema changes for <info>%s</info>...', $tableName));
-                foreach ($additiveSqls as $sql) {
-                    $connection->executeStatement($sql);
-                }
+                $this->executeStatements($connection, $additiveSqls);
             }
         }
 
@@ -242,10 +286,11 @@ final class MigrateSchemaCommand extends Command
         }
 
         // Per-table diffs conversion (includes tables whose DDL was already applied in a previous run)
+        $unconvertible = [];
         if ($convertDiffs) {
             $io->newLine();
             $io->text('<comment>Converting legacy diffs...</comment>');
-            $this->convertDiffsAcrossTables(
+            $unconvertible = $this->convertDiffsAcrossTables(
                 $allDiffsTables,
                 $this->collectJsonFields($provider, $schemaManager),
                 $this->collectAuditedEntities($provider, $schemaManager),
@@ -261,94 +306,131 @@ final class MigrateSchemaCommand extends Command
                 $destructiveSqls = $allDdlSqls[$tableName]['destructive'] ?? [];
                 if ([] !== $destructiveSqls) {
                     $io->text(\sprintf('  Dropping legacy columns for <info>%s</info>...', $tableName));
-                    foreach ($destructiveSqls as $sql) {
-                        $connection->executeStatement($sql);
-                    }
+                    $this->executeStatements($connection, $destructiveSqls);
                 }
             }
         }
 
         $io->newLine();
-        $io->success('Audit schema migration completed successfully!');
 
-        if (null !== $limit) {
-            $io->note(\sprintf(
-                'Only %d item(s) were processed (--limit). Legacy columns were NOT dropped. Re-run without --limit to complete the migration.',
-                $limit,
-            ));
-        } else {
-            if ($convertDiffs) {
-                $io->note('Diffs conversion complete. All migrated rows now have schema_version = 2.');
-            } else {
-                // Only suggest --convert-diffs if there are actually schema_version=1 rows remaining.
-                $hasLegacyDiffsRows = $this->hasLegacyDiffsRows($allDiffsTables);
-                if ($hasLegacyDiffsRows) {
-                    $io->note(
-                        'Existing rows have been marked with schema_version = 1 (legacy format). '
-                        .'Run with --convert-diffs to also convert their diffs JSON to the new format.',
-                    );
-                }
+        if ([] !== $unconvertible) {
+            $lines = [
+                \sprintf('%d row(s) could not be converted and were left as they are (schema_version = 1):', array_sum(array_map(count(...), $unconvertible))),
+                'their diffs are not valid JSON, do not hold the expected structure, or their type is unknown.',
+                '',
+            ];
+            foreach ($unconvertible as $tableName => $ids) {
+                $lines[] = \sprintf('  - %s, id %s%s', $tableName, implode(', ', \array_slice($ids, 0, 20)), \count($ids) > 20 ? ', …' : '');
             }
 
-            // Only warn about transaction_hash data loss when DDL tables were actually processed
-            // (i.e., transaction_hash was present and dropped in this run).
-            if ([] !== $tables && !$convertTransactionHash && $dropTransactionHash) {
-                $io->note(
-                    'Legacy transaction_hash values have been dropped without conversion. '
-                    .'To preserve transactional grouping, use --convert-transaction-hash before dropping legacy columns.',
-                );
-            } elseif ([] !== $tables && !$convertTransactionHash && !$dropTransactionHash) {
-                $io->note(
-                    'transaction_hash has been preserved. Run with --convert-transaction-hash to convert it to transaction_id (ULID).',
-                );
+            $lines[] = '';
+            $lines[] = 'They stay readable as legacy entries. Fix or delete them, then run the command again.';
+            $io->warning($lines);
+        } else {
+            $io->success('Audit schema migration completed successfully!');
+        }
+
+        if (null !== $limit) {
+            $io->note([
+                'The conversions were limited by --limit: the legacy columns were NOT dropped.',
+                \sprintf('Run %s --force --convert-all (without --limit) to complete the migration.', (string) $this->getName()),
+            ]);
+        } else {
+            $remainingRows = $this->countLegacyDiffsRows($allDiffsTables);
+            if (0 < $remainingRows && !$convertDiffs) {
+                $io->note(\sprintf('%d row(s) keep their legacy diffs (schema_version = 1). Run with --convert-diffs to convert them.', $remainingRows));
+            } elseif (0 === $remainingRows && $convertDiffs) {
+                $io->note('Diffs conversion complete. All rows now have schema_version = 2.');
+            }
+
+            if ([] !== $tables && !$convertTransactionHash && $dropTransactionHashOption) {
+                $io->note('transaction_hash has been dropped without conversion (--drop-transaction-hash): the legacy rows lost their transaction grouping.');
+            } elseif ([] !== $tables && !$dropTransactionHash) {
+                $io->note(\sprintf('transaction_hash has been kept. Run %s --force --convert-transaction-hash to convert it and finish the migration.', (string) $this->getName()));
             }
         }
 
-        $this->release();
-
-        return Command::SUCCESS;
+        return [] === $unconvertible ? Command::SUCCESS : Command::FAILURE;
     }
 
     /**
-     * Returns audit tables that still have the legacy transaction_hash column.
-     * Detects both fully v1 tables and partially migrated tables (schema_version added but
-     * transaction_hash not yet dropped), enabling safe resumption after an interrupted run.
+     * Runs statements of one audit table. On the platforms whose DDL is transactional (PostgreSQL, SQLite), they run
+     * in one transaction: SQLite rebuilds a table to drop a column (copy, drop, create, copy back), and an
+     * interruption in between would otherwise lose the table. MySQL and MariaDB commit each DDL statement anyway;
+     * the statements are ordered so that a run interrupted between two of them is completed by the next one.
+     *
+     * @param list<string> $sqls
+     */
+    private function executeStatements(Connection $connection, array $sqls): void
+    {
+        $platform = $connection->getDatabasePlatform();
+        if ($platform instanceof PostgreSQLPlatform || $platform instanceof SQLitePlatform) {
+            $connection->transactional(static function (Connection $connection) use ($sqls): void {
+                foreach ($sqls as $sql) {
+                    $connection->executeStatement($sql);
+                }
+            });
+
+            return;
+        }
+
+        foreach ($sqls as $sql) {
+            $connection->executeStatement($sql);
+        }
+    }
+
+    /**
+     * Returns the audit tables that still have a legacy column, on the storage of their entity (resolved by the
+     * storage mapper): fully v1 tables, and tables left partially migrated by an interrupted run or by
+     * a run that kept transaction_hash.
      *
      * @return array<string, Connection> keyed by table name
      */
     private function collectLegacyTables(DoctrineProvider $provider, SchemaManager $schemaManager): array
     {
-        /** @var StorageService[] $storageServices */
-        $storageServices = $provider->getStorageServices();
         $legacyTables = [];
-
-        foreach ($storageServices as $storageService) {
-            $connection = $storageService->getEntityManager()->getConnection();
-            $dbSchemaManager = $connection->createSchemaManager();
-            $schema = $dbSchemaManager->introspectSchema();
-
-            /** @var Configuration $configuration */
-            $configuration = $provider->getConfiguration();
-
-            foreach (array_keys($configuration->getEntities()) as $entity) {
-                $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
-                if (null === $auditTableName) {
-                    continue;
-                }
-
-                if (!$schema->hasTable($auditTableName)) {
-                    continue;
-                }
-
-                $table = $schema->getTable($auditTableName);
-                // Any table that still has transaction_hash needs migration (fully v1 or partially migrated)
-                if ($table->hasColumn('transaction_hash')) {
-                    $legacyTables[$auditTableName] = $connection;
-                }
+        foreach ($this->collectAuditTables($provider, $schemaManager) as $auditTableName => [$connection, $table]) {
+            if ([] !== array_filter(self::LEGACY_COLUMNS, $table->hasColumn(...))) {
+                $legacyTables[$auditTableName] = $connection;
             }
         }
 
         return $legacyTables;
+    }
+
+    /**
+     * Returns the existing audit tables of the configured entities, each on the storage its entity is mapped to.
+     *
+     * @return array<string, array{Connection, Table}> keyed by table name
+     */
+    private function collectAuditTables(DoctrineProvider $provider, SchemaManager $schemaManager): array
+    {
+        /** @var Configuration $configuration */
+        $configuration = $provider->getConfiguration();
+        $schemas = [];
+        $auditTables = [];
+
+        foreach (array_keys($configuration->getEntities()) as $entity) {
+            $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
+            if (null === $auditTableName) {
+                continue;
+            }
+
+            $connection = $provider->getStorageServiceForEntity($entity)->getEntityManager()->getConnection();
+            $schema = $schemas[spl_object_id($connection)] ??= $connection->createSchemaManager()->introspectSchema();
+            if (!$schema->hasTable($auditTableName)) {
+                continue;
+            }
+
+            if (isset($auditTables[$auditTableName]) && $auditTables[$auditTableName][0] !== $connection) {
+                // the tables are keyed by name: two of them would be migrated as one
+                throw new \RuntimeException(\sprintf('The audit table %s exists on several storages: audit:schema:migrate cannot migrate them. Migrate each storage with its own configuration.', $auditTableName));
+            }
+
+            $auditTables[$auditTableName] = [$connection, $schema->getTable($auditTableName)];
+        }
+
+        return $auditTables;
     }
 
     /**
@@ -377,73 +459,44 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
-     * Returns true if any of the given tables still contain rows with schema_version=1.
+     * Counts the rows with unconverted diffs (schema_version = 1) of the given tables.
      *
      * @param array<string, Connection> $tables
      */
-    private function hasLegacyDiffsRows(array $tables): bool
+    private function countLegacyDiffsRows(array $tables): int
     {
+        $rows = 0;
         foreach ($tables as $tableName => $connection) {
-            $count = $connection->fetchOne(
-                \sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $tableName),
-            );
-            if (is_numeric($count) && (int) $count > 0) {
-                return true;
+            if (!\in_array('schema_version', SchemaHelper::getTableColumnNames($connection, $tableName), true)) {
+                continue;
             }
+
+            $count = $connection->fetchOne(\sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $tableName));
+            $rows += is_numeric($count) ? (int) $count : 0;
         }
 
-        return false;
+        return $rows;
     }
 
     /**
-     * Returns audit tables that have schema_version=1 rows but whose DDL migration is already
-     * complete (transaction_hash has already been dropped). Used to allow --convert-diffs to run
-     * after --convert-transaction-hash has been applied in a previous invocation.
+     * Returns the audit tables that no longer have any legacy column but still hold rows with unconverted diffs
+     * (schema_version = 1): the diffs are converted independently of the legacy columns, in the same run as the
+     * legacy tables or in a later one.
+     *
+     * @param array<string, Connection> $legacyTables
      *
      * @return array<string, Connection> keyed by table name
      */
-    private function collectDiffsConversionTables(DoctrineProvider $provider, SchemaManager $schemaManager): array
+    private function collectDiffsConversionTables(DoctrineProvider $provider, SchemaManager $schemaManager, array $legacyTables): array
     {
-        /** @var StorageService[] $storageServices */
-        $storageServices = $provider->getStorageServices();
         $tables = [];
+        foreach ($this->collectAuditTables($provider, $schemaManager) as $auditTableName => [$connection, $table]) {
+            if (isset($legacyTables[$auditTableName]) || !$table->hasColumn('schema_version')) {
+                continue;
+            }
 
-        /** @var Configuration $configuration */
-        $configuration = $provider->getConfiguration();
-
-        foreach ($storageServices as $storageService) {
-            $connection = $storageService->getEntityManager()->getConnection();
-            $dbSchemaManager = $connection->createSchemaManager();
-            $schema = $dbSchemaManager->introspectSchema();
-
-            foreach (array_keys($configuration->getEntities()) as $entity) {
-                $auditTableName = $schemaManager->resolveAuditTableName($entity, $configuration);
-                if (null === $auditTableName) {
-                    continue;
-                }
-
-                if (!$schema->hasTable($auditTableName)) {
-                    continue;
-                }
-
-                $table = $schema->getTable($auditTableName);
-                // Only consider tables whose DDL is fully applied (no legacy transaction_hash column)
-                // but that still carry unconverted rows (schema_version=1).
-                if ($table->hasColumn('transaction_hash')) {
-                    continue;
-                }
-
-                if (!$table->hasColumn('schema_version')) {
-                    continue;
-                }
-
-                $count = $connection->fetchOne(
-                    \sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $auditTableName),
-                );
-
-                if (is_numeric($count) && (int) $count > 0) {
-                    $tables[$auditTableName] = $connection;
-                }
+            if (0 < $this->countLegacyDiffsRows([$auditTableName => $connection])) {
+                $tables[$auditTableName] = $connection;
             }
         }
 
@@ -455,16 +508,16 @@ final class MigrateSchemaCommand extends Command
      *
      * Additive: add new columns (idempotent — skips already-present columns),
      *           existing rows get schema_version=1, migrate blame columns to JSON.
-     * Destructive: drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …).
+     * Destructive: drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …),
+     *              in one table alteration: SQLite rebuilds the table once instead of once per column and index.
      *
      * @param array<string, Connection> $tables
-     * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase.
-     *                                                       Pass false when --convert-diffs runs without --convert-transaction-hash
-     *                                                       so that transaction_hash is preserved for a subsequent conversion run.
+     * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase:
+     *                                                       false keeps it, unconverted, for a later run
      *
      * @return array<string, array{additive: list<string>, destructive: list<string>}>
      */
-    private function generateDdlStatements(array $tables, bool $dropTransactionHash = true): array
+    private function generateDdlStatements(array $tables, bool $dropTransactionHash): array
     {
         $allSqls = [];
 
@@ -514,8 +567,9 @@ final class MigrateSchemaCommand extends Command
                 }
             }
 
-            // 2. Migrate blame fields to the new blame JSON column (idempotent — WHERE filters nulls)
-            if ($table->hasColumn('blame_user')) {
+            // 2. Migrate blame fields to the new blame JSON column (idempotent — WHERE filters nulls). The four columns
+            // are dropped together, so they are either all there or all gone.
+            if ([] === array_filter(self::BLAME_COLUMNS, static fn (string $column): bool => !$table->hasColumn($column))) {
                 $additive[] = $this->buildBlameMigrationSql($tableName, $connection);
             }
 
@@ -526,38 +580,36 @@ final class MigrateSchemaCommand extends Command
                 static fn (string $colName): bool => $table->hasColumn($colName) && ($dropTransactionHash || 'transaction_hash' !== $colName),
             ));
 
-            // Indexes covering a dropped column are dropped first: the transaction_hash index of v1 tables,
+            // Indexes covering a dropped column are dropped with it: the transaction_hash index of v1 tables,
             // the (blame_user, blame_id) index of provider 1.x, or any custom one. MySQL and MariaDB would
             // otherwise keep them on the remaining columns under their legacy name.
             // The transaction_hash index goes with its column, not in the additive phase:
-            // --convert-transaction-hash looks rows up by transaction_hash, and would otherwise
-            // scan the whole table once per legacy transaction.
+            // --convert-transaction-hash looks rows up by transaction_hash.
+            $droppedIndexes = [];
             foreach ($table->getIndexes() as $index) {
                 $indexedColumns = array_map(
                     static fn (IndexedColumn $column): string => mb_strtolower($column->getColumnName()->getIdentifier()->getValue()),
                     $index->getIndexedColumns(),
                 );
 
-                if ([] === array_intersect($indexedColumns, $droppedColumns)) {
-                    continue;
-                }
-
-                $indexName = $index->getObjectName();
-                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropIndex($indexName)) as $sql) {
-                    $destructive[] = $sql;
+                if ([] !== array_intersect($indexedColumns, $droppedColumns)) {
+                    $droppedIndexes[] = $index->getObjectName();
                 }
             }
 
-            // transaction_hash goes last: a table keeps being detected as a legacy table until it is dropped,
-            // so a run interrupted between two of these statements (MySQL and MariaDB do not roll DDL back)
-            // is completed by the next one.
-            usort($droppedColumns, static fn (string $a, string $b): int => ('transaction_hash' === $a) <=> ('transaction_hash' === $b));
+            $droppedColumnNames = array_map(static fn (string $colName): UnqualifiedName => $table->getColumn($colName)->getObjectName(), $droppedColumns);
+            if ([] !== $droppedColumnNames) {
+                $destructive = $alter(static function (TableEditor $editor) use ($droppedIndexes, $droppedColumnNames): TableEditor {
+                    foreach ($droppedIndexes as $indexName) {
+                        $editor->dropIndex($indexName);
+                    }
 
-            foreach ($droppedColumns as $colName) {
-                $columnName = $table->getColumn($colName)->getObjectName();
-                foreach ($alter(static fn (TableEditor $editor): TableEditor => $editor->dropColumn($columnName)) as $sql) {
-                    $destructive[] = $sql;
-                }
+                    foreach ($droppedColumnNames as $columnName) {
+                        $editor->dropColumn($columnName);
+                    }
+
+                    return $editor;
+                });
             }
 
             $allSqls[$tableName] = ['additive' => $additive, 'destructive' => $destructive];
@@ -589,129 +641,113 @@ final class MigrateSchemaCommand extends Command
     /**
      * Converts legacy transaction_hash (SHA1) values to transaction_id (ULID) across all tables.
      *
-     * Algorithm:
-     *   Phase A — build a global hash→ULID map: collect all distinct transaction_hash values
-     *             across every audit table (WHERE transaction_id IS NULL AND transaction_hash IS NOT NULL),
-     *             deduplicate globally, generate exactly ONE Ulid per unique hash.
-     *             If --limit=N, take only the first N entries.
-     *   Phase B — apply the map to every table: UPDATE … SET transaction_id = :ulid
-     *             WHERE transaction_hash = :hash AND transaction_id IS NULL.
-     *
-     * The cross-table deduplication ensures that entries from the same original transaction
-     * (same hash in post_audit, comment_audit, tag_audit, …) all receive the identical ULID,
-     * preserving the grouping semantic.
+     * Table by table, the distinct hashes left to convert are read in batches of HASH_BATCH_SIZE, in hash order (keyset
+     * pagination on the transaction_hash index). For each batch, the ULID a hash already got in any table (converted
+     * earlier in this run, or by an interrupted run) is reused, and the other hashes get a new one: the entries of a
+     * legacy transaction get one ULID across all tables and storages. One UPDATE per batch writes them.
+     * Memory stays bounded by the batch size, and every table is only read and written for its own hashes.
      *
      * Idempotent: already-converted rows (transaction_id IS NOT NULL) are never touched.
-     * --limit unit: number of unique hashes (never splits a transaction group).
+     * --limit unit: number of unique hashes, counted per table.
      *
      * @param array<string, Connection> $tables
      */
     private function convertTransactionHashAcrossTables(array $tables, ?int $limit, SymfonyStyle $io): void
     {
-        // Phase A: build global hash→ULID map across all tables
-        /** @var array<string, string> $hashMap  hash => ulid */
-        $hashMap = [];
+        $tables = array_filter(
+            $tables,
+            static fn (Connection $connection, string $tableName): bool => \in_array('transaction_hash', SchemaHelper::getTableColumnNames($connection, $tableName), true),
+            ARRAY_FILTER_USE_BOTH,
+        );
 
-        // ULIDs already given to a hash by an interrupted run: reusing them keeps the transaction
-        // grouped across the tables that run had converted and the ones it had not reached.
-        /** @var array<string, string> $convertedHashes hash => ulid */
-        $convertedHashes = [];
+        $leftHashes = 0;
         foreach ($tables as $tableName => $connection) {
-            if (!$connection->createSchemaManager()->introspectSchema()->getTable($tableName)->hasColumn('transaction_hash')) {
-                continue;
-            }
-
-            $pairs = $connection->fetchAllNumeric(\sprintf(
-                'SELECT DISTINCT transaction_hash, transaction_id FROM %s WHERE transaction_id IS NOT NULL AND transaction_hash IS NOT NULL',
-                $tableName,
-            ));
-
-            foreach ($pairs as [$hash, $ulid]) {
-                $convertedHashes[(string) $hash] ??= (string) $ulid;
-            }
+            $count = $connection->fetchOne(\sprintf('SELECT COUNT(DISTINCT transaction_hash) FROM %s WHERE transaction_id IS NULL AND transaction_hash IS NOT NULL', $tableName));
+            $leftHashes += is_numeric($count) ? (int) $count : 0;
         }
 
-        foreach ($tables as $tableName => $connection) {
-            $dbSchemaManager = $connection->createSchemaManager();
-            $schema = $dbSchemaManager->introspectSchema();
-            if (!$schema->getTable($tableName)->hasColumn('transaction_hash')) {
-                continue;
-            }
-
-            /** @var list<mixed> $hashes */
-            $hashes = $connection->fetchFirstColumn(
-                \sprintf(
-                    'SELECT DISTINCT transaction_hash FROM %s WHERE transaction_id IS NULL AND transaction_hash IS NOT NULL',
-                    $tableName,
-                ),
-            );
-
-            foreach ($hashes as $raw) {
-                $hash = (string) $raw;
-                $hashMap[$hash] ??= $convertedHashes[$hash] ?? (string) new Ulid();
-            }
-        }
-
-        $totalHashes = \count($hashMap);
-
-        if (0 === $totalHashes) {
+        if (0 === $leftHashes) {
             $io->text('  No transaction_hash values to convert.');
 
             return;
         }
 
-        if (null !== $limit) {
-            $hashMap = \array_slice($hashMap, 0, $limit, true);
-        }
-
-        // Phase B: apply map to all tables
-        $totalRows = 0;
-        $tablesUpdated = 0;
         $startTime = microtime(true);
+        $processed = 0;
+        $totalRows = 0;
 
         foreach ($tables as $tableName => $connection) {
-            $dbSchemaManager = $connection->createSchemaManager();
-            $schema = $dbSchemaManager->introspectSchema();
-            if (!$schema->getTable($tableName)->hasColumn('transaction_hash')) {
-                continue;
-            }
-
+            $lastHash = '';
             $tableRows = 0;
-            $sql = \sprintf('UPDATE %s SET transaction_id = ? WHERE transaction_hash = ? AND transaction_id IS NULL', $tableName);
 
-            // One database transaction per BATCH_SIZE hashes: in autocommit mode, each UPDATE would be
-            // committed (and its log flushed to disk) on its own, which dominates the duration of the conversion.
-            foreach (array_chunk($hashMap, self::BATCH_SIZE, true) as $chunk) {
-                $tableRows += $connection->transactional(static function (Connection $connection) use ($chunk, $sql): int {
-                    $affected = 0;
-                    foreach ($chunk as $hash => $ulid) {
-                        $affected += (int) $connection->executeStatement($sql, [$ulid, $hash]);
+            while (null === $limit || $processed < $limit) {
+                $batchSize = null === $limit ? self::HASH_BATCH_SIZE : min(self::HASH_BATCH_SIZE, $limit - $processed);
+
+                /** @var list<string> $hashes */
+                $hashes = array_map(strval(...), $connection->fetchFirstColumn(
+                    \sprintf('SELECT DISTINCT transaction_hash FROM %s WHERE transaction_hash > ? AND transaction_id IS NULL ORDER BY transaction_hash LIMIT %d', $tableName, $batchSize),
+                    [$lastHash],
+                ));
+
+                if ([] === $hashes) {
+                    break;
+                }
+
+                // the ULID each hash got in a table converted before, otherwise a new one
+                $ulids = [];
+                foreach ($tables as $otherTableName => $otherConnection) {
+                    $pairs = $otherConnection->fetchAllNumeric(
+                        \sprintf('SELECT DISTINCT transaction_hash, transaction_id FROM %s WHERE transaction_hash IN (?) AND transaction_id IS NOT NULL', $otherTableName),
+                        [$hashes],
+                        [ArrayParameterType::STRING],
+                    );
+                    foreach ($pairs as [$hash, $ulid]) {
+                        $ulids[(string) $hash] ??= (string) $ulid;
                     }
+                }
 
-                    return $affected;
-                });
+                $cases = [];
+                $parameters = [];
+                foreach ($hashes as $hash) {
+                    $cases[] = 'WHEN ? THEN ?';
+                    $parameters[] = $hash;
+                    $parameters[] = $ulids[$hash] ?? (string) new Ulid();
+                }
+
+                $sql = \sprintf(
+                    'UPDATE %s SET transaction_id = CASE transaction_hash %s END WHERE transaction_id IS NULL AND transaction_hash IN (%s)',
+                    $tableName,
+                    implode(' ', $cases),
+                    implode(', ', array_fill(0, \count($hashes), '?')),
+                );
+                $tableRows += (int) $connection->executeStatement($sql, [...$parameters, ...$hashes]);
+
+                $processed += \count($hashes);
+                $lastHash = $hashes[\count($hashes) - 1];
+
+                if (\count($hashes) < $batchSize) {
+                    break;
+                }
             }
 
-            if ($tableRows > 0) {
-                ++$tablesUpdated;
-                $totalRows += $tableRows;
+            $totalRows += $tableRows;
+            if (null !== $limit && $processed >= $limit) {
+                break;
             }
         }
 
         $elapsed = microtime(true) - $startTime;
-        $processed = \count($hashMap);
 
         $io->text(\sprintf(
-            '  Converted <info>%d</info> / %d unique hash(es) → <info>%d</info> row(s) updated across <info>%d</info> table(s) in %.1fs.',
+            '  Converted <info>%d</info> / %d hash(es) → <info>%d</info> row(s) updated in %.1fs.',
             $processed,
-            $totalHashes,
+            $leftHashes,
             $totalRows,
-            $tablesUpdated,
             $elapsed,
         ));
 
-        if (null !== $limit && $processed < $totalHashes) {
-            $remaining = $totalHashes - $processed;
+        if (null !== $limit && $processed < $leftHashes) {
+            $remaining = $leftHashes - $processed;
             $estimatedSeconds = $processed > 0 ? (int) round($elapsed * $remaining / $processed) : 0;
             $io->text(\sprintf(
                 '  → Estimated remaining: ~%s (%d hash(es) left)',
@@ -722,10 +758,10 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
-     * Lists, per audit table, the fields of the audited entities that are mapped to a JSON type.
-     * Entities that share an audit table (single table inheritance) add up their fields.
+     * Lists, per audit table and audited class, the fields mapped to a JSON type. Under single table inheritance,
+     * the classes sharing an audit table may map the same field name differently: the fields are kept per class.
      *
-     * @return array<string, array<string, true>> field names as keys, keyed by audit table name
+     * @return array<string, array<string, array<string, true>>> field names as keys, keyed by audit table and class
      */
     private function collectJsonFields(DoctrineProvider $provider, SchemaManager $schemaManager): array
     {
@@ -748,11 +784,12 @@ final class MigrateSchemaCommand extends Command
 
             $connection = $entityManager->getConnection();
             $jsonTypes = DoctrineHelper::jsonTypes($connection);
+            $jsonFields[$auditTableName][$entity] ??= [];
 
             foreach ($entityManager->getClassMetadata($entity)->fieldMappings as $fieldName => $mapping) {
                 $type = $mapping instanceof FieldMapping ? $mapping->type : $mapping['type'];
                 if (\in_array(DoctrineHelper::getType($connection, $type), $jsonTypes, true)) {
-                    $jsonFields[$auditTableName][$fieldName] = true;
+                    $jsonFields[$auditTableName][$entity][$fieldName] = true;
                 }
             }
         }
@@ -764,31 +801,25 @@ final class MigrateSchemaCommand extends Command
      * Converts legacy diffs JSON across all tables, respecting an optional global row limit.
      *
      * @param array<string, Connection>                                  $tables
-     * @param array<string, array<string, true>>                         $jsonFields      JSON fields per audit table (see collectJsonFields())
+     * @param array<string, array<string, array<string, true>>>          $jsonFields      JSON fields per audit table and class (see collectJsonFields())
      * @param array<string, array{table: string, classes: list<string>}> $auditedEntities audited entities per audit table (see collectAuditedEntities())
+     *
+     * @return array<string, non-empty-list<int|string>> ids of the rows left unconverted, per table
      */
-    private function convertDiffsAcrossTables(array $tables, array $jsonFields, array $auditedEntities, ?int $limit, SymfonyStyle $io): void
+    private function convertDiffsAcrossTables(array $tables, array $jsonFields, array $auditedEntities, ?int $limit, SymfonyStyle $io): array
     {
-        // Count total rows to convert across all tables for estimation
-        $totalRows = 0;
-        foreach ($tables as $tableName => $connection) {
-            $count = $connection->fetchOne(
-                \sprintf('SELECT COUNT(*) FROM %s WHERE schema_version = 1', $tableName),
-            );
-            if (is_numeric($count)) {
-                $totalRows += (int) $count;
-            }
-        }
+        $totalRows = $this->countLegacyDiffsRows($tables);
 
         if (0 === $totalRows) {
             $io->text('  No legacy diffs rows to convert.');
 
-            return;
+            return [];
         }
 
         $startTime = microtime(true);
-        $convertedTotal = 0;
+        $processedTotal = 0;
         $remaining = $limit;
+        $unconvertible = [];
 
         foreach ($tables as $tableName => $connection) {
             if (null !== $remaining && $remaining <= 0) {
@@ -796,11 +827,14 @@ final class MigrateSchemaCommand extends Command
             }
 
             $auditedEntity = $auditedEntities[$tableName] ?? ['table' => '', 'classes' => []];
-            $convertedInTable = $this->convertDiffsForTable($tableName, $connection, $jsonFields[$tableName] ?? [], $auditedEntity, $io, $remaining);
-            $convertedTotal += $convertedInTable;
+            [$processedInTable, $skipped] = $this->convertDiffsForTable($tableName, $connection, $jsonFields[$tableName] ?? [], $auditedEntity, $io, $remaining);
+            $processedTotal += $processedInTable;
+            if ([] !== $skipped) {
+                $unconvertible[$tableName] = $skipped;
+            }
 
             if (null !== $remaining) {
-                $remaining -= $convertedInTable;
+                $remaining -= $processedInTable;
             }
         }
 
@@ -808,20 +842,22 @@ final class MigrateSchemaCommand extends Command
 
         $io->text(\sprintf(
             '  Converted <info>%d</info> / %d row(s) in %.1fs.',
-            $convertedTotal,
+            $processedTotal - array_sum(array_map(count(...), $unconvertible)),
             $totalRows,
             $elapsed,
         ));
 
-        if (null !== $limit && $convertedTotal < $totalRows) {
-            $leftRows = $totalRows - $convertedTotal;
-            $estimatedSeconds = $convertedTotal > 0 ? (int) round($elapsed * $leftRows / $convertedTotal) : 0;
+        if (null !== $limit && $processedTotal < $totalRows) {
+            $leftRows = $totalRows - $processedTotal;
+            $estimatedSeconds = $processedTotal > 0 ? (int) round($elapsed * $leftRows / $processedTotal) : 0;
             $io->text(\sprintf(
                 '  → Estimated remaining: ~%s (%d row(s) left)',
                 $this->formatSeconds($estimatedSeconds),
                 $leftRows,
             ));
         }
+
+        return $unconvertible;
     }
 
     /**
@@ -836,24 +872,26 @@ final class MigrateSchemaCommand extends Command
      * Each batch is written in one database transaction: in autocommit mode, each UPDATE would be committed
      * (and its log flushed to disk) on its own, which dominates the duration of the conversion. A failing row
      * rolls its whole batch back, and the next run converts it again.
+     * A row that cannot be converted (see convertLegacyDiffs()) is left as it is, at schema_version 1, and reported.
      *
-     * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
+     * @param array<string, array<string, true>>          $jsonFields    JSON fields of the classes audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
-     * @param ?int                                        $limit         Maximum number of rows to convert (null = no limit)
+     * @param ?int                                        $limit         Maximum number of rows to process (null = no limit)
      *
-     * @return int Number of rows converted
+     * @return array{int, list<int|string>} number of rows processed, ids of the rows left unconverted
      */
-    private function convertDiffsForTable(string $tableName, Connection $connection, array $jsonFields, array $auditedEntity, SymfonyStyle $io, ?int $limit): int
+    private function convertDiffsForTable(string $tableName, Connection $connection, array $jsonFields, array $auditedEntity, SymfonyStyle $io, ?int $limit): array
     {
         $io->text(\sprintf('  Converting legacy diffs for <info>%s</info>...', $tableName));
 
-        $converted = 0;
+        $processed = 0;
+        $skipped = [];
         $lastId = 0;
 
         while (true) {
             $batchLimit = self::BATCH_SIZE;
             if (null !== $limit) {
-                $remaining = $limit - $converted;
+                $remaining = $limit - $processed;
                 if ($remaining <= 0) {
                     break;
                 }
@@ -877,10 +915,15 @@ final class MigrateSchemaCommand extends Command
 
             $updates = [];
             foreach ($rows as $row) {
-                $updates[] = [
-                    'id' => $row['id'],
-                    'diffs' => json_encode($this->convertLegacyDiffs($row, $jsonFields, $auditedEntity), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                ];
+                $converted = $this->convertLegacyDiffs($row, $jsonFields, $auditedEntity);
+                if (null === $converted) {
+                    $skipped[] = $row['id'];
+
+                    continue;
+                }
+
+                // escaped like the diffs written by the provider, so that the column charset does not matter
+                $updates[] = ['id' => $row['id'], 'diffs' => json_encode($converted, JSON_THROW_ON_ERROR)];
             }
 
             $connection->transactional(static function (Connection $connection) use ($tableName, $updates): void {
@@ -889,17 +932,17 @@ final class MigrateSchemaCommand extends Command
                 }
             });
 
-            $converted += \count($updates);
-            $lastId = $updates[\count($updates) - 1]['id'];
+            $processed += \count($rows);
+            $lastId = $rows[\count($rows) - 1]['id'];
 
             if (\count($rows) < $batchLimit) {
                 break;
             }
         }
 
-        $io->text(\sprintf('    Converted <info>%d</info> row(s).', $converted));
+        $io->text(\sprintf('    Converted <info>%d</info> row(s)%s.', $processed - \count($skipped), [] === $skipped ? '' : \sprintf(', <comment>%d left unconverted</comment>', \count($skipped))));
 
-        return $converted;
+        return [$processed, $skipped];
     }
 
     /**
@@ -914,23 +957,51 @@ final class MigrateSchemaCommand extends Command
      *
      * '@source' is reused whenever present; otherwise the source is built from the row and the audited entity.
      *
+     * Returns null when the row cannot be converted without losing or misreading its content: diffs that are not
+     * valid JSON, that do not decode to an object, a field entry that is not an object, or an unknown type.
+     * Such a row is left at schema_version 1, as it is, and reported.
+     *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
+     * @param array<string, array<string, true>>                                                        $jsonFields    JSON fields of the classes audited in this table
      * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
-    private function convertLegacyDiffs(array $row, array $jsonFields, array $auditedEntity): array
+    private function convertLegacyDiffs(array $row, array $jsonFields, array $auditedEntity): ?array
     {
-        $rawDiffs = json_decode((string) ($row['diffs'] ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
+        try {
+            $rawDiffs = json_decode((string) ($row['diffs'] ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
         if (!\is_array($rawDiffs)) {
-            $rawDiffs = [];
+            return null;
         }
 
         return match ($row['type']) {
-            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row, $jsonFields, $auditedEntity),
+            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row, $this->jsonFieldsOfRow($jsonFields, $row), $auditedEntity),
             'remove' => $this->convertRemoveDiffs($rawDiffs, $row, $auditedEntity),
             'associate', 'dissociate' => $this->convertAssociateDiffs($rawDiffs),
-            default => $rawDiffs,
+            default => null,
         };
+    }
+
+    /**
+     * JSON fields of the class audited in a row: the discriminator under single table inheritance, otherwise the
+     * only class of the table, otherwise (several classes without a discriminator) the fields of all of them.
+     *
+     * @param array<string, array<string, true>>                                                        $jsonFields
+     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
+     *
+     * @return array<string, true>
+     */
+    private function jsonFieldsOfRow(array $jsonFields, array $row): array
+    {
+        $class = $row['discriminator'] ?? null;
+        if (\is_string($class) && isset($jsonFields[$class])) {
+            return $jsonFields[$class];
+        }
+
+        return 1 === \count($jsonFields) ? reset($jsonFields) : array_merge([], ...array_values($jsonFields));
     }
 
     /**
@@ -938,12 +1009,13 @@ final class MigrateSchemaCommand extends Command
      *
      * Field diffs ({'new': v} and/or {'old': v}) are normalized to {'new': v, 'old': v}.
      * JSON deep diffs already have the v2 shape: they are carried over unchanged and listed in 'deep_diffs'.
+     * Returns null when a field entry is not an object (see convertLegacyDiffs()).
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
+     * @param array<string, true>                                                                       $jsonFields    JSON fields of the class audited in the row
      * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
-    private function convertChangeDiffs(array $diffs, array $row, array $jsonFields, array $auditedEntity): array
+    private function convertChangeDiffs(array $diffs, array $row, array $jsonFields, array $auditedEntity): ?array
     {
         $source = $this->extractLegacySource($diffs, $row, $auditedEntity);
         unset($diffs['@source']);
@@ -952,7 +1024,7 @@ final class MigrateSchemaCommand extends Command
         $deepDiffs = [];
         foreach ($diffs as $field => $diff) {
             if (!\is_array($diff)) {
-                continue;
+                return null;
             }
 
             if ($this->isFieldDiff($diff, isset($jsonFields[$field]))) {
@@ -974,10 +1046,11 @@ final class MigrateSchemaCommand extends Command
     /**
      * Tells a field diff ({'new': v} and/or {'old': v}) apart from a JSON deep diff.
      *
-     * A field diff only has 'new'/'old' keys. So has the deep diff of a JSON object whose own keys are
-     * 'new'/'old', but the values of a deep diff are always nested diffs (arrays), whereas a JSON field
-     * only gets a field diff when one of its sides is a scalar. A field that is not a JSON field of the
-     * audited entity (or no longer exists) keeps the reading by keys only.
+     * A field diff only has 'new'/'old' keys. So may the deep diff of a JSON field, when the JSON object has
+     * 'new'/'old' keys of its own. A deep diff only holds nested diffs, though, whereas the field diff of a JSON field
+     * holds JSON values: since auditor 3.2.0 when one side is a scalar or null, and before it for every change, with
+     * both sides whole JSON arrays or objects. So a JSON field gets a deep diff only when the diff is a deep diff node.
+     * A field that is not a JSON field of the audited class (or no longer exists) keeps the reading by keys only.
      */
     private function isFieldDiff(array $diff, bool $isJsonField): bool
     {
@@ -989,7 +1062,25 @@ final class MigrateSchemaCommand extends Command
             return true;
         }
 
-        return array_any($diff, static fn (mixed $value): bool => !\is_array($value));
+        return !self::isDiffNode($diff);
+    }
+
+    /**
+     * A node of a JSON deep diff: a non-empty array whose values are leaves ({'old': v} and/or {'new': v}) or nodes.
+     * A field diff holding whole JSON values is not one, as soon as one value has a scalar member.
+     */
+    private static function isDiffNode(mixed $node): bool
+    {
+        if (!\is_array($node) || [] === $node) {
+            return false;
+        }
+
+        // an empty array is written as is for an empty JSON array or object (1.x writes [] in a deep diff)
+        return array_all(
+            $node,
+            static fn (mixed $child): bool => \is_array($child)
+                && ([] === $child || [] === array_diff(array_keys($child), ['new', 'old']) || self::isDiffNode($child)),
+        );
     }
 
     /**

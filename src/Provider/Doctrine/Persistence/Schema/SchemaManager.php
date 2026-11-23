@@ -15,6 +15,8 @@ use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Schema\SchemaManagerTest;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\ColumnDiff;
 use Doctrine\DBAL\Schema\ComparatorConfig;
@@ -74,7 +76,10 @@ final readonly class SchemaManager
                     continue;
                 }
 
-                if ($schema->getTable($auditTableName)->hasColumn('transaction_hash')) {
+                // any legacy column: a table that lost transaction_hash (to a Doctrine migration, say) may still hold
+                // the legacy blame columns, which audit:schema:update would drop without migrating them
+                $table = $schema->getTable($auditTableName);
+                if ([] !== array_filter(['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'], $table->hasColumn(...))) {
                     $legacy[] = $auditTableName;
                 }
             }
@@ -91,16 +96,28 @@ final readonly class SchemaManager
         $storageServices = $this->provider->getStorageServices();
         foreach ($sqls as $name => $queries) {
             $connection = $storageServices[$name]->getEntityManager()->getConnection();
-            foreach ($queries as $index => $sql) {
-                $statement = $connection->prepare($sql);
-                $statement->executeStatement();
+            $execute = static function (Connection $connection) use ($queries, $sqls, $callback): void {
+                foreach ($queries as $index => $sql) {
+                    $statement = $connection->prepare($sql);
+                    $statement->executeStatement();
 
-                if (null !== $callback) {
-                    $callback([
-                        'total' => \count($sqls),
-                        'current' => $index,
-                    ]);
+                    if (null !== $callback) {
+                        $callback([
+                            'total' => \count($sqls),
+                            'current' => $index,
+                        ]);
+                    }
                 }
+            };
+
+            // SQLite rebuilds a table to change a column (copy, drop, create, copy back): in a transaction, an
+            // interruption cannot lose the table. PostgreSQL DDL is transactional too; MySQL and MariaDB commit
+            // each DDL statement anyway.
+            $platform = $connection->getDatabasePlatform();
+            if ($platform instanceof SQLitePlatform || $platform instanceof PostgreSQLPlatform) {
+                $connection->transactional($execute);
+            } else {
+                $execute($connection);
             }
         }
     }

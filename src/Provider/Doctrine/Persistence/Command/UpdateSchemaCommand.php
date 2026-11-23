@@ -48,9 +48,10 @@ final class UpdateSchemaCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         if (!$this->lock()) {
+            // a non-zero exit code: a deployment script must not go on as if the schema had been updated
             $output->writeln('The command is already running in another process.');
 
-            return Command::SUCCESS;
+            return Command::FAILURE;
         }
 
         $io = new SymfonyStyle($input, $output);

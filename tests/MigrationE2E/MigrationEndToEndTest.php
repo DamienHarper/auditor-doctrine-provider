@@ -138,6 +138,11 @@ final class MigrationEndToEndTest extends TestCase
             $this->assertSame(Command::SUCCESS, $this->migrate(['--force' => true, '--convert-all' => true, '--limit' => '250']), 'limited run '.$run);
             foreach ($this->auditTables() as [$connection, $table]) {
                 $this->assertContains('transaction_hash', $this->columns($connection, $table), \sprintf('%s: a limited run must keep the legacy columns.', $table));
+
+                // rows read from a half-migrated table keep a transaction id, converted or not
+                foreach ($connection->fetchAllAssociative(\sprintf('SELECT * FROM %s', $table)) as $row) {
+                    $this->assertNotNull($this->entry($row)->transactionId, \sprintf('%s #%s: transaction id', $table, $row['id']));
+                }
             }
         }
 
@@ -156,9 +161,13 @@ final class MigrationEndToEndTest extends TestCase
         $platform = $connection->getDatabasePlatform();
 
         if ($platform instanceof SQLitePlatform) {
-            // SQLite stores JSON as text: the row cannot be decoded
-            $connection->update($table, ['diffs' => '{not json'], ['id' => $row['id']]);
-            $restore = static fn (): int|string => $connection->update($table, ['diffs' => $row['diffs']], ['id' => $row['id']]);
+            // SQLite cannot add a constraint to an existing table: a trigger refuses the converted diffs of the row
+            $connection->executeStatement(\sprintf(
+                "CREATE TRIGGER e2e_failing_row BEFORE UPDATE ON %s WHEN NEW.object_id = '%s' AND NEW.diffs LIKE '%%\"changes\"%%' BEGIN SELECT RAISE(ABORT, 'failing row'); END",
+                $table,
+                $row['object_id'],
+            ));
+            $restore = static fn (): int|string => $connection->executeStatement('DROP TRIGGER e2e_failing_row');
         } else {
             // the other platforms only accept valid JSON: a constraint refuses the converted diffs of the row
             // (MySQL and MariaDB do not let a CHECK constraint refer to the auto-increment id)
@@ -175,7 +184,7 @@ final class MigrationEndToEndTest extends TestCase
         try {
             $this->migrate(['--force' => true, '--convert-all' => true]);
             $this->fail('The migration was expected to fail on row '.$row['id'].'.');
-        } catch (DbalException|\JsonException) {
+        } catch (DbalException) {
         }
 
         // the rows of the failing batch are left unconverted, those of the previous batch are converted
@@ -338,11 +347,12 @@ final class MigrationEndToEndTest extends TestCase
                 unset($old['@source']);
                 $this->assertSame(array_keys($old), array_keys($new['changes']), $where.': changed fields');
 
-                // 1.x writes a deep diff for a JSON field when both values are arrays, and a field diff otherwise
+                // Since auditor 3.2.0, 1.x writes a deep diff for a JSON field when both values are arrays: a tree whose
+                // leaves are {old, new}. Otherwise, and for every change before 3.2.0, a field diff holding the values.
                 $deepDiffs = array_keys(array_filter(
                     $old,
                     static fn (array $diff, string $field): bool => \in_array($field, self::JSON_FIELDS, true)
-                        && ([] !== array_diff(array_keys($diff), ['new', 'old']) || array_all($diff, static fn (mixed $value): bool => \is_array($value))),
+                        && ([] !== array_diff(array_keys($diff), ['new', 'old']) || self::isDeepDiffTree($diff)),
                     ARRAY_FILTER_USE_BOTH,
                 ));
                 $this->assertSame($deepDiffs, $new['deep_diffs'] ?? [], $where.': deep_diffs');
@@ -374,6 +384,26 @@ final class MigrationEndToEndTest extends TestCase
     }
 
     /**
+     * A tree of {old, new} leaves, as 1.x writes for a JSON field since auditor 3.2.0.
+     */
+    private static function isDeepDiffTree(mixed $node): bool
+    {
+        if (!\is_array($node) || [] === $node) {
+            return false;
+        }
+
+        foreach ($node as $child) {
+            // 1.x writes an empty JSON array or object as is
+            $isLeaf = \is_array($child) && [] === array_diff(array_keys($child), ['new', 'old']);
+            if (!$isLeaf && !self::isDeepDiffTree($child)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * JSON fields of a legacy entry whose deep diff only has "new" and "old" keys.
      *
      * @param array<string, mixed> $legacy
@@ -392,6 +422,7 @@ final class MigrationEndToEndTest extends TestCase
             static fn (string $field): bool => \is_array($diffs[$field] ?? null)
                 && [] === array_diff(array_keys($diffs[$field]), ['new', 'old'])
                 && array_all($diffs[$field], static fn (mixed $value): bool => \is_array($value)),
+            // (a field diff of whole JSON values written before auditor 3.2.0 has the same shape)
         ));
     }
 
