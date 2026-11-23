@@ -114,6 +114,14 @@ action is never split between two pages: pass the `HistoryGrouper` (or key calla
 keep its groups whole, or `false` to cut the page at its size exactly. `iterate()` yields every entry, keyed by
 cursor, reading each table by batches; `count()` counts them.
 
+A cursor that is not one (edited by hand in a query string, for instance) makes `fetch()` and `iterate()` throw an
+`InvalidArgumentException`. `RootQuery::isCursor($cursor)` tells it beforehand, to show the first page instead:
+
+```php
+$after = $request->query->getString('after');
+$page = $query->fetch(20, after: RootQuery::isCursor($after) ? $after : null);
+```
+
 ### Options
 
 | Option | Type | Default | Description |

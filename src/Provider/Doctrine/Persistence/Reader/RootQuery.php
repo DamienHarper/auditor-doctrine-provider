@@ -127,6 +127,15 @@ final readonly class RootQuery
     }
 
     /**
+     * Tells whether $cursor is a position this query can read from (RootPage::$firstCursor, RootPage::$lastCursor),
+     * to tell a cursor edited by hand from other errors before fetch().
+     */
+    public static function isCursor(string $cursor): bool
+    {
+        return null !== self::position($cursor);
+    }
+
+    /**
      * Merges the streams of the audit tables.
      *
      * @return \Generator<int, array{Entry, string}>
@@ -259,6 +268,14 @@ final readonly class RootQuery
      */
     private function decode(string $cursor): array
     {
+        return self::position($cursor) ?? throw new InvalidArgumentException(\sprintf('Invalid history cursor "%s".', $cursor));
+    }
+
+    /**
+     * @return null|array{string, string, string, int}
+     */
+    private static function position(string $cursor): ?array
+    {
         $json = base64_decode(strtr($cursor, '-_', '+/'), true);
 
         try {
@@ -274,9 +291,9 @@ final readonly class RootQuery
             || !\is_string($position[1] ?? null)
             || !\is_string($position[2] ?? null)
             || !\is_int($position[3] ?? null)
-            || !$this->isDate($position[0])
+            || !self::isDate($position[0])
         ) {
-            throw new InvalidArgumentException(\sprintf('Invalid history cursor "%s".', $cursor));
+            return null;
         }
 
         return [$position[0], $position[1], $position[2], $position[3]];
@@ -287,7 +304,7 @@ final readonly class RootQuery
      * with up to 6 fractional digits): the database compares it with a datetime column, and PostgreSQL rejects
      * anything else.
      */
-    private function isDate(string $createdAt): bool
+    private static function isDate(string $createdAt): bool
     {
         if (1 !== preg_match('/^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?$/', $createdAt, $parts)) {
             return false;
