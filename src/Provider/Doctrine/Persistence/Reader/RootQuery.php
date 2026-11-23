@@ -306,7 +306,7 @@ final readonly class RootQuery
      */
     private static function isDate(string $createdAt): bool
     {
-        if (1 !== preg_match('/^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?$/', $createdAt, $parts)) {
+        if (1 !== preg_match('/^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?\z/', $createdAt, $parts)) {
             return false;
         }
 

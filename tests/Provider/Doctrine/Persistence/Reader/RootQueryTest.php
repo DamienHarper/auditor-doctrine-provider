@@ -175,6 +175,8 @@ final class RootQueryTest extends TestCase
         yield 'too precise' => ['2026-11-20 10:00:00.1234567'];
 
         yield 'SQL' => ["2026-11-20 10:00:00' OR 1=1 --"];
+
+        yield 'trailing line break' => ["2026-11-20 10:00:00\n"];
     }
 
     public function testCursorsOfTheReaderAreValid(): void
