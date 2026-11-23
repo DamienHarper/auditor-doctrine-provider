@@ -134,8 +134,9 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
      * postSoftDelete) and CreateSchemaListener (postGenerateSchemaTable) itself.
      *
      * A dependency injection container uses it to declare them as lazy listeners of the event managers: they are
-     * then attached as soon as an entity manager is created, and the flushes run before anything else builds the
-     * provider are audited too.
+     * registered with an event manager when it is created and build the provider on the first flush, so the flushes
+     * run before anything else builds the provider are audited too. TableSchemaListener does nothing any more and is
+     * not needed.
      *
      * @throws ProviderException when auditing services are already registered: their listeners are attached
      */
