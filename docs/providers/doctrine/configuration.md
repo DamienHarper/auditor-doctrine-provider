@@ -227,6 +227,14 @@ $configuration = new Configuration([
 setting only `max_age` keeps the attribute `maxEntries`, and an explicit `null` disables the attribute value.
 They are validated (positive ISO 8601 duration, positive integer) before `audit:clean` deletes anything.
 
+For an entity marked `#[Auditable]`, the configured options combine with the attributes:
+
+- `enabled: false` disables the entity despite `#[Auditable]`; `enabled: true` does not re-enable an
+  `#[Auditable(enabled: false)]` entity.
+- `roles` take precedence over `#[Security]`, scope by scope (`roles: null` keeps the attribute value).
+- `ignored_columns` and `roots` are added to the `#[Ignore]` and `#[AuditRoot]` ones; `audited_columns` only exists
+  in the configuration.
+
 ## 👁️ Viewer Configuration
 
 The `viewer` option controls the built-in audit viewer (when integrated with a UI layer):

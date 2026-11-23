@@ -528,6 +528,21 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
                 }
             }
 
+            // An entity disabled in the configuration stays disabled despite #[Auditable]. A configured `true` cannot
+            // re-enable an #[Auditable(enabled: false)] entity: auditor-bundle sets it by default on every entity.
+            if (false === ($entities[$entity]['enabled'] ?? null)) {
+                $merged[$entity]['enabled'] = false;
+            }
+
+            // Roles given in the configuration take precedence over the #[Security] ones, scope by scope.
+            if (\is_array($entities[$entity]['roles'] ?? null)) {
+                $attributeRoles = $merged[$entity]['roles'] ?? null;
+                $merged[$entity]['roles'] = [
+                    ...(\is_array($attributeRoles) ? $attributeRoles : []),
+                    ...$entities[$entity]['roles'],
+                ];
+            }
+
             // Properties ignored in the configuration are added to the #[Ignore] ones: neither can audit a property
             // that the other ignores.
             if (\is_array($entities[$entity]['ignored_columns'] ?? null)) {

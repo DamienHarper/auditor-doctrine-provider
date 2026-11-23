@@ -394,7 +394,7 @@ use DH\Auditor\Provider\Doctrine\Configuration;
 
 $configuration = new Configuration([
     'entities' => [
-        // Override the Security attribute — more restrictive
+        // Override the Security attribute (scope by scope) — more restrictive
         User::class => [
             'roles' => ['view' => ['ROLE_SUPER_ADMIN']],
         ],
@@ -405,6 +405,7 @@ $configuration = new Configuration([
         ],
 
         // Completely disable auditing despite #[Auditable]
+        // (enabled: true cannot re-enable an #[Auditable(enabled: false)] entity)
         DraftPost::class => [
             'enabled' => false,
         ],
