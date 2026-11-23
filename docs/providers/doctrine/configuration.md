@@ -227,6 +227,15 @@ $configuration = new Configuration([
 setting only `max_age` keeps the attribute `maxEntries`, and an explicit `null` disables the attribute value.
 They are validated (positive ISO 8601 duration, positive integer) before `audit:clean` deletes anything.
 
+For an entity marked `#[Auditable]`, the configured options combine with the attributes:
+
+- `enabled: false` disables the entity despite `#[Auditable]`; `enabled: true` does not re-enable an
+  `#[Auditable(enabled: false)]` entity.
+- `roles` take precedence over `#[Security]`, scope by scope (`view`): `roles: null`, an empty array or a missing
+  `view` key keeps the attribute value.
+- `ignored_columns` and `roots` are added to the `#[Ignore]` and `#[AuditRoot]` ones; `audited_columns` only exists
+  in the configuration.
+
 ## 👁️ Viewer Configuration
 
 The `viewer` option controls the built-in audit viewer (when integrated with a UI layer):
@@ -368,7 +377,7 @@ altering the columns rewrites the table and compresses existing entries. Disabli
 
 ## ⏭️ Skipping Disabled Entities
 
-An entity disabled by its configuration (`#[Auditable(enabled: false)]` or `'enabled' => false`) is not audited, but
+An entity disabled by its configuration (`#[Auditable(enabled: false)]`, or `'enabled' => false`, also on an `#[Auditable]` entity) is not audited, but
 it still gets an audit table: auditing can be enabled for it at runtime with `enableAuditFor()`, and the audit
 entries need somewhere to go. When you never enable such entities at runtime, `skip_disabled_entities` leaves them
 without an audit table:
@@ -431,10 +440,14 @@ $provider->isAuditedField(App\Entity\Post::class, 'password'); // false (if igno
 
 1. PHP attributes on entities are loaded first (via `AttributeLoader`): for an entity with `#[Auditable]`, they
    provide `enabled`, `roles` (`#[Security]`) and the `#[Ignore]` properties
-2. The entity `ignored_columns` of the programmatic configuration are added to the `#[Ignore]` properties
-3. The entity `audited_columns` and the retention options (`max_age`, `max_entries`, key by key) of the programmatic
+2. `enabled: false` in the programmatic configuration disables the entity despite `#[Auditable]` (`enabled: true`
+   cannot re-enable an `#[Auditable(enabled: false)]` entity), and its `roles` take precedence over `#[Security]`,
+   scope by scope
+3. The entity `ignored_columns` and `roots` of the programmatic configuration are added to the `#[Ignore]` properties
+   and `#[AuditRoot]` paths
+4. The entity `audited_columns` and the retention options (`max_age`, `max_entries`, key by key) of the programmatic
    configuration are kept
-4. Global `ignored_columns` and the `ignored_columns_resolver` apply on top of the entity options
+5. Global `ignored_columns` and the `ignored_columns_resolver` apply on top of the entity options
 
 ```php
 // Given this entity with attributes:
