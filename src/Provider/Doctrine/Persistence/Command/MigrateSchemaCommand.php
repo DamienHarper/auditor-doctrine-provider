@@ -64,11 +64,6 @@ final class MigrateSchemaCommand extends Command
     private const array LEGACY_COLUMNS = ['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'];
 
     /**
-     * Legacy blame columns, gathered in the blame JSON column in v2.
-     */
-    private const array BLAME_COLUMNS = ['blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'];
-
-    /**
      * New columns introduced in schema v2.
      */
     private const array NEW_COLUMNS = ['schema_version', 'transaction_id', 'blame'];
@@ -566,9 +561,9 @@ final class MigrateSchemaCommand extends Command
                 }
             }
 
-            // 2. Migrate blame fields to the new blame JSON column (idempotent — WHERE filters nulls). The four columns
-            // are dropped together, so they are either all there or all gone.
-            if ([] === array_filter(self::BLAME_COLUMNS, static fn (string $column): bool => !$table->hasColumn($column))) {
+            // 2. Migrate blame fields to the new blame JSON column (idempotent — WHERE filters nulls). The legacy columns
+            // are dropped in one alteration, so they are either all there or all gone.
+            if ($table->hasColumn('blame_user')) {
                 $additive[] = $this->buildBlameMigrationSql($tableName, $connection);
             }
 
@@ -757,10 +752,11 @@ final class MigrateSchemaCommand extends Command
     }
 
     /**
-     * Lists, per audit table and audited class, the fields mapped to a JSON type. Under single table inheritance,
-     * the classes sharing an audit table may map the same field name differently: the fields are kept per class.
+     * Lists, per audit table, the fields of the audited entities that are mapped to a JSON type.
+     * Entities that share an audit table (single table inheritance) add up their fields: a field diff of another
+     * class is never read as a deep diff anyway, its values are not a tree of {old, new} leaves (see isFieldDiff()).
      *
-     * @return array<string, array<string, array<string, true>>> field names as keys, keyed by audit table and class
+     * @return array<string, array<string, true>> field names as keys, keyed by audit table name
      */
     private function collectJsonFields(DoctrineProvider $provider, SchemaManager $schemaManager): array
     {
@@ -783,12 +779,11 @@ final class MigrateSchemaCommand extends Command
 
             $connection = $entityManager->getConnection();
             $jsonTypes = DoctrineHelper::jsonTypes($connection);
-            $jsonFields[$auditTableName][$entity] ??= [];
 
             foreach ($entityManager->getClassMetadata($entity)->fieldMappings as $fieldName => $mapping) {
                 $type = $mapping instanceof FieldMapping ? $mapping->type : $mapping['type'];
                 if (\in_array(DoctrineHelper::getType($connection, $type), $jsonTypes, true)) {
-                    $jsonFields[$auditTableName][$entity][$fieldName] = true;
+                    $jsonFields[$auditTableName][$fieldName] = true;
                 }
             }
         }
@@ -800,7 +795,7 @@ final class MigrateSchemaCommand extends Command
      * Converts legacy diffs JSON across all tables, respecting an optional global row limit.
      *
      * @param array<string, Connection>                                  $tables
-     * @param array<string, array<string, array<string, true>>>          $jsonFields      JSON fields per audit table and class (see collectJsonFields())
+     * @param array<string, array<string, true>>                         $jsonFields      JSON fields per audit table (see collectJsonFields())
      * @param array<string, array{table: string, classes: list<string>}> $auditedEntities audited entities per audit table (see collectAuditedEntities())
      *
      * @return array<string, non-empty-list<int|string>> ids of the rows left unconverted, per table
@@ -873,7 +868,7 @@ final class MigrateSchemaCommand extends Command
      * rolls its whole batch back, and the next run converts it again.
      * A row that cannot be converted (see convertLegacyDiffs()) is left as it is, at schema_version 1, and reported.
      *
-     * @param array<string, array<string, true>>          $jsonFields    JSON fields of the classes audited in this table
+     * @param array<string, true>                         $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>} $auditedEntity table and classes audited in this table
      * @param ?int                                        $limit         Maximum number of rows to process (null = no limit)
      *
@@ -961,7 +956,7 @@ final class MigrateSchemaCommand extends Command
      * Such a row is left at schema_version 1, as it is, and reported.
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array<string, array<string, true>>                                                        $jsonFields    JSON fields of the classes audited in this table
+     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
     private function convertLegacyDiffs(array $row, array $jsonFields, array $auditedEntity): ?array
@@ -977,30 +972,11 @@ final class MigrateSchemaCommand extends Command
         }
 
         return match ($row['type']) {
-            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row, $this->jsonFieldsOfRow($jsonFields, $row), $auditedEntity),
+            'insert', 'update' => $this->convertChangeDiffs($rawDiffs, $row, $jsonFields, $auditedEntity),
             'remove' => $this->convertRemoveDiffs($rawDiffs, $row, $auditedEntity),
             'associate', 'dissociate' => $this->convertAssociateDiffs($rawDiffs),
             default => null,
         };
-    }
-
-    /**
-     * JSON fields of the class audited in a row: the discriminator under single table inheritance, otherwise the
-     * only class of the table, otherwise (several classes without a discriminator) the fields of all of them.
-     *
-     * @param array<string, array<string, true>>                                                        $jsonFields
-     * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     *
-     * @return array<string, true>
-     */
-    private function jsonFieldsOfRow(array $jsonFields, array $row): array
-    {
-        $class = $row['discriminator'] ?? null;
-        if (\is_string($class) && isset($jsonFields[$class])) {
-            return $jsonFields[$class];
-        }
-
-        return 1 === \count($jsonFields) ? reset($jsonFields) : array_merge([], ...array_values($jsonFields));
     }
 
     /**
@@ -1011,7 +987,7 @@ final class MigrateSchemaCommand extends Command
      * Returns null when a field entry is not an object (see convertLegacyDiffs()).
      *
      * @param array{id: mixed, type: string, object_id: string, discriminator: ?string, diffs: ?string} $row
-     * @param array<string, true>                                                                       $jsonFields    JSON fields of the class audited in the row
+     * @param array<string, true>                                                                       $jsonFields    JSON fields of the entities audited in this table
      * @param array{table: string, classes: list<string>}                                               $auditedEntity table and classes audited in this table
      */
     private function convertChangeDiffs(array $diffs, array $row, array $jsonFields, array $auditedEntity): ?array
@@ -1049,7 +1025,7 @@ final class MigrateSchemaCommand extends Command
      * 'new'/'old' keys of its own. A deep diff only holds nested diffs, though, whereas the field diff of a JSON field
      * holds JSON values: since auditor 3.2.0 when one side is a scalar or null, and before it for every change, with
      * both sides whole JSON arrays or objects. So a JSON field gets a deep diff only when the diff is a deep diff node.
-     * A field that is not a JSON field of the audited class (or no longer exists) keeps the reading by keys only.
+     * A field that is not a JSON field of the audited entity (or no longer exists) keeps the reading by keys only.
      */
     private function isFieldDiff(array $diff, bool $isJsonField): bool
     {
@@ -1074,11 +1050,11 @@ final class MigrateSchemaCommand extends Command
             return false;
         }
 
-        // an empty array is written as is for an empty JSON array or object (1.x writes [] in a deep diff)
+        // a leaf may be an empty array: 1.x writes an empty JSON array or object as is in a deep diff
         return array_all(
             $node,
             static fn (mixed $child): bool => \is_array($child)
-                && ([] === $child || [] === array_diff(array_keys($child), ['new', 'old']) || self::isDiffNode($child)),
+                && ([] === array_diff(array_keys($child), ['new', 'old']) || self::isDiffNode($child)),
         );
     }
 
