@@ -394,7 +394,7 @@ use DH\Auditor\Provider\Doctrine\Configuration;
 
 $configuration = new Configuration([
     'entities' => [
-        // Override the Security attribute — more restrictive
+        // Override the Security attribute, scope by scope — more restrictive
         User::class => [
             'roles' => ['view' => ['ROLE_SUPER_ADMIN']],
         ],

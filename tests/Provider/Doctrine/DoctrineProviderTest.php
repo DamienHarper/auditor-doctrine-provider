@@ -513,6 +513,20 @@ final class DoctrineProviderTest extends TestCase
         $this->assertSame(['view' => ['ROLE1', 'ROLE2']], $options['roles']);
     }
 
+    public function testEmptyConfiguredRolesKeepTheSecurityAttribute(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => []], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['view' => ['ROLE1', 'ROLE2']], $options['roles']);
+    }
+
+    public function testConfiguredRolesWithoutTheViewScopeKeepTheSecurityViewRoles(): void
+    {
+        $options = $this->loadAttributeEntityWith(['enabled' => true, 'roles' => ['View' => ['ROLE_ADMIN']]], AuditableButUnauditedEntity::class);
+
+        $this->assertSame(['ROLE1', 'ROLE2'], $options['roles']['view'] ?? null, 'A misspelled scope does not lift the restriction.');
+    }
+
     public function testEntityDisabledInTheConfigurationStaysDisabledDespiteTheAttribute(): void
     {
         // RetentionEntity carries #[Auditable], enabled by default
@@ -558,6 +572,31 @@ final class DoctrineProviderTest extends TestCase
         $options = $configuration->getEntities()[RetentionEntity::class];
         \assert(\is_array($options));
         $this->assertSame(['view' => ['ROLE_ADMIN']], $options['roles']);
+    }
+
+    public function testAuditableEntityDisabledInTheConfigurationGetsNoAuditTableWhenDisabledEntitiesAreSkipped(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+        $auditor = $this->createAuditor();
+        $provider = new DoctrineProvider($this->createProviderConfiguration([
+            'skip_disabled_entities' => true,
+            'entities' => [
+                AuditedEntityWithAttribute::class => ['enabled' => false],
+            ],
+        ]));
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+
+        $auditor->registerProvider($provider);
+
+        $this->assertFalse($provider->hasAuditTable(AuditedEntityWithAttribute::class), 'Disabled in the configuration despite #[Auditable].');
+        $this->assertTrue($provider->hasAuditTable(RetentionEntity::class));
     }
 
     public function testConfiguredIgnoredColumnsAreAddedToTheIgnoreAttributes(): void
