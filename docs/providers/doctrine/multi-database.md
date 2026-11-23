@@ -34,6 +34,11 @@ Set up two EntityManagers: one for your application, one for the audit database.
 // $auditEntityManager → writes audit rows to a separate database
 ```
 
+> [!IMPORTANT]
+> The connection of the application EntityManager (the auditing one) must be created with the `AuditorMiddleware`
+> (see the [Quick Start](../../getting-started/quick-start.md)): the audit entries are written when its transaction
+> is committed.
+
 ### Step 2: Register Services
 
 ```php
