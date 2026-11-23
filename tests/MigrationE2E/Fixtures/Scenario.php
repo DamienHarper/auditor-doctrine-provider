@@ -23,12 +23,12 @@ use Doctrine\ORM\EntityManagerInterface;
  * authors (including anonymous ones), transactions over several tables and storages, and enough rows and
  * transactions to span several conversion batches.
  */
-final class Scenario
+final readonly class Scenario
 {
     /** Rows of the volume table: more than twice the 500-row conversion batch. */
     public const int VOLUME = 1_100;
 
-    public function __construct(private readonly EntityManagerInterface $em) {}
+    public function __construct(private EntityManagerInterface $em) {}
 
     public function run(): void
     {
@@ -176,6 +176,7 @@ final class Scenario
 
         $leia = $this->author('Leia Organa');
         $leia->settings = ['new' => 1, 'old' => 2];
+
         $this->em->flush();
 
         $leia->settings = ['new' => 3, 'old' => 4];
@@ -203,8 +204,10 @@ final class Scenario
 
         $car = new Car('Speeder');
         $car->doors = 0;
+
         $bike = new Bike('Speeder bike');
         $bike->gears = 3;
+
         $this->em->persist($car);
         $this->em->persist($bike);
         $this->em->flush();

@@ -50,6 +50,7 @@ help:
 	@echo "  rector   - Run Rector to apply automated refactorings."
 	@echo "  qa       - Run Rector, PHP-CS-Fixer and PHPStan, in this order (ignores args)."
 	@echo "  bench    - Run PHPBench benchmarks (statistical, reproducible)."
+	@echo "  migration-e2e - End-to-end test of the migration of data written by provider 1.x."
 	@echo "  profile  - Profile with Blackfire (requires BLACKFIRE_* env vars)."
 	@echo ""
 	@echo "Options:"
@@ -170,6 +171,16 @@ bench: validate_matrix
 	$(call common_setup)
 	PHP_VERSION=$(php) SYMFONY_VERSION=$(sf) DATABASE_URL=$(DATABASE_URL) \
 	sh -c "docker compose $(compose_files) run --rm --remove-orphans -e BENCH_N=$(or $(BENCH_N),50) php-cli vendor/bin/phpbench run $(args)"
+
+# End-to-end test of the migration from provider 1.x (tests/MigrationE2E): provider 1.x, installed in
+# tools/migration-e2e/v1, writes audit entries that audit:schema:migrate then converts.
+.PHONY: migration-e2e
+migration-e2e: validate_matrix
+	$(call common_setup)
+	PHP_VERSION=$(php) SYMFONY_VERSION=$(sf) DATABASE_URL=$(DATABASE_URL) \
+	sh -c "docker compose $(compose_files) run --rm --remove-orphans php-cli composer update --working-dir=tools/migration-e2e/v1 --no-progress --quiet"
+	PHP_VERSION=$(php) SYMFONY_VERSION=$(sf) DATABASE_URL=$(DATABASE_URL) \
+	sh -c "docker compose $(compose_files) run --rm --remove-orphans php-cli vendor/bin/phpunit --no-coverage --group migration-e2e $(args)"
 
 # Run Blackfire profiling
 # Requires BLACKFIRE_SERVER_ID, BLACKFIRE_SERVER_TOKEN, BLACKFIRE_CLIENT_ID, BLACKFIRE_CLIENT_TOKEN

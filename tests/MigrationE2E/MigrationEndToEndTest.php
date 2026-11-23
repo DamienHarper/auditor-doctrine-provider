@@ -22,7 +22,6 @@ use DH\Auditor\Provider\Service\StorageServiceInterface;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Author;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Comment;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Post;
-use DH\Auditor\Tests\MigrationE2E\Fixtures\Entity\Translation;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Environment;
 use DH\Auditor\Tests\MigrationE2E\Fixtures\Type\MoneyType;
 use DH\Auditor\User\User;
@@ -54,6 +53,8 @@ use Symfony\Component\Uid\Ulid;
  *     composer install --working-dir=tools/migration-e2e/v1
  *     vendor/bin/phpunit --group migration-e2e
  * or make migration-e2e db=<sqlite|mysql|pgsql|mariadb>.
+ *
+ * @internal
  */
 #[Group('migration-e2e')]
 final class MigrationEndToEndTest extends TestCase
@@ -174,7 +175,7 @@ final class MigrationEndToEndTest extends TestCase
         try {
             $this->migrate(['--force' => true, '--convert-all' => true]);
             $this->fail('The migration was expected to fail on row '.$row['id'].'.');
-        } catch (\JsonException|DbalException) {
+        } catch (DbalException|\JsonException) {
         }
 
         // the rows of the failing batch are left unconverted, those of the previous batch are converted
@@ -202,6 +203,7 @@ final class MigrationEndToEndTest extends TestCase
         $entityManager = $this->entityManagers[Environment::PRIMARY];
         $author = new Author('Written by 2.x');
         $author->settings = ['written' => 'by 2.x'];
+
         $entityManager->persist($author);
         $entityManager->flush();
 
@@ -250,17 +252,17 @@ final class MigrationEndToEndTest extends TestCase
                     }
 
                     $this->assertSame($this->timestamp($legacy['created_at']), $this->timestamp($row['created_at']), $where.': created_at');
-                    $this->assertEquals($this->json($legacy['extra_data']), $this->json($row['extra_data']), $where.': extra_data');
+                    $this->assertSame($this->sorted($this->json($legacy['extra_data'])), $this->sorted($this->json($row['extra_data'])), $where.': extra_data');
 
                     // blame: the four legacy columns, in the blame JSON column
-                    $legacyBlame = [
+                    $legacyBlame = [ // sorted by key, as compared
                         'ip' => $legacy['ip'],
-                        'user_fqdn' => $legacy['blame_user_fqdn'],
                         'user_firewall' => $legacy['blame_user_firewall'],
+                        'user_fqdn' => $legacy['blame_user_fqdn'],
                         'username' => $legacy['blame_user'],
                     ];
                     $expectedBlame = [] === array_filter($legacyBlame, static fn (mixed $value): bool => null !== $value) ? null : $legacyBlame;
-                    $this->assertEquals($expectedBlame, $this->sorted($this->json($row['blame'])), $where.': blame');
+                    $this->assertSame($expectedBlame, $this->sorted($this->json($row['blame'])), $where.': blame');
 
                     // transaction: one ULID per legacy hash, across tables and storages
                     $ulid = $row['transaction_id'];
@@ -293,6 +295,7 @@ final class MigrationEndToEndTest extends TestCase
                         $before = array_values(array_filter($before, $keep));
                         $after = array_values(array_filter($after, $keep));
                     }
+
                     foreach ($before as $i => $change) {
                         if ($diffsConverted && '' === $change['entity'] && isset($after[$i])) {
                             $this->assertNotSame('', $after[$i]['entity'], $where.': class of the audited entity');
@@ -366,7 +369,7 @@ final class MigrationEndToEndTest extends TestCase
                     unset($old['table']);
                 }
 
-                $this->assertEquals($this->sorted($old), $this->sorted($new), $where);
+                $this->assertSame($this->sorted($old), $this->sorted($new), $where);
         }
     }
 
@@ -482,6 +485,7 @@ final class MigrationEndToEndTest extends TestCase
     {
         $command = new UpdateSchemaCommand();
         $command->setAuditor($this->provider->getAuditor());
+
         $tester = new CommandTester($command);
         $tester->execute($options);
 
@@ -547,6 +551,7 @@ final class MigrationEndToEndTest extends TestCase
         $provider->registerStorageService(new StorageService(Environment::PRIMARY, $this->entityManagers[Environment::PRIMARY]));
         $provider->registerStorageService(new StorageService(Environment::SECONDARY, $this->entityManagers[Environment::SECONDARY]));
         $provider->registerAuditingService(new AuditingService('default', $this->entityManagers[Environment::PRIMARY]));
+
         $auditor->registerProvider($provider);
         $provider->getConfiguration()->setStorageMapper(
             static fn (string $entity, array $storageServices): StorageServiceInterface => $storageServices[

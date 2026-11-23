@@ -22,13 +22,10 @@ abstract class Vehicle implements \Stringable
     #[ORM\GeneratedValue(strategy: 'IDENTITY')]
     public ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 255)]
-    public string $label = '';
-
-    public function __construct(string $label)
-    {
-        $this->label = $label;
-    }
+    public function __construct(
+        #[ORM\Column(type: Types::STRING, length: 255)]
+        public string $label
+    ) {}
 
     public function __toString(): string
     {

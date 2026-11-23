@@ -22,9 +22,6 @@ class Author implements \Stringable
     #[ORM\GeneratedValue(strategy: 'IDENTITY')]
     public ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 255)]
-    public string $fullname = '';
-
     #[ORM\Column(type: Types::STRING, length: 255, nullable: true)]
     public ?string $email = null;
 
@@ -60,9 +57,9 @@ class Author implements \Stringable
     #[ORM\OneToMany(targetEntity: Post::class, mappedBy: 'author')]
     public Collection $posts;
 
-    public function __construct(string $fullname)
+    public function __construct(#[ORM\Column(type: Types::STRING, length: 255)]
+        public string $fullname)
     {
-        $this->fullname = $fullname;
         $this->posts = new ArrayCollection();
     }
 
