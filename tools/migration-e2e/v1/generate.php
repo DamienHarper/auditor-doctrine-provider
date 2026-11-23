@@ -106,6 +106,33 @@ new SchemaManager($provider)->updateAuditSchema();
 
 new Scenario($primary)->run();
 
+// Entries written before auditor 3.2.0, still in the tables of long-lived installations: a JSON field got a field
+// diff holding the whole old and new values, not a deep diff.
+$preJsonDeepDiffRow = static fn (string $type, string $objectId, array $diffs): array => [
+    'type' => $type,
+    'object_id' => $objectId,
+    'discriminator' => null,
+    'transaction_hash' => sha1('before auditor 3.2.0'),
+    'diffs' => json_encode($diffs, JSON_THROW_ON_ERROR),
+    'extra_data' => null,
+    'blame_id' => '1',
+    'blame_user' => 'dark.vador',
+    'blame_user_fqdn' => User::class,
+    'blame_user_firewall' => 'main',
+    'ip' => '10.0.0.1',
+    'created_at' => '2024-06-01 12:00:00',
+];
+foreach ([
+    $preJsonDeepDiffRow('update', '2', [
+        'fullname' => ['old' => 'Leia', 'new' => 'Leia Organa'],
+        'settings' => ['old' => ['theme' => 'dark', 'notifications' => ['email' => true]], 'new' => ['theme' => 'light', 'notifications' => ['email' => false]]],
+    ]),
+    $preJsonDeepDiffRow('update', '2', ['settings' => ['old' => [], 'new' => ['first' => 'key']]]),
+    $preJsonDeepDiffRow('update', '2', ['settings' => ['old' => [1, 2], 'new' => [1, 2, 3]]]),
+] as $row) {
+    $primary->getConnection()->insert('e2e_author_audit', $row);
+}
+
 // Every audit row, as stored by 1.x
 $snapshot = [
     'provider_version' => InstalledVersions::getPrettyVersion('damienharper/auditor-doctrine-provider').' ('.InstalledVersions::getReference('damienharper/auditor-doctrine-provider').')',

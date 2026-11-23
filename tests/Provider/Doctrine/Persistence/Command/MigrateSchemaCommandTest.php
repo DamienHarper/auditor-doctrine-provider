@@ -26,6 +26,7 @@ use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\LockableTrait;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
 /**
@@ -412,28 +413,51 @@ final class MigrateSchemaCommandTest extends TestCase
         }
     }
 
-    public function testConvertDiffsConvertsABatchEntirelyOrNotAtAll(): void
+    /**
+     * A row whose diffs cannot be converted without losing or misreading them is left as it is, reported, and
+     * does not stop the conversion of the others.
+     */
+    public function testConvertDiffsLeavesUnconvertibleRowsAsTheyAre(): void
     {
-        if (!$this->auditConnection()->getDatabasePlatform() instanceof SQLitePlatform) {
-            // a failing row is simulated with an invalid diffs value, which native JSON columns reject on insert
-            $this->markTestSkipped('Needs a platform that stores diffs as text.');
+        $this->simulateLegacySchema('post_audit');
+        $connection = $this->auditConnection();
+        $before = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Old', 'new' => 'New']]);
+        $scalar = $this->insertLegacyRow('post_audit', 'update', '2', []);
+        $connection->update('post_audit', ['diffs' => '"a JSON string"'], ['id' => $scalar]);
+        $fieldNotAnObject = $this->insertLegacyRow('post_audit', 'update', '3', ['title' => 'not a field diff']);
+        $unknownType = $this->insertLegacyRow('post_audit', 'merge', '4', ['title' => ['new' => 'Merged']]);
+        $unconvertible = [$scalar, $fieldNotAnObject, $unknownType];
+
+        if ($connection->getDatabasePlatform() instanceof SQLitePlatform) {
+            // native JSON columns reject an invalid value on insert
+            $invalid = $this->insertLegacyRow('post_audit', 'update', '5', []);
+            $connection->update('post_audit', ['diffs' => '{not json'], ['id' => $invalid]);
+            $unconvertible[] = $invalid;
         }
 
-        $this->simulateLegacySchema('post_audit');
-        $first = $this->insertLegacyRow('post_audit', 'update', '1', ['title' => ['old' => 'Old', 'new' => 'New']]);
-        $broken = $this->insertLegacyRow('post_audit', 'update', '2', []);
-        $this->auditConnection()->update('post_audit', ['diffs' => '{not json'], ['id' => $broken]);
+        $after = $this->insertLegacyRow('post_audit', 'update', '6', ['title' => ['old' => 'Old', 'new' => 'New']]);
+        $legacyDiffs = array_map(static fn (int $id): mixed => $connection->fetchOne('SELECT diffs FROM post_audit WHERE id = ?', [$id]), $unconvertible);
 
         $commandTester = new CommandTester($this->createCommand());
+        $exitCode = $commandTester->execute(['--force' => true, '--convert-all' => true]);
+        $display = $commandTester->getDisplay(true);
 
-        try {
-            $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
-            $this->fail('The conversion of an invalid diffs value must fail.');
-        } catch (\JsonException) {
+        $this->assertSame(Command::FAILURE, $exitCode);
+        $this->assertStringContainsString('could not be converted', $display);
+        $this->assertStringContainsString(implode(', ', $unconvertible), $display);
+        foreach ($unconvertible as $i => $id) {
+            $this->assertSame(1, (int) $connection->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$id]));
+            $this->assertSame($legacyDiffs[$i], $connection->fetchOne('SELECT diffs FROM post_audit WHERE id = ?', [$id]), 'An unconvertible row must be left as it is.');
         }
 
-        // the row before the invalid one belongs to the same batch: it is left unconverted, for the next run
-        $this->assertSame(1, (int) $this->auditConnection()->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$first]));
+        foreach ([$before, $after] as $id) {
+            $this->assertSame(2, (int) $connection->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [$id]));
+        }
+
+        // the check of the upgrade guide reports them
+        $commandTester->execute([]);
+        $this->assertSame(Command::FAILURE, $commandTester->getStatusCode());
+        $this->assertStringContainsString('still have legacy diffs', $commandTester->getDisplay(true));
     }
 
     public function testLimitedTransactionHashConversionKeepsTheTransactionHashIndex(): void
