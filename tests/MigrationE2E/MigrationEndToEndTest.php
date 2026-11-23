@@ -57,6 +57,9 @@ final class MigrationEndToEndTest extends TestCase
 {
     private const array LEGACY_COLUMNS = ['transaction_hash', 'blame_user', 'blame_user_fqdn', 'blame_user_firewall', 'ip'];
 
+    /** Fields mapped to a JSON type in the fixtures. */
+    private const array JSON_FIELDS = ['settings'];
+
     /** @var array<string, array<string, list<array<string, mixed>>>> v1 rows per storage and audit table */
     private array $snapshot;
 
@@ -258,6 +261,16 @@ final class MigrationEndToEndTest extends TestCase
                     // entity, which it cannot tell from a v1 entry and reads from the source of a converted one
                     $before = $this->changes($extractor, $this->entry($legacy));
                     $after = $this->changes($extractor, $this->entry($row));
+
+                    // Known limitation of the history API on unconverted v1 entries: the deep diff of a JSON object
+                    // whose own keys are "new" and "old" cannot be told from a field diff without the entity mapping,
+                    // and is read as one. The converted entry is read right (checked by assertConvertedDiffs()).
+                    $ambiguous = $this->ambiguousJsonFields($legacy);
+                    if ([] !== $ambiguous) {
+                        $keep = static fn (array $change): bool => !\in_array($change['field'], $ambiguous, true);
+                        $before = array_values(array_filter($before, $keep));
+                        $after = array_values(array_filter($after, $keep));
+                    }
                     foreach ($before as $i => $change) {
                         if ($diffsConverted && '' === $change['entity'] && isset($after[$i])) {
                             $this->assertNotSame('', $after[$i]['entity'], $where.': class of the audited entity');
@@ -299,8 +312,18 @@ final class MigrationEndToEndTest extends TestCase
 
                 unset($old['@source']);
                 $this->assertSame(array_keys($old), array_keys($new['changes']), $where.': changed fields');
+
+                // 1.x writes a deep diff for a JSON field when both values are arrays, and a field diff otherwise
+                $deepDiffs = array_keys(array_filter(
+                    $old,
+                    static fn (array $diff, string $field): bool => \in_array($field, self::JSON_FIELDS, true)
+                        && ([] !== array_diff(array_keys($diff), ['new', 'old']) || array_all($diff, static fn (mixed $value): bool => \is_array($value))),
+                    ARRAY_FILTER_USE_BOTH,
+                ));
+                $this->assertSame($deepDiffs, $new['deep_diffs'] ?? [], $where.': deep_diffs');
+
                 foreach ($old as $field => $diff) {
-                    $isDeep = \in_array($field, $new['deep_diffs'] ?? [], true);
+                    $isDeep = \in_array($field, $deepDiffs, true);
                     if ($isDeep) {
                         $this->assertSame($diff, $new['changes'][$field], \sprintf('%s: deep diff of %s', $where, $field));
                     } else {
@@ -323,6 +346,28 @@ final class MigrationEndToEndTest extends TestCase
 
                 $this->assertEquals($this->sorted($old), $this->sorted($new), $where);
         }
+    }
+
+    /**
+     * JSON fields of a legacy entry whose deep diff only has "new" and "old" keys.
+     *
+     * @param array<string, mixed> $legacy
+     *
+     * @return list<string>
+     */
+    private function ambiguousJsonFields(array $legacy): array
+    {
+        $diffs = $this->json($legacy['diffs']);
+        if (!\is_array($diffs) || !\in_array($legacy['type'], ['insert', 'update'], true)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            self::JSON_FIELDS,
+            static fn (string $field): bool => \is_array($diffs[$field] ?? null)
+                && [] === array_diff(array_keys($diffs[$field]), ['new', 'old'])
+                && array_all($diffs[$field], static fn (mixed $value): bool => \is_array($value)),
+        ));
     }
 
     /**

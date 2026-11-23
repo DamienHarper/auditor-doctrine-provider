@@ -35,6 +35,7 @@ final class Scenario
         $this->createWithEveryKindOfValue();
         $this->createRelationsInOneTransaction();
         $this->updateAnonymously();
+        $this->jsonObjectWithDiffKeys();
         $this->removeAndDissociate();
         $this->inheritance();
         $this->volume();
@@ -158,6 +159,26 @@ final class Scenario
         // anonymous web request: no user, but an IP address and a firewall
         Blame::as(null, '203.0.113.9', 'main');
         $this->country('JP')->name = 'Nippon';
+        $this->em->flush();
+
+        // anonymous request outside of any firewall: an IP address only
+        Blame::as(null, '198.51.100.7');
+        $this->country('JP')->name = 'Japan';
+        $this->em->flush();
+    }
+
+    /**
+     * A JSON object whose own keys are "new" and "old": its deep diff looks like a field diff.
+     */
+    private function jsonObjectWithDiffKeys(): void
+    {
+        Blame::as(['1', 'dark.vador'], '10.0.0.1', 'main');
+
+        $leia = $this->author('Leia Organa');
+        $leia->settings = ['new' => 1, 'old' => 2];
+        $this->em->flush();
+
+        $leia->settings = ['new' => 3, 'old' => 4];
         $this->em->flush();
     }
 
