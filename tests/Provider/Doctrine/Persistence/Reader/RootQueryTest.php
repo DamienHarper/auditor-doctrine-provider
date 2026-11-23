@@ -20,6 +20,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 
@@ -143,6 +144,45 @@ final class RootQueryTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $this->reader()->createRootQuery(Author::class, $this->id($this->alice))->fetch(10, 'not-a-cursor');
+    }
+
+    /**
+     * A cursor edited by hand keeps its shape but not a date the database can compare (PostgreSQL rejects it).
+     */
+    #[DataProvider('provideForgedCursorCases')]
+    public function testForgedCursor(string $createdAt): void
+    {
+        $cursor = mb_rtrim(strtr(base64_encode(json_encode([$createdAt, '', Author::class, 1], JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid history cursor');
+
+        $this->reader()->createRootQuery(Author::class, $this->id($this->alice))->fetch(10, $cursor);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideForgedCursorCases(): iterable
+    {
+        yield 'not a date' => ['x'];
+
+        yield 'no time' => ['2026-11-20'];
+
+        yield 'no such month' => ['2026-13-01 10:00:00'];
+
+        yield 'too precise' => ['2026-11-20 10:00:00.1234567'];
+
+        yield 'SQL' => ["2026-11-20 10:00:00' OR 1=1 --"];
+    }
+
+    public function testCursorsOfTheReaderAreValid(): void
+    {
+        $query = $this->reader()->createRootQuery(Author::class, $this->id($this->alice));
+        $first = $query->fetch(1);
+        $this->assertIsString($first->lastCursor);
+
+        $this->assertFalse($query->fetch(50, $first->lastCursor)->isEmpty(), 'A cursor read from the database is accepted.');
     }
 
     public function testOnlyTheRolesOfTheRootAreChecked(): void
