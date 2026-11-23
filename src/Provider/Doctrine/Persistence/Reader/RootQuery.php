@@ -274,10 +274,25 @@ final readonly class RootQuery
             || !\is_string($position[1] ?? null)
             || !\is_string($position[2] ?? null)
             || !\is_int($position[3] ?? null)
+            || !$this->isDate($position[0])
         ) {
             throw new InvalidArgumentException(\sprintf('Invalid history cursor "%s".', $cursor));
         }
 
         return [$position[0], $position[1], $position[2], $position[3]];
+    }
+
+    /**
+     * Tells whether the created_at of a cursor is a date as the audit tables return it ("Y-m-d H:i:s", optionally
+     * with up to 6 fractional digits): the database compares it with a datetime column, and PostgreSQL rejects
+     * anything else.
+     */
+    private function isDate(string $createdAt): bool
+    {
+        if (1 !== preg_match('/^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?$/', $createdAt, $parts)) {
+            return false;
+        }
+
+        return checkdate((int) $parts[2], (int) $parts[3], (int) $parts[1]);
     }
 }
