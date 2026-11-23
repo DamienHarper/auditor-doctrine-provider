@@ -18,7 +18,8 @@ use Doctrine\DBAL\Tools\DsnParser;
  * Settings shared by the 1.x generator (tools/migration-e2e/v1) and the 2.x test, which run in two
  * processes against the same databases. Only depends on doctrine/dbal, available on both sides.
  *
- * - Primary storage: DATABASE_URL, or an SQLite file in the temporary directory.
+ * - Primary storage: E2E_DATABASE_URL, or an SQLite file in the temporary directory. The generator drops every table of
+ *   that database: it never reads DATABASE_URL, so that a development database cannot be emptied by mistake.
  * - Secondary storage (Comment and Tag): always an SQLite file, so that the migration also goes through a
  *   second storage on another connection whatever the primary platform.
  */
@@ -68,7 +69,7 @@ final class Environment
     public static function connectionParameters(string $storage): array
     {
         if (self::PRIMARY === $storage) {
-            $url = getenv('DATABASE_URL');
+            $url = getenv('E2E_DATABASE_URL');
             if (\is_string($url) && '' !== $url && !str_starts_with($url, 'sqlite:')) {
                 return new DsnParser(['mysql' => 'pdo_mysql', 'pgsql' => 'pdo_pgsql'])->parse($url);
             }
@@ -81,7 +82,7 @@ final class Environment
     {
         $path = getenv('E2E_'.mb_strtoupper($storage).'_SQLITE');
 
-        return \is_string($path) && '' !== $path ? $path : sys_get_temp_dir().'/auditor-migration-e2e-'.$storage.'.sqlite';
+        return \is_string($path) && '' !== $path ? $path : sys_get_temp_dir().'/auditor-migration-e2e-'.self::checkoutId().'-'.$storage.'.sqlite';
     }
 
     /**
@@ -91,6 +92,14 @@ final class Environment
     {
         $path = getenv('E2E_SNAPSHOT');
 
-        return \is_string($path) && '' !== $path ? $path : sys_get_temp_dir().'/auditor-migration-e2e-snapshot.json';
+        return \is_string($path) && '' !== $path ? $path : sys_get_temp_dir().'/auditor-migration-e2e-'.self::checkoutId().'-snapshot.json';
+    }
+
+    /**
+     * Tells the default files of two checkouts (worktrees) apart, so that their runs do not overwrite each other.
+     */
+    private static function checkoutId(): string
+    {
+        return mb_substr(md5(\dirname(__DIR__, 3)), 0, 8);
     }
 }

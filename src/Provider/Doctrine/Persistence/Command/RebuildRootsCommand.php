@@ -111,18 +111,18 @@ final class RebuildRootsCommand extends Command
         $io->table(['Audit table', 'Entries', $dryRun ? 'Missing rows' : 'Rows written', 'Skipped (v1 or no transaction id)', 'Unreadable diffs'], $rows);
         $this->release();
 
-        if (0 < $unreadable) {
-            $io->error(\sprintf('%d entries could not be read: their diffs are not valid JSON.', $unreadable));
-
-            return Command::FAILURE;
-        }
-
         if (0 < $skipped) {
             // not indexed: their histories miss these entries until the tables are migrated
             $io->warning([
                 \sprintf('%d entries were skipped: their diffs are in schema v1, or they have no transaction id.', $skipped),
                 'Run audit:schema:migrate --force --convert-all, then this command again. Entries whose transaction_hash was dropped without conversion cannot be indexed.',
             ]);
+        }
+
+        if (0 < $unreadable) {
+            $io->error(\sprintf('%d entries could not be read: their diffs are not valid JSON.', $unreadable));
+
+            return Command::FAILURE;
         }
 
         $io->success($dryRun ? 'Dry run: nothing was written.' : 'Audit root index rebuilt.');

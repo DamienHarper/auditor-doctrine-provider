@@ -23,6 +23,9 @@ on:
       - 'src/Provider/Doctrine/Persistence/Schema/**'
       - 'src/Provider/Doctrine/Persistence/Reader/**'
       - 'src/Provider/Doctrine/Auditing/Root/**'
+      - 'src/Provider/Doctrine/Auditing/Transaction/**'
+      - 'src/Provider/Doctrine/DoctrineProvider.php'
+      - 'src/Provider/Doctrine/Configuration.php'
       - 'tests/MigrationE2E/**'
       - 'tools/migration-e2e/**'
       - 'composer.json'
@@ -37,6 +40,9 @@ on:
       - 'src/Provider/Doctrine/Persistence/Schema/**'
       - 'src/Provider/Doctrine/Persistence/Reader/**'
       - 'src/Provider/Doctrine/Auditing/Root/**'
+      - 'src/Provider/Doctrine/Auditing/Transaction/**'
+      - 'src/Provider/Doctrine/DoctrineProvider.php'
+      - 'src/Provider/Doctrine/Configuration.php'
       - 'tests/MigrationE2E/**'
       - 'tools/migration-e2e/**'
       - 'composer.json'
@@ -134,5 +140,6 @@ jobs:
 
       - name: Run the migration end-to-end test
         env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          # the 1.x generator drops every table of this database: it reads E2E_DATABASE_URL only, never DATABASE_URL
+          E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: vendor/bin/phpunit -c phpunit.xml --no-coverage --group migration-e2e
