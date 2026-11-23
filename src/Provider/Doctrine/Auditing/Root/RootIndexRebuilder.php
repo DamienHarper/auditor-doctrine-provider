@@ -93,7 +93,7 @@ final class RootIndexRebuilder
         $result = $connection->executeQuery(\sprintf('SELECT id, type, object_id, discriminator, transaction_id, diffs, created_at, schema_version FROM %s ORDER BY created_at ASC, transaction_id ASC, id ASC', $auditTable));
         foreach ($result->iterateAssociative() as $row) {
             ++$entries;
-            if (2 > (int) ($row['schema_version'] ?? 1) || !\is_string($row['transaction_id'] ?? null)) {
+            if (2 > self::schemaVersion($row) || !\is_string($row['transaction_id'] ?? null)) {
                 ++$skipped;
 
                 continue;
@@ -222,7 +222,7 @@ final class RootIndexRebuilder
             $connection = $this->provider->getStorageServiceForEntity($class)->getEntityManager()->getConnection();
             $result = $connection->executeQuery(\sprintf('SELECT object_id, transaction_id, diffs, created_at, schema_version FROM %s WHERE type IN (?) ORDER BY created_at ASC, transaction_id ASC, id ASC', $auditTable), [['insert', 'update']], [ArrayParameterType::STRING]);
             foreach ($result->iterateAssociative() as $row) {
-                if (2 > (int) ($row['schema_version'] ?? 1)) {
+                if (2 > self::schemaVersion($row)) {
                     continue;
                 }
 
@@ -234,6 +234,14 @@ final class RootIndexRebuilder
         }
 
         return $this->timelines[$class][$field] = $timeline;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private static function schemaVersion(array $row): int
+    {
+        return is_numeric($row['schema_version'] ?? null) ? (int) $row['schema_version'] : 1;
     }
 
     /**

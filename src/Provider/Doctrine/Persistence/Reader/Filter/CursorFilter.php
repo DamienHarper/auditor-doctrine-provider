@@ -64,7 +64,7 @@ final readonly class CursorFilter implements FilterInterface
         $tie = match ($this->tie) {
             self::TIE_ALL => '1 = 1',
             self::TIE_ID => \sprintf('at.id %s :%s_id', $operator, $param),
-            self::TIE_NONE => '1 = 0',
+            default => '1 = 0',
         };
 
         $sql = \sprintf(
