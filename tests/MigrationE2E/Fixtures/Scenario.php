@@ -154,6 +154,11 @@ final class Scenario
         $this->country('JP')->name = 'Japan';
 
         $this->em->flush();
+
+        // anonymous web request: no user, but an IP address and a firewall
+        Blame::as(null, '203.0.113.9', 'main');
+        $this->country('JP')->name = 'Nippon';
+        $this->em->flush();
     }
 
     private function removeAndDissociate(): void
