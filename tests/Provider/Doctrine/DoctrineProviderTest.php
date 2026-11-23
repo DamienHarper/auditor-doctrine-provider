@@ -27,6 +27,9 @@ use DH\Auditor\Tests\Provider\Doctrine\Traits\DoctrineProviderTrait;
 use DH\Auditor\User\User;
 use DH\Auditor\User\UserInterface;
 use DH\Auditor\User\UserProviderInterface;
+use Doctrine\Common\EventManager;
+use Doctrine\ORM\EntityManager;
+use Doctrine\ORM\Events;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
@@ -521,6 +524,7 @@ final class DoctrineProviderTest extends TestCase
         ]));
         $provider->registerStorageService(new StorageService('default', $entityManager));
         $provider->registerAuditingService(new AuditingService('default', $entityManager));
+
         $auditor->registerProvider($provider);
 
         $this->assertTrue($provider->isAuditedField(AuditedEntityWithAttribute::class, 'auditedField'), 'An allowlisted field is audited.');
@@ -656,14 +660,8 @@ final class DoctrineProviderTest extends TestCase
     {
         $provider = $this->createDoctrineProvider();
 
-        // Access private subscribers via reflection
-        $subscribersReflection = new \ReflectionProperty($provider, 'subscribers');
-        $subscribers = $subscribersReflection->getValue($provider);
-
-        $this->assertNotEmpty($subscribers, 'registerAuditingService() stores subscribers.');
-
-        // Seed a subscriber's transaction cache via reflection
-        $subscriber = $subscribers[0];
+        // Seed the subscriber's transaction cache via reflection
+        $subscriber = $provider->getDoctrineSubscriber();
         $transactionsReflection = new \ReflectionProperty($subscriber, 'transactions');
         $transactionsReflection->setValue($subscriber, [42 => 'stale_transaction']);
 
@@ -674,11 +672,52 @@ final class DoctrineProviderTest extends TestCase
         $this->assertEmpty($transactionsReflection->getValue($subscriber), 'reset() clears subscriber transaction caches.');
     }
 
+    public function testRegisterAuditingServiceAttachesTheSharedSubscriber(): void
+    {
+        $provider = $this->createUnregisteredDoctrineProvider();
+        $eventManager = new EventManager();
+        $provider->registerAuditingService(new AuditingService('EM1', $this->createEntityManagerWith($eventManager)));
+        $provider->registerAuditingService(new AuditingService('EM2', $this->createEntityManagerWith($eventManager)));
+
+        // entity managers sharing an event manager (as on one DoctrineBundle connection) get the subscriber once
+        $this->assertSame([$provider->getDoctrineSubscriber()], array_values($eventManager->getListeners(Events::onFlush)));
+        $this->assertSame([$provider->getDoctrineSubscriber()], array_values($eventManager->getListeners(Events::postFlush)));
+    }
+
+    public function testDisableListenerAttachment(): void
+    {
+        $provider = $this->createUnregisteredDoctrineProvider();
+        $provider->disableListenerAttachment();
+
+        $eventManager = new EventManager();
+        $provider->registerAuditingService(new AuditingService('EM1', $this->createEntityManagerWith($eventManager)));
+
+        $this->assertSame([], $eventManager->getAllListeners(), 'no listener is attached at runtime.');
+        $this->assertArrayHasKey('EM1', $provider->getAuditingServices());
+        $this->assertSame($provider->getDoctrineSubscriber(), $provider->getDoctrineSubscriber());
+    }
+
+    public function testDisableListenerAttachmentAfterRegisteringAnAuditingService(): void
+    {
+        $provider = $this->createUnregisteredDoctrineProvider();
+        $provider->registerAuditingService(new AuditingService('EM1', $this->createEntityManager()));
+
+        $this->expectException(ProviderException::class);
+        $provider->disableListenerAttachment();
+    }
+
     public function testImplementsResetInterface(): void
     {
         $provider = $this->createDoctrineProvider();
 
         $this->assertInstanceOf(ResetInterface::class, $provider);
+    }
+
+    private function createEntityManagerWith(EventManager $eventManager): EntityManager
+    {
+        $entityManager = $this->createEntityManager();
+
+        return new EntityManager($entityManager->getConnection(), $entityManager->getConfiguration(), $eventManager);
     }
 
     /**
