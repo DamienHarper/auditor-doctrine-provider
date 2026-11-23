@@ -25,7 +25,7 @@ use Doctrine\ORM\EntityManagerInterface;
  */
 final readonly class Scenario
 {
-    /** Rows of the volume table: more than twice the 500-row conversion batch. */
+    /** Rows of the volume table: more than twice the 500-row conversion batch. E2E_VOLUME overrides it, to time the migration. */
     public const int VOLUME = 1_100;
 
     public function __construct(private EntityManagerInterface $em) {}
@@ -228,7 +228,9 @@ final readonly class Scenario
     {
         Blame::as(['4', 'batch'], null, null, ['job' => 'import']);
 
-        for ($i = 0; $i < self::VOLUME; ++$i) {
+        $volume = getenv('E2E_VOLUME');
+        $volume = \is_string($volume) && ctype_digit($volume) && 0 < (int) $volume ? (int) $volume : self::VOLUME;
+        for ($i = 0; $i < $volume; ++$i) {
             $this->em->persist(new Translation('de', 'key.'.$i, 'Nachricht '.$i));
             if (0 === $i % 2) {
                 $this->em->flush();

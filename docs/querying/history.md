@@ -78,7 +78,7 @@ the entry was written. It writes the missing rows of the paths declared with `#[
 deletes a row: it can be run again safely, and rows you write yourself (for entries whose diffs do not hold the
 association, such as imported or legacy entries) are kept. Roots returned by a `root_resolver` cannot be replayed.
 Run it after declaring a new root, or after migrating audit tables to schema v2
-(`audit:schema:migrate --convert-diffs --convert-transaction-hash`): entries in schema v1 or without a transaction id
+(`audit:schema:migrate --force --convert-all`): entries in schema v1 or without a transaction id
 are skipped and counted. The command fails when an `--entity` is not audited, when it already runs, or when the diffs
 of an entry cannot be read; in the last case the rows of the other entries are still written. Rows that no longer match the configuration (a removed path) are not cleaned up: delete
 them with SQL if needed.

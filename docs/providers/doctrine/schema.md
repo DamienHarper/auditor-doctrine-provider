@@ -150,10 +150,10 @@ php bin/console audit:schema:migrate --force --convert-all --limit=10000
 ```
 
 > [!CAUTION]
-> The migration drops the legacy columns and cannot be undone: back up the audit tables first. Without
-> `--convert-transaction-hash` (or `--convert-all`), `--force` drops `transaction_hash` without converting it, and
-> legacy rows lose their transaction grouping. Follow the [upgrade guide](../../upgrade/v2.md#-upgrade-steps) for
-> the complete procedure.
+> The migration drops the legacy columns and cannot be undone: back up the audit tables first. `transaction_hash` is
+> only dropped once converted (`--convert-transaction-hash` or `--convert-all`), or with `--drop-transaction-hash`,
+> which drops it without converting it: legacy rows then lose their transaction grouping. Follow the
+> [upgrade guide](../../upgrade/v2.md#-upgrade-steps) for the complete procedure.
 
 > [!NOTE]
 > Use `audit:schema:migrate` when upgrading an existing installation. New installations created

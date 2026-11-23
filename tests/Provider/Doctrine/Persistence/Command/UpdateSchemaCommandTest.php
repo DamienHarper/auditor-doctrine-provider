@@ -20,6 +20,7 @@ use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\LockableTrait;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
 /**
@@ -121,7 +122,7 @@ final class UpdateSchemaCommandTest extends TestCase
 
         $command = $this->createCommand();
         $commandTester = new CommandTester($command);
-        $commandTester->execute([]);
+        $this->assertSame(Command::FAILURE, $commandTester->execute([]), 'A run that did nothing must not report a success.');
 
         // the output of the command in the auditor
         $output = $commandTester->getDisplay();

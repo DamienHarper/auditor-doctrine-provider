@@ -53,8 +53,8 @@ final class RebuildRootsCommand extends Command
                 The diffs are replayed: a path is followed through the audit history of the entities it goes through,
                 as they were when each entry was written. Only missing rows are written and no row is ever deleted,
                 so the command can be run again safely, and rows written by hand or by a "root_resolver" are kept.
-                Entries in schema v1, or without a transaction id, are skipped: migrate them first
-                (audit:schema:migrate --convert-diffs --convert-transaction-hash). Roots of a "root_resolver" cannot
+                Entries in schema v1, or without a transaction id, are skipped, and a warning tells how many: migrate
+                them first (audit:schema:migrate --force --convert-all). Roots of a "root_resolver" cannot
                 be replayed. The command fails when an --entity is not audited, when it already runs,
                 or when the diffs of an entry cannot be read (the rows of the other entries are still written).
                 HELP)
@@ -100,10 +100,12 @@ final class RebuildRootsCommand extends Command
 
         $rows = [];
         $unreadable = 0;
+        $skipped = 0;
         foreach ($tables as $auditTable => $table) {
             $result = $rebuilder->rebuild($auditTable, $table, $dryRun);
             $rows[] = [$auditTable, $result['entries'], $result['rows'], $result['legacy'], $result['unreadable']];
             $unreadable += $result['unreadable'];
+            $skipped += $result['legacy'];
         }
 
         $io->table(['Audit table', 'Entries', $dryRun ? 'Missing rows' : 'Rows written', 'Skipped (v1 or no transaction id)', 'Unreadable diffs'], $rows);
@@ -113,6 +115,14 @@ final class RebuildRootsCommand extends Command
             $io->error(\sprintf('%d entries could not be read: their diffs are not valid JSON.', $unreadable));
 
             return Command::FAILURE;
+        }
+
+        if (0 < $skipped) {
+            // not indexed: their histories miss these entries until the tables are migrated
+            $io->warning([
+                \sprintf('%d entries were skipped: their diffs are in schema v1, or they have no transaction id.', $skipped),
+                'Run audit:schema:migrate --force --convert-all, then this command again. Entries whose transaction_hash was dropped without conversion cannot be indexed.',
+            ]);
         }
 
         $io->success($dryRun ? 'Dry run: nothing was written.' : 'Audit root index rebuilt.');
