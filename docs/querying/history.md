@@ -83,6 +83,10 @@ are skipped and counted. The command fails when an `--entity` is not audited, wh
 of an entry cannot be read; in the last case the rows of the other entries are still written. Rows that no longer match the configuration (a removed path) are not cleaned up: delete
 them with SQL if needed.
 
+Index rows go with their entries: the retention pruning (`audit:clean` and the scheduled retention) deletes
+the rows whose entry it deleted, and a rolled-back transaction deletes its rows from a remote storage along with its
+entries.
+
 ## 📜 The history of a root
 
 ```php
