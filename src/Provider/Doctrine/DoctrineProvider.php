@@ -60,8 +60,12 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
     /** @var array<string, Statement> */
     private array $preparedStatements = [];
 
-    /** @var DoctrineSubscriber[] */
-    private array $subscribers = [];
+    private ?DoctrineSubscriber $doctrineSubscriber = null;
+
+    /**
+     * Whether registerAuditingService() attaches the Doctrine listeners to the event manager of the entity manager.
+     */
+    private bool $attachesListeners = true;
 
     private LoggerInterface $logger;
 
@@ -99,6 +103,10 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
     {
         parent::registerAuditingService($service);
 
+        if (!$this->attachesListeners) {
+            return $this;
+        }
+
         \assert($service instanceof AuditingService);    // helps PHPStan
         $entityManager = $service->getEntityManager();
         $evm = $entityManager->getEventManager();
@@ -107,7 +115,9 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
         $evm->addEventListener([Events::loadClassMetadata], new TableSchemaListener());
         $evm->addEventListener([ToolEvents::postGenerateSchemaTable], new CreateSchemaListener($this));
 
-        $doctrineSubscriber = new DoctrineSubscriber($this);
+        // A single subscriber for every entity manager: its state is kept per entity manager, and entity managers
+        // sharing an event manager do not get it twice
+        $doctrineSubscriber = $this->getDoctrineSubscriber();
         $evm->addEventListener([Events::onFlush, Events::postFlush], $doctrineSubscriber);
 
         // Register soft delete listener if Gedmo SoftDeleteable is available
@@ -115,24 +125,54 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             $evm->addEventListener([SoftDeleteableListener::POST_SOFT_DELETE], $doctrineSubscriber);
         }
 
-        $this->subscribers[] = $doctrineSubscriber;
-
         return $this;
+    }
+
+    /**
+     * Leaves the Doctrine listeners to the caller: registerAuditingService() no longer attaches them to the event
+     * manager of the entity manager, and the caller attaches getDoctrineSubscriber() (onFlush, postFlush and Gedmo's
+     * postSoftDelete) and CreateSchemaListener (postGenerateSchemaTable) itself.
+     *
+     * A dependency injection container uses it to declare them as lazy listeners of the event managers: they are
+     * registered with an event manager when it is created and build the provider on the first flush, so the flushes
+     * run before anything else builds the provider are audited too. TableSchemaListener does nothing any more and is
+     * not needed.
+     *
+     * @throws ProviderException when auditing services are already registered: their listeners are attached
+     */
+    public function disableListenerAttachment(): void
+    {
+        if ([] !== $this->auditingServices) {
+            throw new ProviderException('The Doctrine listeners are already attached: disable their attachment before registering the auditing services.');
+        }
+
+        $this->attachesListeners = false;
+    }
+
+    /**
+     * The subscriber that audits the flushes of the auditing entity managers (onFlush, postFlush and Gedmo's
+     * postSoftDelete), shared by all of them and reset by reset().
+     */
+    public function getDoctrineSubscriber(): DoctrineSubscriber
+    {
+        if (!$this->doctrineSubscriber instanceof DoctrineSubscriber) {
+            $this->doctrineSubscriber = new DoctrineSubscriber($this);
+        }
+
+        return $this->doctrineSubscriber;
     }
 
     /**
      * Resets the provider state for long-running processes (e.g. Symfony Messenger workers).
      *
      * Clears cached prepared statements that may reference stale database connections
-     * after a connection reset, and resets all subscriber transaction caches.
+     * after a connection reset, and resets the transaction caches of the subscriber.
      */
     public function reset(): void
     {
         $this->preparedStatements = [];
 
-        foreach ($this->subscribers as $subscriber) {
-            $subscriber->reset();
-        }
+        $this->doctrineSubscriber?->reset();
     }
 
     public function isStorageMapperRequired(): bool
