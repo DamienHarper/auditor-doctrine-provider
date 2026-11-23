@@ -17,7 +17,8 @@ use Doctrine\ORM\Mapping\ClassMetadata;
  * of a path is read from the diffs of the entity itself, the next segments from the audit history of the entities
  * the path goes through, as they were when the entry was written.
  *
- * Only schema v2 entries are indexed. Roots given by a "root_resolver" cannot be replayed: their rows are kept.
+ * Only schema v2 entries are indexed. Only missing rows are written: rows written by hand, by a "root_resolver" (which
+ * cannot be replayed) or for entries whose diffs do not hold the association are kept.
  *
  * @internal
  *
@@ -69,11 +70,12 @@ final class RootIndexRebuilder
     }
 
     /**
-     * Rebuilds the index rows of an audit table and returns the number of rows written (to write, with $dryRun).
+     * Adds the missing index rows of an audit table and returns the number of rows written (to write, with $dryRun).
+     * Existing rows are never deleted.
      *
      * @param array{connection: Connection, entities: array<string, list<string>>} $table
      *
-     * @return array{entries: int, rows: int, skipped: int} entries read, index rows, legacy entries skipped
+     * @return array{entries: int, rows: int, skipped: int} entries read, missing index rows, legacy entries skipped
      */
     public function rebuild(string $auditTable, array $table, bool $dryRun = false): array
     {
@@ -147,13 +149,33 @@ final class RootIndexRebuilder
             }
         }
 
-        if (!$dryRun) {
-            $connection->transactional(static function (Connection $connection) use ($indexTable, $auditTable, $allPaths, $rows): void {
-                $connection->executeStatement(
-                    \sprintf('DELETE FROM %s WHERE audit_table = ? AND root_path IN (?)', $indexTable),
-                    [$auditTable, $allPaths],
-                    [ParameterType::STRING, ArrayParameterType::STRING],
-                );
+        // rows already in the index are kept, and never written twice: rows written by hand (or by a former
+        // configuration) for entries that the diffs cannot replay survive a rebuild
+        $existing = [];
+        if ([] !== $allPaths) {
+            $result = $connection->executeQuery(
+                \sprintf('SELECT root_class, root_id, root_path, object_id, transaction_id FROM %s WHERE audit_table = ? AND root_path IN (?)', $indexTable),
+                [$auditTable, $allPaths],
+                [ParameterType::STRING, ArrayParameterType::STRING],
+            );
+            foreach ($result->iterateNumeric() as $existingRow) {
+                $existing[implode("\0", array_map(strval(...), $existingRow))] = true;
+            }
+        }
+
+        $rows = array_values(array_filter($rows, static function (array $row) use (&$existing): bool {
+            $key = implode("\0", [$row['root_class'], $row['root_id'], $row['root_path'], $row['object_id'], $row['transaction_id']]);
+            if (isset($existing[$key])) {
+                return false;
+            }
+
+            $existing[$key] = true;
+
+            return true;
+        }));
+
+        if (!$dryRun && [] !== $rows) {
+            $connection->transactional(static function (Connection $connection) use ($indexTable, $rows): void {
                 foreach ($rows as $row) {
                     $connection->insert($indexTable, $row);
                 }

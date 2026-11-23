@@ -221,9 +221,10 @@ php bin/console audit:roots:rebuild --entity='App\Entity\Comment' --dry-run
 | Option      | Description                                                    |
 |-------------|----------------------------------------------------------------|
 | `--entity`  | Entities whose entries are indexed (repeatable), all by default |
-| `--dry-run` | Count the index rows, write nothing                            |
+| `--dry-run` | Count the missing index rows, write nothing                    |
 
-The rows of the configured paths are replaced, so the command can be run again. See
+Only missing rows are written and no row is deleted, so the command can be run again and rows written by hand are
+kept. See
 [Histories](../../querying/history.md#rebuilding-the-index).
 
 #### `audit:snapshot`

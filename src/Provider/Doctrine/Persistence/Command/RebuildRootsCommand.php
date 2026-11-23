@@ -50,9 +50,9 @@ final class RebuildRootsCommand extends Command
                   <info>php %command.full_name% --entity='App\Entity\Comment' --dry-run</info>
 
                 The diffs are replayed: a path is followed through the audit history of the entities it goes through,
-                as they were when each entry was written. The rows of the paths of an entity are replaced, so the
-                command can be run again safely. Schema v1 entries are skipped (see audit:schema:migrate --convert-diffs),
-                and the rows of a "root_resolver" are kept as they are.
+                as they were when each entry was written. Only missing rows are written and no row is ever deleted,
+                so the command can be run again safely, and rows written by hand or by a "root_resolver" are kept.
+                Schema v1 entries are skipped (see audit:schema:migrate --convert-diffs).
                 HELP)
         ;
     }
@@ -89,7 +89,7 @@ final class RebuildRootsCommand extends Command
             $rows[] = [$auditTable, $result['entries'], $result['rows'], $result['skipped']];
         }
 
-        $io->table(['Audit table', 'Entries', $dryRun ? 'Rows to write' : 'Rows written', 'Skipped (schema v1)'], $rows);
+        $io->table(['Audit table', 'Entries', $dryRun ? 'Missing rows' : 'Rows written', 'Skipped (schema v1)'], $rows);
         $io->success($dryRun ? 'Dry run: nothing was written.' : 'Audit root index rebuilt.');
         $this->release();
 

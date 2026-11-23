@@ -36,7 +36,29 @@ final class RebuildRootsCommandTest extends TestCase
         $this->assertSame($written, $this->rows());
 
         $tester->execute([]);
-        $this->assertSame($written, $this->rows(), 'A second run replaces the rows.');
+        $this->assertSame($written, $this->rows(), 'A second run writes nothing.');
+        $this->assertStringContainsString(' 0 ', $tester->getDisplay());
+    }
+
+    public function testRowsWrittenByHandAreKept(): void
+    {
+        $this->connection()->insert('audit_root', [
+            'root_class' => Author::class,
+            'root_id' => '99',
+            'root_path' => 'post.author',
+            'audit_table' => 'comment_audit',
+            'object_id' => '1',
+            'transaction_id' => '01JD0000000000000000000000',
+            'created_at' => '2020-01-01 00:00:00',
+        ]);
+        $before = \count($this->rows());
+
+        $tester = new CommandTester($this->createCommand());
+        $tester->execute([]);
+
+        $tester->assertCommandIsSuccessful();
+        $this->assertCount($before, $this->rows(), 'Nothing is missing, nothing is deleted.');
+        $this->assertContains([Author::class, '99', 'post.author', 'comment_audit', '1', '01JD0000000000000000000000', '2020-01-01 00:00:00'], $this->rows());
     }
 
     public function testOneEntity(): void

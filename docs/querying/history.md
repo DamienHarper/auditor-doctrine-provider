@@ -74,9 +74,11 @@ php bin/console audit:roots:rebuild --entity='App\Entity\VisitReport' --dry-run
 
 The command replays the diffs of the existing schema v2 entries: the first segment of a path is read from the diffs
 of the entry's entity, the next ones from the audit history of the entities the path goes through, as they were when
-the entry was written. It writes the rows the flush would have written, replaces the rows of the configured paths,
-and can be run again safely. Run it after declaring a new root, or after migrating audit tables to schema v2
-(`audit:schema:migrate --convert-diffs`). Schema v1 entries are skipped, and the rows of a `root_resolver` are kept.
+the entry was written. It writes the rows the flush would have written and are missing, and never deletes a row:
+it can be run again safely, and rows you write yourself (for entries whose diffs do not hold the association, such
+as imported or legacy entries) are kept. Run it after declaring a new root, or after migrating audit tables to schema v2
+(`audit:schema:migrate --convert-diffs`). Schema v1 entries are skipped. Rows that no longer match the
+configuration (a removed path) are not cleaned up: delete them with SQL if needed.
 
 ## 📜 The history of a root
 
