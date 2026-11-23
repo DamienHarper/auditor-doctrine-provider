@@ -21,6 +21,12 @@
             <directory suffix="Test.php">tests</directory>
         </testsuite>
     </testsuites>
+    <groups>
+        <exclude>
+            <!-- End-to-end test of the 1.x to 2.x migration: needs tools/migration-e2e/v1 (see tests/MigrationE2E). -->
+            <group>migration-e2e</group>
+        </exclude>
+    </groups>
     <!--
         Fail on deprecations triggered by calls made from src/ (direct deprecations).
         Deprecations raised between third-party packages (indirect) are ignored.
