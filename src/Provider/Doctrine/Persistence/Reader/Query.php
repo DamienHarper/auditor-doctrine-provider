@@ -657,7 +657,8 @@ final class Query implements QueryInterface
         } else {
             [$sql, $params, $types] = self::union($group, static fn (Query $query): QueryBuilder => $query->buildTransactionQueryBuilder()
                 ->select($query->transactionSelect().', MAX(at.created_at) AS last_at, COUNT(*) AS entries')
-                ->groupBy($query->transactionColumn(), $query->entryIdExpression()), 'UNION ALL');
+                // entry_table grouped too: MySQL does not see that it depends on a grouped COALESCE() (table being migrated)
+                ->groupBy($query->transactionColumn(), $query->entryIdExpression(), $query->entryTableExpression()), 'UNION ALL');
             $sql = $first->connection->getDatabasePlatform()->modifyLimitQuery(
                 \sprintf(
                     "SELECT tx, entry_id, entry_table, MAX(last_at) AS last_at, SUM(entries) AS entries FROM (%s) u GROUP BY tx, entry_id, entry_table ORDER BY MAX(last_at) DESC, COALESCE(tx, '') DESC, COALESCE(entry_table, '') DESC, COALESCE(entry_id, 0) DESC",
@@ -764,7 +765,15 @@ final class Query implements QueryInterface
     {
         $column = $this->transactionColumn();
 
-        return \sprintf('%1$s AS tx, %2$s AS entry_id, CASE WHEN %1$s IS NULL THEN %3$s END AS entry_table', $column, $this->entryIdExpression(), $this->connection->quote($this->table));
+        return \sprintf('%s AS tx, %s AS entry_id, %s AS entry_table', $column, $this->entryIdExpression(), $this->entryTableExpression());
+    }
+
+    /**
+     * Table of an entry without transaction id; null for the others.
+     */
+    private function entryTableExpression(): string
+    {
+        return \sprintf('CASE WHEN %s IS NULL THEN %s END', $this->transactionColumn(), $this->connection->quote($this->table));
     }
 
     /**
