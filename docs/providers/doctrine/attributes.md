@@ -335,15 +335,17 @@ Resolvers are looked up at flush-time via a PSR-11 `ContainerInterface`. Inject 
 
 ```php
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
+use Symfony\Component\DependencyInjection\ServiceLocator;
 
 $provider = new DoctrineProvider($configuration);
 
-$provider->setDiffLabelResolverLocator(new SimpleServiceLocator([
+$provider->setDiffLabelResolverLocator(new ServiceLocator([
     CategoryResolver::class => fn () => new CategoryResolver(),
 ]));
 ```
 
-Any PSR-11 container works. When using the Symfony bundle, the locator is wired automatically — see the [Diff Label Resolvers guide](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md).
+`ServiceLocator` comes from `symfony/dependency-injection`, which is not a dependency of the provider; any PSR-11
+container keyed by the resolver FQCN works. When using the Symfony bundle, the locator is wired automatically — see the [Diff Label Resolvers guide](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md).
 
 ## 📄 Complete Example
 

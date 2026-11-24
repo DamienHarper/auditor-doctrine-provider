@@ -49,7 +49,18 @@ composer require damienharper/auditor-bundle
 | `symfony/cache`                     | Attribute metadata cache              |
 | `symfony/lock`                      | Schema update locking                 |
 | `psr/log`                           | Logging of failed clean-ups           |
-| `symfony/options-resolver`          | Configuration option handling         |
+
+Some packages the provider uses are not required directly:
+
+| Package                             | Purpose                               | Installed through      |
+|-------------------------------------|---------------------------------------|------------------------|
+| `symfony/options-resolver`          | Configuration option handling         | `damienharper/auditor` |
+| `symfony/console`                   | The `audit:*` console commands        | `doctrine/orm`         |
+
+> [!NOTE]
+> The `audit:*` commands are Symfony Console commands. Without the bundle, register them in your own
+> `Symfony\Component\Console\Application` (see [Registering Commands](../providers/doctrine/schema.md#registering-commands-standalone))
+> and require `symfony/console` explicitly if you rely on it directly.
 
 ---
 

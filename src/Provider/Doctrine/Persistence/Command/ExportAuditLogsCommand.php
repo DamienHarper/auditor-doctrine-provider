@@ -54,7 +54,7 @@ final class ExportAuditLogsCommand extends Command
             ->addOption('to', null, InputOption::VALUE_REQUIRED, 'Export entries created on or before this date (ISO 8601, e.g. 2025-12-31).')
             ->addOption('blame-id', null, InputOption::VALUE_REQUIRED, 'Filter by blame/user ID.')
             ->addOption('format', null, InputOption::VALUE_REQUIRED, 'Output format: ndjson, json, csv. NDJSON is recommended for large exports.', 'ndjson')
-            ->addOption('anonymize', null, InputOption::VALUE_NONE, 'Mask blame fields (blame_id, blame_user, ip) in the output.')
+            ->addOption('anonymize', null, InputOption::VALUE_NONE, 'Mask the blame fields (blame_id and the blame context: user, firewall, IP) in the output.')
             ->addOption('output', null, InputOption::VALUE_REQUIRED, 'Write output to this file path. Defaults to stdout.')
         ;
     }

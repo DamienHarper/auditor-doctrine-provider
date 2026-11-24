@@ -12,7 +12,7 @@ Filters allow you to restrict the results returned by a `Query`. They can be add
 | `DateRangeFilter`  | `DateRangeFilter` | Filter by a date range on a datetime column    |
 | `RangeFilter`      | `RangeFilter`     | Filter by a numeric range                      |
 | `NullFilter`       | `NullFilter`      | Filter for NULL / NOT NULL values              |
-| `JsonFilter`       | `JsonFilter`      | Filter by a value inside the diffs JSON column |
+| `JsonFilter`       | `JsonFilter`      | Filter by a value inside a JSON column, typically `extra_data` |
 | `ChangedFieldFilter` | `ChangedFieldFilter` | Entries whose diff touches a given field (or one of several) |
 | `BlameOriginFilter` | `BlameOriginFilter` | Entries made from some origins: web request, console, worker, system |
 | `RootFilter`       | `RootFilter`      | Entries indexed under an audit root (see [Histories](history.md)) |

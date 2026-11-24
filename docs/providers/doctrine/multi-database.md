@@ -94,21 +94,10 @@ When you need different entities routed to different storage services:
 ```php
 <?php
 
+use DH\Auditor\Provider\Doctrine\Configuration;
+use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
-
-// Register the auditing service (application EntityManager)
-$provider->registerAuditingService(
-    new AuditingService('app', $appEntityManager)
-);
-
-// Register multiple storage services
-$provider->registerStorageService(
-    new StorageService('audit_sensitive', $auditSensitiveEntityManager)
-);
-$provider->registerStorageService(
-    new StorageService('audit_general', $auditGeneralEntityManager)
-);
 
 $configuration = new Configuration([
     'entities' => [
@@ -126,6 +115,21 @@ $configuration = new Configuration([
         };
     },
 ]);
+
+$provider = new DoctrineProvider($configuration);
+
+// Register the auditing service (application EntityManager)
+$provider->registerAuditingService(
+    new AuditingService('app', $appEntityManager)
+);
+
+// Register multiple storage services, keyed by name in $storageServices
+$provider->registerStorageService(
+    new StorageService('audit_sensitive', $auditSensitiveEntityManager)
+);
+$provider->registerStorageService(
+    new StorageService('audit_general', $auditGeneralEntityManager)
+);
 ```
 
 > [!CAUTION]
