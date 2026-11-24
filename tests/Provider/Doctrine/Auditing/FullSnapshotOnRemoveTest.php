@@ -27,8 +27,11 @@ final class FullSnapshotOnRemoveTest extends TestCase
         $post->setTitle('First');
         $post->setBody('Body');
         $post->setCreatedAt(new \DateTimeImmutable('2026-11-22 12:00:00'));
+
         $entityManager->persist($post);
         $entityManager->flush();
+
+        $id = $post->getId();
 
         $entityManager->remove($post);
         $entityManager->flush();
@@ -39,6 +42,12 @@ final class FullSnapshotOnRemoveTest extends TestCase
         $diffs = $audits[0]->getDiffs();
         $this->assertSame(['new' => null, 'old' => 'First'], $diffs['title']);
         $this->assertSame(['new' => null, 'old' => 'Body'], $diffs['body']);
+        $this->assertArrayNotHasKey('id', $diffs, 'A generated identifier is not a change: Doctrine has reset it when the entry is written.');
+
+        $source = $audits[0]->getDiffSource();
+        $this->assertNotNull($source);
+        $this->assertSame($id, $source['id'], 'The source holds the identifier of the removed entity.');
+        $this->assertSame((string) $id, $audits[0]->objectId);
     }
 
     private function createAndInitDoctrineProvider(): void
