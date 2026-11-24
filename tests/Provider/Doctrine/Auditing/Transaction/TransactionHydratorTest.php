@@ -8,6 +8,7 @@ use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Model\Entry;
 use DH\Auditor\Model\TransactionType;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Reader;
+use DH\Auditor\Tests\Fixtures\Provider\AuditNoStorageProvider;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
@@ -47,6 +48,38 @@ final class TransactionHydratorTest extends TestCase
         $entries = $reader->createQuery(Author::class)->execute();
         $this->assertCount(1, $entries, 'One INSERT entry expected for a single persisted Author.');
         $this->assertSame(TransactionType::INSERT, $entries[0]->type);
+    }
+
+    /**
+     * Auditor::disableAuditing() stops the provider from producing entries until
+     * auditing is enabled again.
+     */
+    public function testNoEntryWhileAuditingIsDisabledForTheProvider(): void
+    {
+        $this->provider->getConfiguration()->setEntities([
+            Author::class => ['enabled' => true],
+        ]);
+        $auditor = $this->provider->getAuditor();
+        $auditor->registerProvider(new AuditNoStorageProvider());
+
+        $em = $this->provider->getAuditingServiceForEntity(Author::class)->getEntityManager();
+        $reader = new Reader($this->provider);
+
+        $auditor->disableAuditing($this->provider);
+        $author = new Author();
+        $author->setFullname('Jane Doe')->setEmail('jane@example.com');
+        $em->persist($author);
+        $em->flush();
+
+        $this->assertCount(0, $reader->createQuery(Author::class)->execute(), 'No entry expected while auditing is disabled.');
+
+        $auditor->enableAuditing($this->provider);
+        $other = new Author();
+        $other->setFullname('John Doe')->setEmail('john@example.com');
+        $em->persist($other);
+        $em->flush();
+
+        $this->assertCount(1, $reader->createQuery(Author::class)->execute(), 'One INSERT entry expected once auditing is enabled again.');
     }
 
     /**
