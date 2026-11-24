@@ -80,11 +80,12 @@ All entry types use the same unified envelope. `getDiffs()` returns the `changes
 }
 ```
 
-**`remove`** — empty by default (the `source` block identifies the deleted entity); with the `full_snapshot_on_remove` option, every audited field, `new` always `null` (except a generated identifier, which only the `source` block holds):
+**`remove`** — empty by default (the `source` block identifies the deleted entity); with the `full_snapshot_on_remove` option, every audited field and owning-side to-one association, `new` always `null` (except a generated identifier, which only the `source` block holds):
 ```json
 {
     "title":   { "old": "Hello auditor!", "new": null },
-    "content": { "old": "My first post.", "new": null }
+    "content": { "old": "My first post.", "new": null },
+    "author":  { "old": { "id": 1, "class": "App\\Entity\\Author", "label": "John", "table": "author" }, "new": null }
 }
 ```
 

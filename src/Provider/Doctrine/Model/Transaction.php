@@ -79,6 +79,16 @@ final class Transaction extends BaseTransaction
     }
 
     /**
+     * Copies the identifiers captured by another transaction (the entries of a flush, kept apart until confirmed).
+     */
+    public function rememberRemovedIdsOf(self $transaction): void
+    {
+        foreach ($transaction->removedIds as $entity => $id) {
+            $this->removedIds[$entity] = $id;
+        }
+    }
+
+    /**
      * Returns the identifier captured for an entity deleted in the current flush, or null.
      */
     public function getRemovedId(object $entity): mixed

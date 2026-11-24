@@ -6,6 +6,7 @@ namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 
 use DH\Auditor\Exception\MappingException;
 use DH\Auditor\Provider\Doctrine\Configuration;
+use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
 use DH\Auditor\Provider\Doctrine\Transaction\NeedsConversionToAuditableType;
 use DH\Auditor\User\UserInterface;
@@ -359,7 +360,9 @@ trait AuditTrait
      *
      * Returns a unified diff envelope where every audited field appears in 'changes'
      * with old: <current value> and new: null. This allows reconstructing what was
-     * deleted from the audit log alone.
+     * deleted from the audit log alone. The owning-side to-one associations are recorded
+     * as in an insert, with the summary of their target ($transaction gives the identifier
+     * of a target deleted in the same flush); a null association is left out.
      *
      * Only called when Configuration::isFullSnapshotOnRemoveEnabled() is true.
      * Skipped for ignored (or not allowlisted) columns and embedded classes.
@@ -373,7 +376,7 @@ trait AuditTrait
      * @throws ConversionException
      * @throws ORMMappingException
      */
-    private function removalSnapshot(EntityManagerInterface $entityManager, object $entity, mixed $id, ?ClassMetadata $meta = null): array
+    private function removalSnapshot(EntityManagerInterface $entityManager, object $entity, mixed $id, ?ClassMetadata $meta = null, ?Transaction $transaction = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         $connection = $entityManager->getConnection();
@@ -406,6 +409,23 @@ trait AuditTrait
 
             $value = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
             $changes[$fieldName] = ['new' => null, 'old' => $this->value($connection, $type, $value)];
+        }
+
+        foreach ($meta->associationMappings as $fieldName => $mapping) {
+            if (!$mapping->isToOneOwningSide() || isset($ignoredColumns[$fieldName])) {
+                continue;
+            }
+
+            if (null !== $auditedColumns && !isset($auditedColumns[$fieldName])) {
+                continue;
+            }
+
+            $target = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
+            if (!\is_object($target)) {
+                continue;
+            }
+
+            $changes[$fieldName] = ['new' => null, 'old' => $this->summarize($entityManager, $target, [], null, $transaction?->getRemovedId($target))];
         }
 
         return [

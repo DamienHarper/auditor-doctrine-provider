@@ -113,6 +113,8 @@ final class TransactionHydrator implements TransactionHydratorInterface
     private function hydrateWithScheduledDeletions(Transaction $transaction, EntityManagerInterface $entityManager): void
     {
         $uow = $entityManager->getUnitOfWork();
+        $configuration = $this->provider->getConfiguration();
+        $fullSnapshot = $configuration instanceof Configuration && $configuration->isFullSnapshotOnRemoveEnabled();
         $entities = array_values($uow->getScheduledEntityDeletions());
         for ($i = \count($entities) - 1; $i >= 0; --$i) {
             $entity = $entities[$i];
@@ -122,8 +124,45 @@ final class TransactionHydrator implements TransactionHydratorInterface
                     $entity,
                     $this->id($entityManager, $entity),
                 );
+
+                if ($fullSnapshot) {
+                    $this->rememberRemovedTargetIds($transaction, $entityManager, $entity);
+                }
             }
         }
+    }
+
+    /**
+     * The snapshot of a removed entity records the targets of its owning-side to-one associations: the identifier
+     * of a target deleted in the same flush is captured now, before Doctrine resets it.
+     */
+    private function rememberRemovedTargetIds(Transaction $transaction, EntityManagerInterface $entityManager, object $entity): void
+    {
+        $uow = $entityManager->getUnitOfWork();
+        $meta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
+        foreach ($meta->associationMappings as $fieldName => $mapping) {
+            if (!$mapping->isToOneOwningSide()) {
+                continue;
+            }
+
+            $target = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
+            if (\is_object($target) && $uow->isScheduledForDelete($target)) {
+                $this->rememberRemovedId($transaction, $entityManager, $target);
+            }
+        }
+    }
+
+    /**
+     * Captures the identifier of an entity deleted in the current flush. A composite key is flattened into one
+     * string, as the summary of a composite-key association target is; Doctrine also forgets that key once the
+     * entity is deleted.
+     */
+    private function rememberRemovedId(Transaction $transaction, EntityManagerInterface $entityManager, object $target): void
+    {
+        $targetMeta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($target));
+        $transaction->rememberRemovedId($target, $targetMeta->isIdentifierComposite
+            ? implode('-', $entityManager->getUnitOfWork()->getEntityIdentifier($target))
+            : $this->id($entityManager, $target, $targetMeta));
     }
 
     private function hydrateWithScheduledCollectionUpdates(Transaction $transaction, EntityManagerInterface $entityManager): void
@@ -353,15 +392,8 @@ final class TransactionHydrator implements TransactionHydratorInterface
      */
     private function dissociate(Transaction $transaction, EntityManagerInterface $entityManager, object $source, object $target, array $mapping): void
     {
-        $uow = $entityManager->getUnitOfWork();
-        if ($uow->isScheduledForDelete($target)) {
-            $targetMeta = $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($target));
-
-            // A composite key is flattened into one string, as the summary of a composite-key
-            // association target is; Doctrine also forgets that key once the entity is deleted.
-            $transaction->rememberRemovedId($target, $targetMeta->isIdentifierComposite
-                ? implode('-', $uow->getEntityIdentifier($target))
-                : $this->id($entityManager, $target, $targetMeta));
+        if ($entityManager->getUnitOfWork()->isScheduledForDelete($target)) {
+            $this->rememberRemovedId($transaction, $entityManager, $target);
         }
 
         $transaction->dissociate($source, $target, $mapping);
