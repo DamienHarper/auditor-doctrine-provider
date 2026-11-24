@@ -1,9 +1,15 @@
 {
   "name": "damienharper/auditor-doctrine-provider",
   "type": "library",
-  "description": "Doctrine ORM provider for the auditor audit-log library.",
-  "keywords": ["doctrine", "audit", "audit-log", "audit-trail"],
+  "description": "Doctrine ORM provider for auditor: automatic audit logs of inserts, updates, deletes and many-to-many changes, stored in audit tables and queryable.",
+  "keywords": ["doctrine", "doctrine-orm", "audit", "audit-log", "audit-trail", "auditing", "change-tracking", "entity-history", "history", "mysql", "postgresql", "sqlite"],
   "license": "MIT",
+  "homepage": "https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/",
+  "support": {
+    "docs": "https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/",
+    "issues": "https://github.com/DamienHarper/auditor-doctrine-provider/issues",
+    "source": "https://github.com/DamienHarper/auditor-doctrine-provider"
+  },
   "authors": [
     {
       "name": "Damien Harper",
