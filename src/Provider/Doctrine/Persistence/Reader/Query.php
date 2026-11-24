@@ -18,6 +18,7 @@ use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Persistence\Reader\QueryTest;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\AbstractMySQLPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Result;
@@ -71,6 +72,23 @@ final class Query implements QueryInterface
      */
     public const string CURSOR = 'cursor';
 
+    /**
+     * Pages of transactions ending within the first WALK_MAX_TRANSACTIONS are read by walking the created_at index
+     * (walkTransactions()), the deeper ones by grouping the table. Measured with 300,000 entries in 75,000 transactions,
+     * pages of 50: page 1 in 1 to 2 ms instead of 100 to 800, page 100 in 20 to 40 ms; the last page would take 250 to
+     * 450 ms, more than grouping on PostgreSQL.
+     */
+    private const int WALK_MAX_TRANSACTIONS = 10_000;
+
+    /**
+     * Entries a walk reads at most before it gives up for a grouped read (pages of very large transactions).
+     */
+    private const int WALK_MAX_ROWS = 50_000;
+
+    private const int WALK_FIRST_BATCH = 500;
+
+    private const int WALK_MAX_BATCH = 20_000;
+
     private array $filters = [];
 
     private array $orderBy = [];
@@ -96,9 +114,8 @@ final class Query implements QueryInterface
     private ?string $rootIndexTable = null;
 
     /**
-     * Column of the transaction ids, read from the schema once.
-     */
-    /**
+     * Columns of the audit table, read from the schema once.
+     *
      * @var null|list<string>
      */
     private ?array $columns = null;
@@ -639,6 +656,13 @@ final class Query implements QueryInterface
     private static function readTransactions(array $group, int $limit, int $offset): array
     {
         $first = $group[0];
+        if (1 === \count($group) && !$first->isBeingMigrated() && $offset + $limit <= self::WALK_MAX_TRANSACTIONS) {
+            $walked = $first->walkTransactions($limit, $offset);
+            if (null !== $walked) {
+                return $walked;
+            }
+        }
+
         if (1 === \count($group) && !$first->isBeingMigrated()) {
             $column = $first->transactionColumn();
             $rows = $first->buildTransactionQueryBuilder()
@@ -682,6 +706,95 @@ final class Query implements QueryInterface
                 is_numeric($row['entries']) ? (int) $row['entries'] : 0,
             );
         }, $rows);
+    }
+
+    /**
+     * Reads a page of the transactions of the query by walking its entries most recent first, on the created_at index,
+     * until $offset + $limit transactions are found: the first pages no longer group the whole table. Null when the walk
+     * reads more than WALK_MAX_ROWS entries (very large transactions): the caller groups the table instead.
+     *
+     * The walk reads every entry of the instant where it stops, so that the transactions of that instant keep the order
+     * of a grouped read (date of their most recent entry, then transaction id, both descending).
+     *
+     * @return null|list<TransactionSummary>
+     */
+    private function walkTransactions(int $limit, int $offset): ?array
+    {
+        $column = $this->transactionColumn();
+
+        /** @var array<string, array{?string, ?int, string}> $found transaction id or entry id => [transaction id, entry id, date] */
+        $found = [];
+        $boundary = null;
+        $last = null;
+        $read = 0;
+        $batch = self::WALK_FIRST_BATCH;
+        while (true) {
+            $queryBuilder = $this->buildTransactionQueryBuilder()
+                ->select(\sprintf('at.id, %s AS tx, at.created_at', $column))
+                ->orderBy('at.created_at', 'DESC')
+                ->addOrderBy('at.id', 'DESC')
+                ->setMaxResults($batch)
+            ;
+            if (null !== $last) {
+                $queryBuilder
+                    ->andWhere('(at.created_at < :walk_at OR (at.created_at = :walk_at AND at.id < :walk_id))')
+                    ->setParameter('walk_at', $last[0])
+                    ->setParameter('walk_id', $last[1], ParameterType::INTEGER)
+                ;
+            }
+
+            $rows = $queryBuilder->executeQuery()->fetchAllNumeric();
+            foreach ($rows as $row) {
+                $createdAt = $row[2];
+                \assert(\is_string($createdAt));
+                if (null !== $boundary && $createdAt !== $boundary) {
+                    break 2;
+                }
+
+                $transactionId = \is_scalar($row[1]) ? (string) $row[1] : null;
+                $entryId = is_numeric($row[0]) ? (int) $row[0] : 0;
+                $found[null === $transactionId ? '#'.$entryId : '='.$transactionId] ??= [$transactionId, null === $transactionId ? $entryId : null, $createdAt];
+                if (null === $boundary && \count($found) >= $offset + $limit) {
+                    $boundary = $createdAt;
+                }
+
+                $last = [$createdAt, $entryId];
+            }
+
+            $read += \count($rows);
+            if (\count($rows) < $batch) {
+                break;
+            }
+
+            if ($read >= self::WALK_MAX_ROWS) {
+                return null;
+            }
+
+            $batch = min($batch * 2, self::WALK_MAX_BATCH);
+        }
+
+        $page = array_map(fn (array $transaction): array => [$transaction[0], $transaction[1], new \DateTimeImmutable($transaction[2], $this->timezone)], array_values($found));
+        usort($page, static fn (array $a, array $b): int => [$b[2], $b[0] ?? '', $b[1] ?? 0] <=> [$a[2], $a[0] ?? '', $a[1] ?? 0]);
+        $page = \array_slice($page, $offset, $limit);
+
+        // number of entries of each transaction, with the filters of the query, on the transaction index
+        $transactionIds = array_values(array_filter(array_column($page, 0), \is_string(...)));
+        $entries = [] === $transactionIds ? [] : $this->buildTransactionQueryBuilder()
+            ->select(\sprintf('%s AS tx, COUNT(*) AS entries', $column))
+            ->andWhere(\sprintf('%s IN (:walk_transactions)', $column))
+            ->setParameter('walk_transactions', $transactionIds, ArrayParameterType::STRING)
+            ->groupBy($column)
+            ->executeQuery()
+            ->fetchAllKeyValue()
+        ;
+
+        return array_map(fn (array $transaction): TransactionSummary => new TransactionSummary(
+            $transaction[0],
+            $transaction[1],
+            null === $transaction[0] ? $this->table : null,
+            $transaction[2],
+            null === $transaction[0] ? 1 : (is_numeric($entries[$transaction[0]] ?? null) ? (int) $entries[$transaction[0]] : 0),
+        ), $page);
     }
 
     /**

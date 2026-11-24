@@ -206,6 +206,24 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(\count($this->expected([$posts, $comments])), Query::countTransactionsOf([$posts, $comments]));
     }
 
+    public function testShallowAndDeepPagesOfALargeTable(): void
+    {
+        $query = $this->query(Post::class);
+        $this->addTransactions($query, 10_050);
+        $expected = $this->expected([$query]);
+
+        // shallow pages walk the entries most recent first, over several batches; each one ends at another place of a
+        // group of transactions of the same instant, whose ids run the other way of their entries
+        foreach ([9_970, 9_971, 9_972] as $offset) {
+            $this->assertSame(\array_slice($expected, $offset, 20), $this->describe($query->transactions(20, $offset)), \sprintf('Page at offset %d.', $offset));
+        }
+
+        // deep pages group the whole table
+        $this->assertSame(\array_slice($expected, 9_995, 20), $this->describe($query->transactions(20, 9_995)));
+        $this->assertSame(\array_slice($expected, -5), $this->describe($query->transactions(20, \count($expected) - 5)));
+        $this->assertSame(\count($expected), $query->countTransactions());
+    }
+
     public function testInvalidPage(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -216,6 +234,34 @@ final class QueryTransactionsTest extends TestCase
     private function query(string $entity): Query
     {
         return $this->createReader()->createQuery($entity, ['page_size' => null]);
+    }
+
+    /**
+     * Adds $count transactions of one entry each, older than the fixtures, by groups of three of the same instant: in a
+     * group, the most recent entry (highest id) has the lowest transaction id.
+     */
+    private function addTransactions(Query $query, int $count): void
+    {
+        $connection = $query->getConnection();
+        $model = $connection->fetchAssociative(\sprintf('SELECT * FROM %s ORDER BY id DESC', $query->getTable()));
+        $this->assertIsArray($model);
+        unset($model['id']);
+        $columns = array_keys($model);
+
+        $base = new \DateTimeImmutable('2020-01-01 00:00:00');
+        foreach (array_chunk(range(0, $count - 1), 500) as $chunk) {
+            $values = [];
+            $params = [];
+            foreach ($chunk as $i) {
+                $values[] = '('.implode(', ', array_fill(0, \count($columns), '?')).')';
+                $row = ['transaction_id' => \sprintf('W%025d', $count - $i), 'created_at' => $base->modify(\sprintf('-%d seconds', intdiv($i, 3)))->format('Y-m-d H:i:s')] + $model;
+                foreach ($columns as $column) {
+                    $params[] = $row[$column];
+                }
+            }
+
+            $connection->executeStatement(\sprintf('INSERT INTO %s (%s) VALUES %s', $query->getTable(), implode(', ', $columns), implode(', ', $values)), $params);
+        }
     }
 
     /**
