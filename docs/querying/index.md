@@ -100,6 +100,39 @@ foreach ($result['results'] as $entry) {
 }
 ```
 
+### Pages of transactions
+
+A transaction (an action: one flush) often writes several entries, so pages of entries cut actions and hold a varying
+number of them. `transactions()` pages the transactions the query reads instead, with its filters (its order and limit
+do not apply), most recent first:
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
+
+$query = $reader->createQuery(App\Entity\Post::class, ['page_size' => null]);
+
+$total = $query->countTransactions();
+$transactions = $query->transactions(limit: 25, offset: 25);   // list<TransactionSummary>, page 2
+
+// then the entries of these transactions, with the same filters
+$ids = array_filter(array_map(static fn ($transaction) => $transaction->transactionId, $transactions));
+$entries = (clone $query)->addFilter(new SimpleFilter(Query::TRANSACTION_ID, $ids))->execute();
+```
+
+A `TransactionSummary` tells its `transactionId`, the date of its most recent entry (`createdAt`) and its number of
+`entries`. Transactions are ordered by that date, then by transaction id (both descending). An entry written without
+transaction id is a transaction of its own: `transactionId` is null, `entryId` and `table` identify it. A table not
+migrated to schema v2 is read through its `transaction_hash` column.
+
+`Query::transactionsOf($queries, $limit, $offset)` and `Query::countTransactionsOf($queries)` do the same across
+several audit tables (one query per table): a transaction that wrote in several tables is one transaction. The tables
+of one connection are read in one statement; across connections, each one is read for `$offset + $limit`
+transactions, and a transaction stored on two connections is counted twice.
+
+Both group the entries the filters keep, in the database: on a large table without selective filter, a page costs a
+pass over the table.
+
 ## 🔎 Querying by Transaction
 
 Retrieve all audit entries related to the same database transaction across all configured entities:

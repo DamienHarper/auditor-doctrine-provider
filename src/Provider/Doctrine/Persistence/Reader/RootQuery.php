@@ -102,6 +102,42 @@ final readonly class RootQuery
     }
 
     /**
+     * Returns a page of $limit transactions (actions) of the history, each one whole, whatever its number of entries:
+     * only the last page holds fewer.
+     *
+     * @param null|string $after cursor of the last entry of the previous page (RootPage::$lastCursor): reads older entries
+     * @param null|string $since cursor of an entry read earlier (RootPage::$firstCursor): only reads newer entries
+     */
+    public function fetchTransactions(int $limit = Reader::PAGE_SIZE, ?string $after = null, ?string $since = null): RootPage
+    {
+        if ($limit < 1) {
+            throw new InvalidArgumentException('The page size must be at least 1.');
+        }
+
+        $entries = [];
+        $keys = [];
+        $firstCursor = null;
+        $lastCursor = null;
+        $hasMore = false;
+
+        foreach ($this->stream($after, $since, max($limit + 1, Reader::PAGE_SIZE)) as [$entry, $cursor]) {
+            $key = HistoryGrouper::transactionKey($entry);
+            if (!isset($keys[$key]) && \count($keys) >= $limit) {
+                $hasMore = true;
+
+                break;
+            }
+
+            $keys[$key] = true;
+            $entries[] = $entry;
+            $firstCursor ??= $cursor;
+            $lastCursor = $cursor;
+        }
+
+        return new RootPage($entries, $hasMore, $firstCursor, $lastCursor);
+    }
+
+    /**
      * Yields every entry of the history, most recent first, reading each audit table by batches.
      *
      * @return \Generator<string, Entry> entries keyed by cursor
@@ -111,6 +147,15 @@ final readonly class RootQuery
         foreach ($this->stream($after, $since, max(1, $batchSize)) as [$entry, $cursor]) {
             yield $cursor => $entry;
         }
+    }
+
+    /**
+     * Number of transactions (actions) of the history: a transaction that wrote in several audit tables is counted once
+     * (twice when these tables are stored on two connections).
+     */
+    public function countTransactions(): int
+    {
+        return Query::countTransactionsOf(array_column($this->sources, 'query'));
     }
 
     /**

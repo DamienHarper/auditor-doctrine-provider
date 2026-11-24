@@ -6,6 +6,7 @@ namespace DH\Auditor\Provider\Doctrine\Persistence\Reader;
 
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Model\Entry;
+use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\DateRangeFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\FilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\PlatformAwareFilterInterface;
@@ -93,6 +94,11 @@ final class Query implements QueryInterface
 
     private ?string $rootIndexTable = null;
 
+    /**
+     * Column of the transaction ids, read from the schema once.
+     */
+    private ?string $transactionColumn = null;
+
     public function __construct(private readonly string $table, private readonly Connection $connection, string $timezone)
     {
         $this->timezone = new \DateTimeZone($timezone);
@@ -146,6 +152,105 @@ final class Query implements QueryInterface
         ;
 
         return is_numeric($result) ? (int) $result : 0;
+    }
+
+    /**
+     * Returns a page of the transactions (actions) the query reads, most recent first: the filters of the query apply,
+     * its order and limit do not.
+     *
+     * @return list<TransactionSummary>
+     */
+    public function transactions(int $limit, int $offset = 0): array
+    {
+        return self::transactionsOf([$this], $limit, $offset);
+    }
+
+    /**
+     * Number of transactions (actions) the query reads.
+     */
+    public function countTransactions(): int
+    {
+        return self::countTransactionsOf([$this]);
+    }
+
+    /**
+     * Returns a page of the transactions read by several queries, each on its own audit table, most recent first: a
+     * transaction that wrote in several tables is one transaction, dated by its most recent entry.
+     *
+     * Transactions are ordered by the date of their most recent entry, then by transaction id (both descending); the
+     * entries without transaction id come after the others of the same instant. The queries of one connection are
+     * read in one statement; with several connections, each one is read for $offset + $limit transactions.
+     *
+     * @param list<Query> $queries
+     *
+     * @return list<TransactionSummary>
+     */
+    public static function transactionsOf(array $queries, int $limit, int $offset = 0): array
+    {
+        if (1 > $limit) {
+            throw new InvalidArgumentException('The page size must be at least 1.');
+        }
+
+        if (0 > $offset) {
+            throw new InvalidArgumentException('Offset cannot be negative.');
+        }
+
+        $groups = self::byConnection($queries);
+        if ([] === $groups) {
+            return [];
+        }
+
+        if (1 === \count($groups)) {
+            return self::readTransactions($groups[0], $limit, $offset);
+        }
+
+        /** @var array<string, TransactionSummary> $summaries */
+        $summaries = [];
+        foreach ($groups as $group) {
+            foreach (self::readTransactions($group, $offset + $limit, 0) as $summary) {
+                $known = $summaries[$summary->key()] ?? null;
+                $summaries[$summary->key()] = null === $known ? $summary : new TransactionSummary(
+                    $summary->transactionId,
+                    $summary->entryId,
+                    $summary->table,
+                    max($known->createdAt, $summary->createdAt),
+                    $known->entries + $summary->entries,
+                );
+            }
+        }
+
+        $summaries = array_values($summaries);
+        usort($summaries, static fn (TransactionSummary $a, TransactionSummary $b): int => self::transactionSortKey($b) <=> self::transactionSortKey($a));
+
+        return \array_slice($summaries, $offset, $limit);
+    }
+
+    /**
+     * Number of transactions read by several queries, each on its own audit table: a transaction that wrote in several
+     * tables of one connection is counted once (one that wrote in the audit tables of two connections, twice).
+     *
+     * @param list<Query> $queries
+     */
+    public static function countTransactionsOf(array $queries): int
+    {
+        $count = 0;
+        foreach (self::byConnection($queries) as $group) {
+            if (1 === \count($group)) {
+                $column = $group[0]->transactionColumn();
+                $result = $group[0]->buildTransactionQueryBuilder()
+                    ->select(\sprintf('COUNT(DISTINCT %1$s) + SUM(CASE WHEN %1$s IS NULL THEN 1 ELSE 0 END)', $column))
+                    ->executeQuery()
+                    ->fetchOne()
+                ;
+            } else {
+                [$sql, $params, $types] = self::union($group, static fn (Query $query): QueryBuilder => $query->buildTransactionQueryBuilder()->select($query->transactionSelect())->distinct(), 'UNION');
+                $result = $group[0]->connection->fetchOne(\sprintf('SELECT COUNT(*) FROM (%s) u', $sql), $params, $types);
+            }
+
+            $count += is_numeric($result) ? (int) $result : 0;
+        }
+
+        return $count;
     }
 
     public function addFilter(FilterInterface $filter): self
@@ -237,6 +342,17 @@ final class Query implements QueryInterface
     public function getTable(): string
     {
         return $this->table;
+    }
+
+    /**
+     * Column of the transaction ids of the audit table (Query::TRANSACTION_ID), or Query::LEGACY_TRANSACTION_HASH in a
+     * table not migrated to schema v2: the filter to read the entries of transactions.
+     */
+    public function getTransactionColumn(): string
+    {
+        return $this->transactionColumn ??= \in_array(self::TRANSACTION_ID, SchemaHelper::getTableColumnNames($this->connection, $this->table), true)
+            ? self::TRANSACTION_ID
+            : self::LEGACY_TRANSACTION_HASH;
     }
 
     public function getConnection(): Connection
@@ -454,6 +570,148 @@ final class Query implements QueryInterface
         }
 
         return $queryBuilder;
+    }
+
+    /**
+     * Groups queries by connection, in the order of their first query.
+     *
+     * @param list<Query> $queries
+     *
+     * @return list<non-empty-list<Query>>
+     */
+    private static function byConnection(array $queries): array
+    {
+        $groups = [];
+        foreach ($queries as $query) {
+            $groups[spl_object_id($query->connection)][] = $query;
+        }
+
+        return array_values($groups);
+    }
+
+    /**
+     * Reads a page of the transactions of queries sharing a connection.
+     *
+     * @param non-empty-list<Query> $group
+     *
+     * @return list<TransactionSummary>
+     */
+    private static function readTransactions(array $group, int $limit, int $offset): array
+    {
+        $first = $group[0];
+        if (1 === \count($group)) {
+            $column = $first->transactionColumn();
+            $rows = $first->buildTransactionQueryBuilder()
+                ->select($first->transactionSelect().', MAX(at.created_at) AS last_at, COUNT(*) AS entries')
+                ->groupBy($column, $first->entryIdExpression())
+                ->orderBy('MAX(at.created_at)', 'DESC')
+                ->addOrderBy(\sprintf("COALESCE(%s, '')", $column), 'DESC')
+                // the alias: MySQL does not match an expression on a grouped expression (only entries without
+                // transaction id have one, so where nulls sort does not matter)
+                ->addOrderBy('entry_id', 'DESC')
+                ->setMaxResults($limit)
+                ->setFirstResult($offset)
+                ->executeQuery()
+                ->fetchAllAssociative()
+            ;
+        } else {
+            [$sql, $params, $types] = self::union($group, static fn (Query $query): QueryBuilder => $query->buildTransactionQueryBuilder()
+                ->select($query->transactionSelect().', MAX(at.created_at) AS last_at, COUNT(*) AS entries')
+                ->groupBy($query->transactionColumn(), $query->entryIdExpression()), 'UNION ALL');
+            $sql = $first->connection->getDatabasePlatform()->modifyLimitQuery(
+                \sprintf(
+                    "SELECT tx, entry_id, entry_table, MAX(last_at) AS last_at, SUM(entries) AS entries FROM (%s) u GROUP BY tx, entry_id, entry_table ORDER BY MAX(last_at) DESC, COALESCE(tx, '') DESC, COALESCE(entry_table, '') DESC, COALESCE(entry_id, 0) DESC",
+                    $sql,
+                ),
+                $limit,
+                $offset,
+            );
+            $rows = $first->connection->fetchAllAssociative($sql, $params, $types);
+        }
+
+        return array_map(static function (array $row) use ($first): TransactionSummary {
+            $lastAt = $row['last_at'];
+            \assert(\is_string($lastAt));
+
+            return new TransactionSummary(
+                \is_scalar($row['tx'] ?? null) ? (string) $row['tx'] : null,
+                is_numeric($row['entry_id'] ?? null) ? (int) $row['entry_id'] : null,
+                \is_string($row['entry_table'] ?? null) ? $row['entry_table'] : null,
+                new \DateTimeImmutable($lastAt, $first->timezone),
+                is_numeric($row['entries']) ? (int) $row['entries'] : 0,
+            );
+        }, $rows);
+    }
+
+    /**
+     * Joins the statements built for queries sharing a connection, each one with its own parameter names.
+     *
+     * @param non-empty-list<Query>         $group
+     * @param callable(Query): QueryBuilder $build
+     *
+     * @return array{string, array<string, mixed>, array<string, mixed>}
+     */
+    private static function union(array $group, callable $build, string $operator): array
+    {
+        $parts = [];
+        $params = [];
+        $types = [];
+        foreach ($group as $index => $query) {
+            $queryBuilder = $build($query);
+            $sql = $queryBuilder->getSQL();
+            $partTypes = $queryBuilder->getParameterTypes();
+            foreach ($queryBuilder->getParameters() as $name => $value) {
+                $renamed = \sprintf('%s_u%d', $name, $index);
+                $sql = (string) preg_replace(\sprintf('/(?<![:\w]):%s(?!\w)/', preg_quote((string) $name, '/')), ':'.$renamed, $sql);
+                $params[$renamed] = $value;
+                if (isset($partTypes[$name])) {
+                    $types[$renamed] = $partTypes[$name];
+                }
+            }
+
+            $parts[] = $sql;
+        }
+
+        return [implode(' '.$operator.' ', $parts), $params, $types];
+    }
+
+    /**
+     * @return array{\DateTimeImmutable, string, string, int}
+     */
+    private static function transactionSortKey(TransactionSummary $summary): array
+    {
+        return [$summary->createdAt, $summary->transactionId ?? '', $summary->table ?? '', $summary->entryId ?? 0];
+    }
+
+    private function transactionColumn(): string
+    {
+        return 'at.'.$this->getTransactionColumn();
+    }
+
+    /**
+     * Id of an entry without transaction id, which is a transaction of its own; null for the others.
+     */
+    private function entryIdExpression(): string
+    {
+        return \sprintf('CASE WHEN %s IS NULL THEN at.id END', $this->transactionColumn());
+    }
+
+    /**
+     * Columns identifying a transaction: its id, or the id and table of an entry without transaction id.
+     */
+    private function transactionSelect(): string
+    {
+        $column = $this->transactionColumn();
+
+        return \sprintf('%1$s AS tx, %2$s AS entry_id, CASE WHEN %1$s IS NULL THEN %3$s END AS entry_table', $column, $this->entryIdExpression(), $this->connection->quote($this->table));
+    }
+
+    /**
+     * Statement on the audit table with the filters of the query, without its order and limit.
+     */
+    private function buildTransactionQueryBuilder(): QueryBuilder
+    {
+        return $this->buildWhere($this->connection->createQueryBuilder()->from($this->table, 'at'));
     }
 
     private function checkFilter(string $filter): void

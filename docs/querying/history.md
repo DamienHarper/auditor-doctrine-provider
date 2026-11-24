@@ -114,6 +114,16 @@ action is never split between two pages: pass the `HistoryGrouper` (or key calla
 keep its groups whole, or `false` to cut the page at its size exactly. `iterate()` yields every entry, keyed by
 cursor, reading each table by batches; `count()` counts them.
 
+`fetchTransactions()` counts a page in transactions instead: every page but the last holds exactly that many actions,
+each one whole, whatever its number of entries. `countTransactions()` counts the transactions of the history, once
+each even when they wrote in several audit tables (twice when these tables are on two connections).
+
+```php
+$page = $query->fetchTransactions(20);                        // 20 actions
+$next = $query->fetchTransactions(20, after: $page->lastCursor);
+$total = $query->countTransactions();
+```
+
 A cursor that is not one (edited by hand in a query string, for instance) makes `fetch()` and `iterate()` throw an
 `InvalidArgumentException`. `RootQuery::isCursor($cursor)` tells it beforehand, to show the first page instead:
 
