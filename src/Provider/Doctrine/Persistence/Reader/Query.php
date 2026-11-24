@@ -73,10 +73,11 @@ final class Query implements QueryInterface
     public const string CURSOR = 'cursor';
 
     /**
-     * Pages of transactions ending within the first WALK_MAX_TRANSACTIONS are read by walking the created_at index
-     * (walkTransactions()), the deeper ones by grouping the table. Measured with 300,000 entries in 75,000 transactions,
-     * pages of 50: page 1 in 1 to 2 ms instead of 100 to 800, page 100 in 20 to 40 ms; the last page would take 250 to
-     * 450 ms, more than grouping on PostgreSQL.
+     * On one audit table that is not being migrated, pages of transactions ending within the first
+     * WALK_MAX_TRANSACTIONS are read by walking the created_at index (walkTransactions()), the deeper ones by grouping
+     * the table. Measured with 300,000 entries in 75,000 transactions, by pages of 50: page 1 in 2 to 4 ms instead of
+     * 100 to 800 ms, page 100 in 30 to 45 ms, page 200 in 50 to 75 ms; the walk grows with the depth of the page, the
+     * grouped read does not.
      */
     private const int WALK_MAX_TRANSACTIONS = 10_000;
 
@@ -711,7 +712,8 @@ final class Query implements QueryInterface
     /**
      * Reads a page of the transactions of the query by walking its entries most recent first, on the created_at index,
      * until $offset + $limit transactions are found: the first pages no longer group the whole table. Null when the walk
-     * reads more than WALK_MAX_ROWS entries (very large transactions): the caller groups the table instead.
+     * reads, or would read at the rate of its first batches, more than WALK_MAX_ROWS entries (very large transactions):
+     * the caller groups the table instead.
      *
      * The walk reads every entry of the instant where it stops, so that the transactions of that instant keep the order
      * of a grouped read (date of their most recent entry, then transaction id, both descending).
@@ -737,7 +739,8 @@ final class Query implements QueryInterface
             ;
             if (null !== $last) {
                 $queryBuilder
-                    ->andWhere('(at.created_at < :walk_at OR (at.created_at = :walk_at AND at.id < :walk_id))')
+                    // the range on created_at alone first: PostgreSQL does not start an index scan from an OR
+                    ->andWhere('at.created_at <= :walk_at AND (at.created_at < :walk_at OR at.id < :walk_id)')
                     ->setParameter('walk_at', $last[0])
                     ->setParameter('walk_id', $last[1], ParameterType::INTEGER)
                 ;
@@ -766,7 +769,8 @@ final class Query implements QueryInterface
                 break;
             }
 
-            if ($read >= self::WALK_MAX_ROWS) {
+            // give up as soon as the entries read so far tell that the page needs more than WALK_MAX_ROWS of them
+            if ($read >= self::WALK_MAX_ROWS || (null === $boundary && $read * ($offset + $limit) > self::WALK_MAX_ROWS * \count($found))) {
                 return null;
             }
 
