@@ -23,7 +23,7 @@ configuration. Read the bundle docs; this skill then still applies to attributes
 | Provider | auditor (core) | PHP | doctrine/dbal | doctrine/orm | Symfony components |
 |---|---|---|---|---|---|
 | 2.x (current) | ^5.0 | >= 8.4 | ^4.6 | ^3.7 | ^8.1 (`symfony/cache`, `symfony/lock`) |
-| 1.x (bug and security fixes) | >= 4.1 | >= 8.4 | >= 4.3 | >= 3.2 | |
+| 1.x (bug and security fixes) | ^4.1 | >= 8.4 | >= 4.3 | >= 3.2 | |
 
 2.x writes **schema v2** audit tables; tables created by 1.x must be migrated (see "Migrating from 1.x").
 The console commands extend `Symfony\Component\Console\Command\Command`: outside Symfony, `composer require
@@ -92,7 +92,7 @@ $auditor->registerProvider($provider);
 | `compression` | `false` | `JSON COMPRESSED` diffs/extra_data on MariaDB only |
 | `utf8_convert` | `false` | Convert strings to UTF-8 before storing |
 | `ignored_columns_resolver`, `root_resolver`, `entity_label_resolver`, `read_scope` | `null` | Callables, see docs |
-| `viewer` | `true` | Used by the bundle viewer (`page_size` also defaults `paginate()`) |
+| `viewer` | `true` | Used by the bundle viewer (`page_size` also defaults `paginate()`); auditor-bundle defaults it to `false` |
 
 Entity options: `enabled`, `ignored_columns`, `audited_columns` (allowlist), `roles` (`['view' => [...]]`),
 `max_age` (ISO 8601 duration) / `max_entries` (retention for `audit:clean`), `roots`.
@@ -274,7 +274,7 @@ them best effort and logs failures to `$provider->setLogger($psrLogger)`.
 
 - Forgetting `AuditorMiddleware` on the connection: tables exist, flushes succeed, no audit row is written.
 - Putting SQL column names in `ignored_columns` / `audited_columns` / `#[Ignore(field:)]`: they take **property** names.
-- Calling `json_decode()` on `$entry->extraData`, or reading `$entry->transactionHash` (removed in 2.x).
+- Calling `json_decode()` on `$entry->extraData`, or reading `$entry->transactionHash` (removed in auditor 5.0, required by 2.x).
 - `new NullFilter(Query::JSON)`: there is no `json` column.
 - Reading `$payload['id']` in a `LifecycleEvent` listener with `batch_size > 0`: buffered entries have no id yet.
 - Running `doctrine:schema:update --force` on 1.x audit tables before `audit:schema:migrate`: data loss.

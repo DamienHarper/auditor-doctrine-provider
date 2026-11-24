@@ -22,7 +22,7 @@ MySQL, MariaDB, PostgreSQL and SQLite.
 
 ## Using an AI coding agent?
 This package ships an [Agent Skill](https://agentskills.io) in [`skills/auditor-doctrine-provider/`](skills/auditor-doctrine-provider/SKILL.md)
-(`vendor/damienharper/auditor-doctrine-provider/skills/` once installed) describing the provider for the installed version.
+(`vendor/damienharper/auditor-doctrine-provider/skills/` once installed) describing the provider. The copy in `vendor/` matches your installed version; the marketplace serves the current major.
 With Claude Code:
 ```
 /plugin marketplace add DamienHarper/auditor
