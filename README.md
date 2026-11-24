@@ -12,7 +12,7 @@
 
 
 ## Official Documentation
-`auditor-doctrine-provider` documentation can be found locally in the [docs/](docs/) folder.
+`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider) or locally in the [docs/](docs/) folder.
 
 
 ## Version Information
