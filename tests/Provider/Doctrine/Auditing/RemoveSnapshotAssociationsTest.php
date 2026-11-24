@@ -119,6 +119,21 @@ final class RemoveSnapshotAssociationsTest extends TestCase
         $this->assertSame(['label'], array_keys($this->lastEntry(Car::class)->getDiffs()));
     }
 
+    public function testTheSnapshotLeavesOutAnIgnoredAssociation(): void
+    {
+        $this->provider->getConfiguration()->setEntities([Car::class => ['enabled' => true, 'ignored_columns' => ['owner']]]);
+        $entityManager = $this->entityManager();
+        $car = new Car('car', new Owner('ACME', 'Acme'));
+        $entityManager->persist($car->owner);
+        $entityManager->persist($car);
+        $entityManager->flush();
+
+        $entityManager->remove($car);
+        $entityManager->flush();
+
+        $this->assertSame(['label'], array_keys($this->lastEntry(Car::class)->getDiffs()));
+    }
+
     private function lastEntry(string $entity): Entry
     {
         $audits = $this->createReader()->createQuery($entity)->execute();
