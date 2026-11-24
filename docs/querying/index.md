@@ -84,7 +84,7 @@ $query = $reader->createQuery(App\Entity\Post::class);
 $result = $reader->paginate($query, page: 2, pageSize: 25);
 
 // $result contains:
-// 'results'         → array<Entry>
+// 'results'         → \ArrayIterator<int|string, Entry>
 // 'currentPage'     → int
 // 'hasPreviousPage' → bool
 // 'hasNextPage'     → bool
