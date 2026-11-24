@@ -17,7 +17,7 @@ MySQL, MariaDB, PostgreSQL and SQLite.
 - **Symfony application?** Install [`auditor-bundle`](https://github.com/DamienHarper/auditor-bundle) instead:
   it requires this package and wires everything (configuration, services, viewer).
 - **Coming from auditor 4.x?** The built-in `DH\Auditor\Provider\Doctrine` namespace moved to this package,
-  unchanged: see the [upgrade guides](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade/).
+  unchanged: see the [upgrade guides](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade).
 
 
 ## Using an AI coding agent?
@@ -32,7 +32,7 @@ The documentation is also available as [llms.txt](https://damienharper.github.io
 
 
 ## Official Documentation
-`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/) or locally in the [docs/](docs/) folder.
+`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider) or locally in the [docs/](docs/) folder.
 
 
 ## Version Information
@@ -41,7 +41,7 @@ The documentation is also available as [llms.txt](https://damienharper.github.io
 | 2.x     | Active development :rocket: | PHP >= 8.4, Doctrine DBAL >= 4.6, Doctrine ORM >= 3.7, auditor >= 5.0                 |
 | 1.x     | Bug and security fixes      | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1                 |
 
-Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade/).
+Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade).
 
 
 ## Contributing

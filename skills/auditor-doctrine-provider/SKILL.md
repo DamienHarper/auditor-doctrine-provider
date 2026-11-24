@@ -285,7 +285,7 @@ them best effort and logs failures to `$provider->setLogger($psrLogger)`.
 
 ## Documentation
 
-Published docs (https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/):
+Published docs (https://damienharper.github.io/auditor-docs/auditor-doctrine-provider):
 
 - Quick start: https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/getting-started/quick-start
 - Configuration: https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/providers/doctrine/configuration
