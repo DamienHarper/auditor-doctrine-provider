@@ -364,21 +364,29 @@ trait AuditTrait
      * Only called when Configuration::isFullSnapshotOnRemoveEnabled() is true.
      * Skipped for ignored (or not allowlisted) columns and embedded classes.
      *
+     * $id is the identifier captured before the flush: Doctrine resets a generated identifier once the
+     * DELETE statement has run, so the source takes $id and the generated identifier is left out of
+     * 'changes', as in an insert. A natural identifier is still on the entity and is recorded.
+     *
      * @throws MappingException
      * @throws Exception
      * @throws ConversionException
      * @throws ORMMappingException
      */
-    private function removalSnapshot(EntityManagerInterface $entityManager, object $entity, ?ClassMetadata $meta = null): array
+    private function removalSnapshot(EntityManagerInterface $entityManager, object $entity, mixed $id, ?ClassMetadata $meta = null): array
     {
         $meta ??= $entityManager->getClassMetadata(DoctrineHelper::getRealClassName($entity));
         $connection = $entityManager->getConnection();
-        $source = $this->summarize($entityManager, $entity, [], $meta);
+        $source = $this->summarize($entityManager, $entity, [], $meta, $id);
         $changes = [];
 
         [$ignoredColumns, $auditedColumns] = $this->columnFilter($meta->name, $entity);
 
         foreach (array_keys($meta->fieldMappings) as $fieldName) {
+            if ($meta->isIdentifier($fieldName) && !$meta->isIdentifierNatural()) {
+                continue;
+            }
+
             if (isset($ignoredColumns[$fieldName])) {
                 continue;
             }

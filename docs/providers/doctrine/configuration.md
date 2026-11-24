@@ -275,7 +275,8 @@ $configuration = new Configuration([
 By default, a `remove` entry only identifies the deleted entity: its diff holds the `source` block (id, class, label,
 table) and an empty `changes`. With `full_snapshot_on_remove`, it also records the value of every audited field
 before the deletion, as `old` (with `new` set to `null`), so that the last state of a deleted entity can be read
-from its audit history:
+from its audit history. A generated identifier is left out of these fields, as in an `insert` entry: Doctrine resets
+it on deletion, and the `source` block holds it.
 
 ```php
 $configuration = new Configuration([

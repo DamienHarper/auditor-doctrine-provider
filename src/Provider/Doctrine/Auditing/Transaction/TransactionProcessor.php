@@ -245,10 +245,10 @@ final class TransactionProcessor implements TransactionProcessorInterface
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
         if ($configuration->isFullSnapshotOnRemoveEnabled()) {
-            $diff = $this->removalSnapshot($entityManager, $entity, $meta);
+            $diff = $this->removalSnapshot($entityManager, $entity, $id, $meta);
         } else {
             $diff = [
-                'source' => $this->summarize($entityManager, $entity, ['id' => $id], $meta),
+                'source' => $this->summarize($entityManager, $entity, [], $meta, $id),
                 'changes' => [],
             ];
         }
