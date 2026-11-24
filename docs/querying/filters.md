@@ -1,3 +1,7 @@
+---
+description: "Reference of the audit query filters: SimpleFilter, DateRangeFilter, RangeFilter, NullFilter, JsonFilter, ChangedFieldFilter, BlameOriginFilter and RootFilter."
+---
+
 # Filters Reference
 
 > **Fine-grained control over audit queries**

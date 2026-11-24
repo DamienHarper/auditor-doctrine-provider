@@ -1,3 +1,7 @@
+---
+description: Register AuditingService and StorageService on the DoctrineProvider, attach its Doctrine listeners yourself, and reset it in long-running Messenger workers.
+---
+
 # Services
 
 > **AuditingService and StorageService — the building blocks of the DoctrineProvider**

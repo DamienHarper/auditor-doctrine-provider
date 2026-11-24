@@ -1,3 +1,7 @@
+---
+description: Upgrade guides between major versions of auditor-doctrine-provider, the support status of the 1.x and 2.x lines, and the general upgrade procedure.
+---
+
 # Upgrade Guide
 
 > **Navigate between major versions of auditor-doctrine-provider**

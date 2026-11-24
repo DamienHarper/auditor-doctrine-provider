@@ -2,6 +2,7 @@
 id: index
 title: Introduction
 slug: /
+description: "Doctrine ORM provider of the auditor library: records inserts, updates, deletes and many-to-many changes of entities in audit tables, in the flush transaction."
 ---
 # auditor-doctrine-provider
 

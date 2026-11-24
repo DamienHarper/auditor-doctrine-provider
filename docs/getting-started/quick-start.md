@@ -1,3 +1,7 @@
+---
+description: "Set up audit logging of Doctrine ORM entities without Symfony: Auditor, DoctrineProvider, DBAL middleware, auditable entities, audit tables and the Reader."
+---
+
 # Quick Start Guide
 
 > **Set up auditing for your Doctrine entities in minutes**
