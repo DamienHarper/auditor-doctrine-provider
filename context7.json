@@ -1,0 +1,22 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "auditor-doctrine-provider",
+  "description": "Doctrine ORM provider for the auditor PHP audit log library: tracks inserts, updates, removals and many-to-many changes in audit tables and queries them with a reader.",
+  "folders": [
+    "docs",
+    "skills"
+  ],
+  "excludeFiles": [
+    "contributing.md"
+  ],
+  "rules": [
+    "Symfony applications install damienharper/auditor-bundle, which requires and configures this provider.",
+    "Only changes flushed through the Doctrine ORM unit of work are audited: DQL updates and raw SQL statements are not.",
+    "In auditor 4.x the same DH\\Auditor\\Provider\\Doctrine namespace was bundled in damienharper/auditor; since 5.0 it comes from this package."
+  ],
+  "previousVersions": [
+    {
+      "branch": "1.x"
+    }
+  ]
+}
