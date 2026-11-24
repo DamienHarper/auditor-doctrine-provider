@@ -1,0 +1,11 @@
+# Files left out of the Composer dist archive.
+# tests/ stays in the archive: auditor-bundle autoloads its fixtures and traits from
+# vendor/damienharper/auditor-doctrine-provider/tests in its own test suite.
+.*              export-ignore
+/benchmarks     export-ignore
+/tools          export-ignore
+CONTRIBUTING.md export-ignore
+phpbench.json   export-ignore
+phpstan.neon    export-ignore
+phpunit.*       export-ignore
+rector.php      export-ignore
