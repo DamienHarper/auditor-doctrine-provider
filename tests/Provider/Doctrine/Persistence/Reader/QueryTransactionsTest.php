@@ -154,6 +154,7 @@ final class QueryTransactionsTest extends TestCase
         $connection = $query->getConnection();
         $connection->executeStatement(\sprintf('ALTER TABLE %s ADD transaction_hash VARCHAR(40) NULL', $query->getTable()));
         $connection->executeStatement(\sprintf('UPDATE %s SET transaction_hash = transaction_id, transaction_id = NULL WHERE transaction_id <> ?', $query->getTable()), [$converted]);
+
         $query = $this->query(Post::class);
 
         $this->assertSame(Query::TRANSACTION_ID, $query->getTransactionColumn());
