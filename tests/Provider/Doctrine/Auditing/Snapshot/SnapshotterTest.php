@@ -6,6 +6,7 @@ namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Snapshot;
 
 use DH\Auditor\Blame\BlameContext;
 use DH\Auditor\Exception\InvalidArgumentException;
+use DH\Auditor\Provider\Doctrine\Auditing\Snapshot\SnapshotResult;
 use DH\Auditor\Provider\Doctrine\Auditing\Snapshot\Snapshotter;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Author;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
@@ -52,7 +53,7 @@ final class SnapshotterTest extends TestCase
     {
         $this->provider->getAuditor()->getConfiguration()->getBlameContextStack()->run(
             new BlameContext('console', 'audit:snapshot', user: new User('7', 'ops')),
-            fn () => new Snapshotter($this->provider)->snapshot(Author::class),
+            fn (): SnapshotResult => new Snapshotter($this->provider)->snapshot(Author::class),
         );
 
         $row = $this->auditRows(Author::class)[0];
@@ -88,6 +89,7 @@ final class SnapshotterTest extends TestCase
 
         $entityManager->flush();
         $entityManager->clear();
+
         $configuration->enable();
 
         $result = new Snapshotter($this->provider)->snapshot(Post::class);
@@ -96,6 +98,7 @@ final class SnapshotterTest extends TestCase
         foreach ($this->auditRows(Post::class) as $row) {
             $diffs = $this->decode($row['diffs']);
             $post = $entityManager->find(Post::class, (int) $row['object_id']);
+            $this->assertInstanceOf(Post::class, $post);
             $this->assertSame((string) $post->getAuthor(), $diffs['changes']['author']['new']['label']);
         }
     }

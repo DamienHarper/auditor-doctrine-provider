@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing;
 
+use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Auditing\IgnoredColumnsResolverInterface;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ReaderTrait;
@@ -58,7 +59,7 @@ final class AuditedColumnsTest extends TestCase
         $this->flush();
 
         $audits = $this->createReader()->createQuery(Post::class)->execute();
-        $this->assertSame(['remove', 'insert'], array_map(static fn ($entry): string => $entry->type, $audits));
+        $this->assertSame(['remove', 'insert'], array_map(static fn (Entry $entry): string => $entry->type, $audits));
         $this->assertSame([], $audits[1]->getDiffs());
     }
 
