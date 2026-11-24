@@ -245,7 +245,7 @@ final class TransactionProcessor implements TransactionProcessorInterface
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
         if ($configuration->isFullSnapshotOnRemoveEnabled()) {
-            $diff = $this->removalSnapshot($entityManager, $entity, $id, $meta);
+            $diff = $this->removalSnapshot($entityManager, $entity, $id, $meta, $this->currentTransaction);
         } else {
             $diff = [
                 'source' => $this->summarize($entityManager, $entity, [], $meta, $id),
@@ -322,6 +322,20 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     private function processDeletions(Transaction $transaction, EntityManagerInterface $entityManager): void
     {
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+        if ($configuration->isFullSnapshotOnRemoveEnabled()) {
+            // the snapshots label the targets of the to-one associations: load them with one query per target class
+            $byClass = [];
+            foreach ($transaction->getRemoved() as $dto) {
+                $byClass[DoctrineHelper::getRealClassName($dto->source)][] = $dto->source;
+            }
+
+            foreach ($byClass as $class => $entities) {
+                $this->loadToOneTargets($entityManager, $entityManager->getClassMetadata($class), $entities);
+            }
+        }
+
         foreach ($transaction->getRemoved() as $dto) {
             $this->remove($entityManager, $dto->source, $dto->getId(), $transaction->getTransactionId());
         }

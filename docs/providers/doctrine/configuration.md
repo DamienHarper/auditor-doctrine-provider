@@ -276,7 +276,10 @@ By default, a `remove` entry only identifies the deleted entity: its diff holds 
 table) and an empty `changes`. With `full_snapshot_on_remove`, it also records the value of every audited field
 before the deletion, as `old` (with `new` set to `null`), so that the last state of a deleted entity can be read
 from its audit history. A generated identifier is left out of these fields, as in an `insert` entry: Doctrine resets
-it on deletion, and the `source` block holds it.
+it on deletion, and the `source` block holds it. The owning-side to-one associations (`ManyToOne`, owning `OneToOne`)
+are recorded as in an `insert` entry, with the summary of their target (id, class, label, table) as `old`; a null
+association is left out, and so are to-many associations. The targets that are not loaded yet are loaded with one
+query per target class, and a target deleted in the same flush keeps the identifier it had before the deletion.
 
 ```php
 $configuration = new Configuration([

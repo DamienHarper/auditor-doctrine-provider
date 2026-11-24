@@ -168,15 +168,11 @@ final class DoctrineSubscriber implements ResetInterface
         }
 
         foreach ($pending->getDissociated() as $dto) {
-            $target = $dto->getTarget();
-            $transaction->dissociate($dto->source, $target, $dto->getMapping());
-
-            // Identifier of a target deleted by this flush, captured before Doctrine reset it.
-            $removedId = $pending->getRemovedId($target);
-            if (null !== $removedId) {
-                $transaction->rememberRemovedId($target, $removedId);
-            }
+            $transaction->dissociate($dto->source, $dto->getTarget(), $dto->getMapping());
         }
+
+        // Identifiers of the entities deleted by this flush, captured before Doctrine reset them.
+        $transaction->rememberRemovedIdsOf($pending);
     }
 
     public function postSoftDelete(LifecycleEventArgs $args): void

@@ -77,7 +77,7 @@ All entry types share a unified JSON envelope:
 - `changes` — field-level diff with explicit `old`/`new` for every operation:
   - **INSERT**: `old` is always `null`
   - **UPDATE**: both `old` and `new` reflect the changed values
-  - **REMOVE**: empty by default; with `full_snapshot_on_remove`, every audited field with its `old` value and a `null` `new` (a generated identifier, reset by Doctrine on deletion, is left out: the `source` block holds it)
+  - **REMOVE**: empty by default; with `full_snapshot_on_remove`, every audited field with its `old` value and a `null` `new` (a generated identifier, reset by Doctrine on deletion, is left out: the `source` block holds it), and every owning-side to-one association with the summary of its target as `old`
 - `snapshot` — only on entries written by [`audit:snapshot`](#auditsnapshot): an `insert` entry with
   `"snapshot": true` records the state of an entity that existed before auditing started, not its creation
   (`Entry::isSnapshot()` reads it)
