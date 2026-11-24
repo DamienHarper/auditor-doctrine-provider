@@ -9,6 +9,7 @@ use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\SchemaHelper;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\DateRangeFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\FilterInterface;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\NullFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\PlatformAwareFilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\QueryAwareFilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RangeFilter;
@@ -97,7 +98,10 @@ final class Query implements QueryInterface
     /**
      * Column of the transaction ids, read from the schema once.
      */
-    private ?string $transactionColumn = null;
+    /**
+     * @var null|list<string>
+     */
+    private ?array $columns = null;
 
     public function __construct(private readonly string $table, private readonly Connection $connection, string $timezone)
     {
@@ -350,9 +354,45 @@ final class Query implements QueryInterface
      */
     public function getTransactionColumn(): string
     {
-        return $this->transactionColumn ??= \in_array(self::TRANSACTION_ID, SchemaHelper::getTableColumnNames($this->connection, $this->table), true)
-            ? self::TRANSACTION_ID
-            : self::LEGACY_TRANSACTION_HASH;
+        return \in_array(self::TRANSACTION_ID, $this->columns(), true) ? self::TRANSACTION_ID : self::LEGACY_TRANSACTION_HASH;
+    }
+
+    /**
+     * Entries of transactions read by the query (its filters kept), most recent first: in a table being migrated to
+     * schema v2, the rows whose transaction_hash is not converted yet stand for their transaction by that hash, as in
+     * Entry::fromArray().
+     *
+     * @param list<string> $transactionIds ids of TransactionSummary
+     * @param int          $limit          entries read at most, 0 for no limit
+     *
+     * @return list<Entry>
+     */
+    public function transactionEntries(array $transactionIds, int $limit = 0): array
+    {
+        if ([] === $transactionIds) {
+            return [];
+        }
+
+        $query = (clone $this)
+            ->resetOrderBy()
+            ->addOrderBy(self::CREATED_AT, 'DESC')
+            ->addOrderBy(self::ID, 'DESC')
+            ->limit($limit)
+        ;
+        $entries = (clone $query)->addFilter(new SimpleFilter($this->getTransactionColumn(), $transactionIds))->execute();
+        if (!$this->isBeingMigrated()) {
+            return $entries;
+        }
+
+        $legacy = (clone $query)
+            ->addFilter(new SimpleFilter(self::LEGACY_TRANSACTION_HASH, $transactionIds))
+            ->addFilter(new NullFilter(self::TRANSACTION_ID))
+            ->execute()
+        ;
+        $entries = [...$entries, ...$legacy];
+        usort($entries, static fn (Entry $a, Entry $b): int => [$b->createdAt, $b->id] <=> [$a->createdAt, $a->id]);
+
+        return 0 < $limit ? \array_slice($entries, 0, $limit) : $entries;
     }
 
     public function getConnection(): Connection
@@ -599,7 +639,7 @@ final class Query implements QueryInterface
     private static function readTransactions(array $group, int $limit, int $offset): array
     {
         $first = $group[0];
-        if (1 === \count($group)) {
+        if (1 === \count($group) && !$first->isBeingMigrated()) {
             $column = $first->transactionColumn();
             $rows = $first->buildTransactionQueryBuilder()
                 ->select($first->transactionSelect().', MAX(at.created_at) AS last_at, COUNT(*) AS entries')
@@ -683,9 +723,30 @@ final class Query implements QueryInterface
         return [$summary->createdAt, $summary->transactionId ?? '', $summary->table ?? '', $summary->entryId ?? 0];
     }
 
+    /**
+     * @return list<string>
+     */
+    private function columns(): array
+    {
+        return $this->columns ??= SchemaHelper::getTableColumnNames($this->connection, $this->table);
+    }
+
+    /**
+     * A table being migrated to schema v2 keeps transaction_hash next to transaction_id until its values are converted.
+     */
+    private function isBeingMigrated(): bool
+    {
+        return \in_array(self::TRANSACTION_ID, $this->columns(), true) && \in_array(self::LEGACY_TRANSACTION_HASH, $this->columns(), true);
+    }
+
+    /**
+     * Expression of the transaction id of an entry: in a table being migrated, the hash of a row not converted yet.
+     */
     private function transactionColumn(): string
     {
-        return 'at.'.$this->getTransactionColumn();
+        return $this->isBeingMigrated()
+            ? \sprintf('COALESCE(at.%s, at.%s)', self::TRANSACTION_ID, self::LEGACY_TRANSACTION_HASH)
+            : 'at.'.$this->getTransactionColumn();
     }
 
     /**
