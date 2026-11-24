@@ -72,7 +72,7 @@ final class SkipDisabledEntitiesTest extends TestCase
     public function testAuditingCannotBeEnabledForSkippedEntities(): void
     {
         $configuration = $this->provider->getConfiguration();
-        \assert($configuration instanceof Configuration);
+        $this->assertInstanceOf(Configuration::class, $configuration);
 
         $this->expectException(\LogicException::class);
         $configuration->enableAuditFor(Post::class);
@@ -81,7 +81,7 @@ final class SkipDisabledEntitiesTest extends TestCase
     public function testRuntimeChangesDoNotAffectAuditTables(): void
     {
         $configuration = $this->provider->getConfiguration();
-        \assert($configuration instanceof Configuration);
+        $this->assertInstanceOf(Configuration::class, $configuration);
 
         $configuration->disableAuditFor(Author::class);
 
