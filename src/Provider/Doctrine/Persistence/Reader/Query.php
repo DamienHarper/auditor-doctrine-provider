@@ -75,14 +75,16 @@ final class Query implements QueryInterface
     /**
      * On one audit table that is not being migrated, pages of transactions ending within the first
      * WALK_MAX_TRANSACTIONS are read by walking the created_at index (walkTransactions()), the deeper ones by grouping
-     * the table. Measured with 300,000 entries in 75,000 transactions, by pages of 50: page 1 in 2 to 4 ms instead of
-     * 100 to 800 ms, page 100 in 30 to 45 ms, page 200 in 50 to 75 ms; the walk grows with the depth of the page, the
-     * grouped read does not.
+     * the table. Measured with 3,000,000 entries in 750,000 transactions, by pages of 50: page 1 in 2 to 6 ms instead
+     * of 1.3 to 25 s, page 100 in 40 to 100 ms; the walk grows with the depth of the page, the grouped read does not.
+     * A very selective filter that the created_at order does not serve (one user, anonymous entries) can make a deep
+     * page slower than the grouped read, which reads the matching entries on their own index.
      */
     private const int WALK_MAX_TRANSACTIONS = 10_000;
 
     /**
-     * Entries a walk reads at most before it gives up for a grouped read (pages of very large transactions).
+     * Entries the filters keep that a walk reads at most before it gives up for a grouped read (pages of very large
+     * transactions). The rows the database skips to find them are not counted.
      */
     private const int WALK_MAX_ROWS = 50_000;
 
