@@ -100,6 +100,49 @@ foreach ($result['results'] as $entry) {
 }
 ```
 
+### Pages of transactions
+
+A transaction (an action: the flushes of one database transaction share its id) often writes several entries, so pages of entries cut actions and hold a varying
+number of them. `transactions()` pages the transactions the query reads instead, with its filters (its order and limit
+do not apply), most recent first:
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Query;
+
+$query = $reader->createQuery(App\Entity\Post::class, ['page_size' => null]);
+
+$total = $query->countTransactions();
+$transactions = $query->transactions(limit: 25, offset: 25);   // list<TransactionSummary>, page 2
+
+// then the entries of these transactions, with the same filters, most recent first
+$ids = array_values(array_filter(array_map(static fn ($transaction) => $transaction->transactionId, $transactions)));
+$entries = $query->transactionEntries($ids);                    // or transactionEntries($ids, limit: 1000)
+
+// an entry without transaction id is a transaction of its own
+foreach ($transactions as $transaction) {
+    if (null === $transaction->transactionId && $transaction->table === $query->getTable()) {
+        $entries = [...$entries, ...(clone $query)->addFilter(new SimpleFilter(Query::ID, (string) $transaction->entryId))->execute()];
+    }
+}
+```
+
+A `TransactionSummary` tells its `transactionId`, the date of its most recent entry (`createdAt`) and its number of
+`entries`. Transactions are ordered by that date, then by transaction id (both descending). An entry written without
+transaction id is a transaction of its own: `transactionId` is null, `entryId` and `table` identify it. A table not
+migrated to schema v2 is read through its `transaction_hash` column; in a table being migrated (`audit:schema:migrate`
+without `--convert-transaction-hash`), a row not converted yet stands for its transaction by its hash, as
+`$entry->transactionId` does, and `transactionEntries()` reads it too.
+
+`Query::transactionsOf($queries, $limit, $offset)` and `Query::countTransactionsOf($queries)` do the same across
+several audit tables (one query per table): a transaction that wrote in several tables is one transaction. The tables
+of one connection are read in one statement; across connections, each one is read for `$offset + $limit`
+transactions. A transaction stored on two connections is listed once but counted twice (the last page may come out
+short), and its number of `entries` only counts the part read on each connection.
+
+Both group the entries the filters keep, in the database: on a large table without selective filter, a page costs a
+pass over the table.
+
 ## 🔎 Querying by Transaction
 
 Retrieve all audit entries related to the same database transaction across all configured entities:

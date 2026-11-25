@@ -120,9 +120,9 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 | `AuditorMiddleware` / `AuditorDriver` / `AuditorConnection` | `Auditing/DBAL/Middleware/` | Write the audits at commit |
 | `AttributeLoader` | `Auditing/Attribute/AttributeLoader.php` | Reads `#[Auditable]`, `#[Ignore]`, `#[Security]` |
 | `SchemaManager` | `Persistence/Schema/SchemaManager.php` | Creates and updates the audit tables |
-| `Reader` / `Query` / `Filter\*` | `Persistence/Reader/` | Read model: queries, filters, pagination |
+| `Reader` / `Query` / `Filter\*` | `Persistence/Reader/` | Read model: queries, filters, pagination (of entries, or of transactions with `transactions()` / `TransactionSummary`) |
 | `RootResolver` / `ObjectIdentifier` / `RootIndexRebuilder` | `Auditing/Root/` | Audit roots (`#[AuditRoot]`, `roots`, `root_resolver`) resolved at onFlush, root ids written like `object_id`; `audit:roots:rebuild` |
-| `RootQuery` / `RootPage` | `Persistence/Reader/` | History of a root across audit tables (`Reader::createRootQuery()`), cursor pagination |
+| `RootQuery` / `RootPage` | `Persistence/Reader/` | History of a root across audit tables (`Reader::createRootQuery()`), cursor pagination by entries or transactions (`fetchTransactions()`) |
 | `RetentionPruner` | `Persistence/Retention/RetentionPruner.php` | Audit retention |
 | Commands | `Persistence/Command/` | `audit:schema:update`, `audit:schema:migrate`, `audit:clean`, export |
 

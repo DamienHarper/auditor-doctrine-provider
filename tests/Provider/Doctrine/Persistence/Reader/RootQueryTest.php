@@ -9,6 +9,7 @@ use DH\Auditor\Exception\AccessDeniedException;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\History\BlameOrigin;
 use DH\Auditor\History\ChangeKind;
+use DH\Auditor\History\HistoryGrouper;
 use DH\Auditor\Model\Entry;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\RootFilter;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\SimpleFilter;
@@ -124,6 +125,40 @@ final class RootQueryTest extends TestCase
                 $this->assertSame($all, $read, \sprintf('Pages of %d entries.', $limit));
             }
         }
+    }
+
+    public function testPagesOfTransactions(): void
+    {
+        $query = $this->reader()->createRootQuery(Author::class, $this->id($this->alice));
+        $all = array_map($this->describe(...), iterator_to_array($query->iterate(), false));
+        $transactions = \count(new HistoryGrouper()->group(iterator_to_array($query->iterate(), false)));
+
+        $page = $query->fetchTransactions(2);
+        $this->assertSame(['Author#1 update -', 'Post#1 update author', 'Author#1 dissociate -'], array_map($this->describe(...), $page->entries));
+        $this->assertCount(2, $page->group());
+        $this->assertTrue($page->hasMore);
+        $this->assertSame($transactions, $query->countTransactions());
+        $this->assertGreaterThan($transactions, $query->count());
+
+        // every page but the last holds the given number of transactions, and the pages give the whole history, once
+        foreach ([1, 2, 3, 100] as $limit) {
+            $read = [];
+            $after = null;
+            do {
+                $page = $query->fetchTransactions($limit, $after);
+                if ($page->hasMore) {
+                    $this->assertCount($limit, $page->group(), \sprintf('Pages of %d transactions.', $limit));
+                }
+
+                array_push($read, ...array_map($this->describe(...), $page->entries));
+                $after = $page->lastCursor;
+            } while ($page->hasMore);
+
+            $this->assertSame($all, $read, \sprintf('Pages of %d transactions.', $limit));
+        }
+
+        $this->expectException(InvalidArgumentException::class);
+        $query->fetchTransactions(0);
     }
 
     public function testNewerEntriesSinceACursor(): void
