@@ -206,6 +206,57 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(\count($this->expected([$posts, $comments])), Query::countTransactionsOf([$posts, $comments]));
     }
 
+    public function testShallowAndDeepPagesOfALargeTable(): void
+    {
+        $query = $this->query(Post::class);
+        $this->addTransactions($query, 10_050);
+        $expected = $this->expected([$query]);
+
+        // shallow pages walk the entries most recent first, over several batches; each one ends at another place of a
+        // group of transactions of the same instant, whose ids run the other way of their entries
+        foreach ([9_970, 9_971, 9_972] as $offset) {
+            $this->assertSame(\array_slice($expected, $offset, 20), $this->describe($query->transactions(20, $offset)), \sprintf('Page at offset %d.', $offset));
+        }
+
+        // deep pages group the whole table
+        $this->assertSame(\array_slice($expected, 9_995, 20), $this->describe($query->transactions(20, 9_995)));
+        $this->assertSame(\array_slice($expected, -5), $this->describe($query->transactions(20, \count($expected) - 5)));
+        $this->assertSame(\count($expected), $query->countTransactions());
+    }
+
+    public function testDeepPagesGroupTheTable(): void
+    {
+        // the fixtures behind 10,050 more recent transactions, two of their entries without transaction id
+        $query = $this->query(Post::class);
+        $ids = array_map(static fn (Entry $entry): int => (int) $entry->id, (clone $query)->addFilter(new SimpleFilter(Query::TYPE, ['insert', 'update']))->execute());
+        \assert(\count($ids) >= 2);
+        $query->getConnection()->executeStatement(\sprintf('UPDATE %s SET transaction_id = NULL WHERE id IN (%d, %d)', $query->getTable(), $ids[0], $ids[1]));
+        $this->addTransactions($query, 10_050, '2099-01-01 00:00:00');
+
+        foreach ([$this->query(Post::class), $this->query(Post::class)->addFilter(new SimpleFilter(Query::TYPE, ['insert', 'update']))] as $deep) {
+            $expected = \array_slice($this->expected([$deep]), 10_040);
+            $this->assertCount(2, array_filter($expected, static fn (array $summary): bool => str_starts_with($summary[0], $deep->getTable().'#')));
+            $this->assertSame($expected, $this->describe($deep->transactions(100, 10_040)));
+        }
+
+        $query->getConnection()->executeStatement(\sprintf('ALTER TABLE %s RENAME COLUMN transaction_id TO transaction_hash', $query->getTable()));
+        $v1 = $this->query(Post::class);
+        $this->assertSame(Query::LEGACY_TRANSACTION_HASH, $v1->getTransactionColumn());
+        $this->assertSame(\array_slice($this->expected([$v1]), 10_040), $this->describe($v1->transactions(100, 10_040)), 'A table not migrated to schema v2.');
+    }
+
+    public function testAPageOfVeryLargeTransactionsGroupsTheTable(): void
+    {
+        // one recent transaction too large for a walk of the first page (26 characters: CHAR(26) on PostgreSQL pads)
+        $query = $this->query(Post::class);
+        $large = mb_str_pad('LARGE', 26, '0');
+        $this->addTransactions($query, 3_600, '2099-01-01 00:00:00', $large);
+        $expected = $this->expected([$query]);
+
+        $this->assertSame([$large, 3_600], [$expected[0][0], $expected[0][2]]);
+        $this->assertSame(\array_slice($expected, 0, 20), $this->describe($query->transactions(20)));
+    }
+
     public function testInvalidPage(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -216,6 +267,39 @@ final class QueryTransactionsTest extends TestCase
     private function query(string $entity): Query
     {
         return $this->createReader()->createQuery($entity, ['page_size' => null]);
+    }
+
+    /**
+     * Adds $count update entries from $at backwards: by default transactions of one entry each, by groups of three of the
+     * same instant, where the most recent entry (highest id) has the lowest transaction id; with $transactionId, one
+     * transaction whose entries share the instant $at.
+     */
+    private function addTransactions(Query $query, int $count, string $at = '2020-01-01 00:00:00', ?string $transactionId = null): void
+    {
+        $connection = $query->getConnection();
+        $model = $connection->fetchAssociative(\sprintf('SELECT * FROM %s ORDER BY id DESC', $query->getTable()));
+        $this->assertIsArray($model);
+        unset($model['id']);
+        $columns = array_keys($model);
+
+        $base = new \DateTimeImmutable($at);
+        foreach (array_chunk(range(0, $count - 1), 500) as $chunk) {
+            $values = [];
+            $params = [];
+            foreach ($chunk as $i) {
+                $values[] = '('.implode(', ', array_fill(0, \count($columns), '?')).')';
+                $row = [
+                    'type' => 'update',
+                    'transaction_id' => $transactionId ?? \sprintf('W%025d', $count - $i),
+                    'created_at' => $base->modify(\sprintf('-%d seconds', null === $transactionId ? intdiv($i, 3) : 0))->format('Y-m-d H:i:s'),
+                ] + $model;
+                foreach ($columns as $column) {
+                    $params[] = $row[$column];
+                }
+            }
+
+            $connection->executeStatement(\sprintf('INSERT INTO %s (%s) VALUES %s', $query->getTable(), implode(', ', $columns), implode(', ', $values)), $params);
+        }
     }
 
     /**

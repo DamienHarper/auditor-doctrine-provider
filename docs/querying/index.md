@@ -140,8 +140,19 @@ of one connection are read in one statement; across connections, each one is rea
 transactions. A transaction stored on two connections is listed once but counted twice (the last page may come out
 short), and its number of `entries` only counts the part read on each connection.
 
-Both group the entries the filters keep, in the database: on a large table without selective filter, a page costs a
-pass over the table.
+When the transactions are read on one audit table (a query alone, or the only table of its connection), a page that
+ends within the first 10,000 transactions walks the entries most recent first, on the `created_at` index, until it has
+found them. Measured with 3,000,000 entries in 750,000 transactions, by pages of 50: page 1 in 2 to 6 ms, page 100 in
+40 to 100 ms, instead of 1.3 to 25 s. A deep page with a very selective filter that the date order does not serve (one
+user, anonymous entries) can be slower than grouping: up to 1.4 s instead of 75 ms on PostgreSQL. The other pages group
+the entries the filters keep, in the database:
+- deeper pages;
+- a page whose walk reads, or would read, more than 50,000 entries (very large transactions);
+- a table being migrated;
+- several tables of one connection, read in one statement.
+
+On a large table without a selective filter, such a page costs a pass over the table, and so does
+`countTransactions()`.
 
 ## 🔎 Querying by Transaction
 
