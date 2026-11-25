@@ -247,12 +247,13 @@ final class QueryTransactionsTest extends TestCase
 
     public function testAPageOfVeryLargeTransactionsGroupsTheTable(): void
     {
-        // one recent transaction too large for a walk of the first page
+        // one recent transaction too large for a walk of the first page (26 characters: CHAR(26) on PostgreSQL pads)
         $query = $this->query(Post::class);
-        $this->addTransactions($query, 3_600, '2099-01-01 00:00:00', 'LARGE');
+        $large = mb_str_pad('LARGE', 26, '0');
+        $this->addTransactions($query, 3_600, '2099-01-01 00:00:00', $large);
         $expected = $this->expected([$query]);
 
-        $this->assertSame(['LARGE', 3_600], [$expected[0][0], $expected[0][2]]);
+        $this->assertSame([$large, 3_600], [$expected[0][0], $expected[0][2]]);
         $this->assertSame(\array_slice($expected, 0, 20), $this->describe($query->transactions(20)));
     }
 
