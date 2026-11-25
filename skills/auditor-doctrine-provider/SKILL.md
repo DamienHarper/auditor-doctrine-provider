@@ -229,6 +229,31 @@ $byEntity = $reader->getAuditsByTransactionId($ulid);   // [FQCN => list<Entry>]
   only the queried class.
 - `Query::iterate()` streams raw rows (`created_at` is a string) for large exports.
 
+### Pages of transactions (actions)
+
+One transaction (one action: the flushes of one database transaction share its id) often writes several entries, so
+**a page of entries (`execute()`, `paginate()`) cuts actions and holds a varying number of them**. To show N whole
+actions per page, page the transactions instead (the query's filters apply, its order and limit do not; most recent
+first):
+
+```php
+$query = $reader->createQuery(Post::class, ['page_size' => null]);
+$total = $query->countTransactions();
+$transactions = $query->transactions(limit: 25, offset: 25);   // list<TransactionSummary>, page 2
+$ids = array_values(array_filter(array_map(static fn ($t) => $t->transactionId, $transactions)));
+$entries = $query->transactionEntries($ids);                    // same filters, most recent first
+```
+
+- `TransactionSummary` (`DH\Auditor\Provider\Doctrine\Persistence\Reader\TransactionSummary`): `transactionId`,
+  `createdAt` (its most recent entry), `entries` (count). An entry written without transaction id is a transaction
+  of its own: `transactionId` is null and `entryId` + `table` identify it (`transactionEntries()` does not return it:
+  read it with a `SimpleFilter(Query::ID, …)`).
+- Several audit tables: `Query::transactionsOf($queries, $limit, $offset)` and `Query::countTransactionsOf($queries)`
+  (one query per table; a transaction that wrote in several tables counts once, twice across two connections).
+- Histories: `RootQuery::fetchTransactions($limit, after: $cursor)` returns a `RootPage` of exactly `$limit` whole
+  actions (except the last page); `RootQuery::countTransactions()` counts them.
+- Without a selective filter, deep pages and `countTransactions()` cost a pass over the table.
+
 ### `Entry` (`DH\Auditor\Model\Entry`)
 
 Virtual properties: `id`, `schemaVersion`, `type` (plain string), `objectId`, `discriminator`, `transactionId`,
@@ -274,6 +299,7 @@ them best effort and logs failures to `$provider->setLogger($psrLogger)`.
 
 - Forgetting `AuditorMiddleware` on the connection: tables exist, flushes succeed, no audit row is written.
 - Putting SQL column names in `ignored_columns` / `audited_columns` / `#[Ignore(field:)]`: they take **property** names.
+- Paginating entries to show N actions per page: use `transactions()` / `fetchTransactions()`.
 - Calling `json_decode()` on `$entry->extraData`, or reading `$entry->transactionHash` (removed in auditor 5.0, required by 2.x).
 - `new NullFilter(Query::JSON)`: there is no `json` column.
 - Reading `$payload['id']` in a `LifecycleEvent` listener with `batch_size > 0`: buffered entries have no id yet.
