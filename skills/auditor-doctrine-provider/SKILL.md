@@ -253,6 +253,8 @@ $entries = $query->transactionEntries($ids);                    // same filters,
 - Histories: `RootQuery::fetchTransactions($limit, after: $cursor)` returns a `RootPage` of exactly `$limit` whole
   actions (except the last page); `RootQuery::countTransactions()` counts them.
 - Without a selective filter, deep pages and `countTransactions()` cost a pass over the table.
+- Activity graph: `$query->countTransactionsByDay()` returns `['Y-m-d' => count]` (days of `created_at` as stored,
+  ascending, days without any left out; a transaction spanning midnight counts on each of its days).
 
 ### `Entry` (`DH\Auditor\Model\Entry`)
 

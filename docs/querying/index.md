@@ -1,5 +1,5 @@
 ---
-description: "Query Doctrine audit entries with the Reader and Query APIs: createQuery() options, pagination, entries of a transaction, filters and access control."
+description: "Query Doctrine audit entries with the Reader and Query APIs: createQuery() options, pagination by entries or by transactions, entries of a transaction, filters and access control."
 ---
 
 # Querying Audits
