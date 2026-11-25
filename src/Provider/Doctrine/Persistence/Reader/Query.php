@@ -288,12 +288,21 @@ final class Query implements QueryInterface
         $count = 0;
         foreach (self::byConnection($queries) as $group) {
             if (1 === \count($group)) {
+                // the entries without transaction id, each a transaction of its own, are counted apart: COUNT(DISTINCT)
+                // alone lets MySQL and MariaDB walk the transaction_id index from one transaction to the next
                 $column = $group[0]->transactionColumn();
-                $result = $group[0]->buildTransactionQueryBuilder()
-                    ->select(\sprintf('COUNT(DISTINCT %1$s) + SUM(CASE WHEN %1$s IS NULL THEN 1 ELSE 0 END)', $column))
+                $distinct = $group[0]->buildTransactionQueryBuilder()
+                    ->select(\sprintf('COUNT(DISTINCT %s)', $column))
                     ->executeQuery()
                     ->fetchOne()
                 ;
+                $alone = $group[0]->buildTransactionQueryBuilder()
+                    ->select('COUNT(*)')
+                    ->andWhere(\sprintf('%s IS NULL', $column))
+                    ->executeQuery()
+                    ->fetchOne()
+                ;
+                $result = (is_numeric($distinct) ? (int) $distinct : 0) + (is_numeric($alone) ? (int) $alone : 0);
             } else {
                 [$sql, $params, $types] = self::union($group, static fn (Query $query): QueryBuilder => $query->buildTransactionQueryBuilder()->select($query->transactionSelect())->distinct(), 'UNION');
                 $result = $group[0]->connection->fetchOne(\sprintf('SELECT COUNT(*) FROM (%s) u', $sql), $params, $types);

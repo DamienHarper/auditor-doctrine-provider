@@ -129,6 +129,21 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(\count($this->expected([$query, $this->query(Comment::class)])), Query::countTransactionsOf([$query, $this->query(Comment::class)]));
     }
 
+    public function testTheEntriesWithoutTransactionAreCountedUnderTheFiltersOfTheQuery(): void
+    {
+        $query = $this->query(Post::class);
+        $entries = $query->execute();
+        $kept = (string) $entries[0]->objectId;
+        $other = array_values(array_filter($entries, static fn (Entry $entry): bool => $entry->objectId !== $kept));
+        \assert([] !== $other);
+        $query->getConnection()->executeStatement(\sprintf('UPDATE %s SET transaction_id = NULL WHERE id IN (%d, %d)', $query->getTable(), (int) $entries[0]->id, (int) $other[0]->id));
+
+        // one of the two entries without transaction id is filtered out
+        $filtered = $this->query(Post::class)->addFilter(new SimpleFilter(Query::OBJECT_ID, $kept));
+        $this->assertSame(\count($this->expected([$filtered])), $filtered->countTransactions());
+        $this->assertSame(\count($this->expected([$query])), $query->countTransactions());
+    }
+
     public function testATableNotMigratedToSchemaV2(): void
     {
         $query = $this->query(Post::class);
