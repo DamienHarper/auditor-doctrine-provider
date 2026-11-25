@@ -198,6 +198,34 @@ final class Query implements QueryInterface
     }
 
     /**
+     * Number of transactions (actions) the query reads, by day of their entries ("Y-m-d" as stored, days in ascending
+     * order, the days without any left out): a transaction whose entries span midnight counts on each of its days.
+     *
+     * @return array<string, int>
+     */
+    public function countTransactionsByDay(): array
+    {
+        $column = $this->transactionColumn();
+        $day = \sprintf('DATE(at.%s)', self::CREATED_AT);
+        $rows = $this->buildTransactionQueryBuilder()
+            ->select(\sprintf('%2$s AS day, COUNT(DISTINCT %1$s) + SUM(CASE WHEN %1$s IS NULL THEN 1 ELSE 0 END) AS actions', $column, $day))
+            ->groupBy($day)
+            ->orderBy($day, 'ASC')
+            ->executeQuery()
+            ->fetchAllAssociative()
+        ;
+
+        $counts = [];
+        foreach ($rows as $row) {
+            if (\is_scalar($row['day']) && is_numeric($row['actions'])) {
+                $counts[(string) $row['day']] = (int) $row['actions'];
+            }
+        }
+
+        return $counts;
+    }
+
+    /**
      * Returns a page of the transactions read by several queries, each on its own audit table, most recent first: a
      * transaction that wrote in several tables is one transaction, dated by its most recent entry.
      *
