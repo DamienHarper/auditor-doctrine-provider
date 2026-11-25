@@ -140,6 +140,7 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(Query::LEGACY_TRANSACTION_HASH, $query->getTransactionColumn());
         $this->assertSame($expected, $this->describe($query->transactions(100)));
         $this->assertSame(\count($expected), $query->countTransactions());
+        $this->assertSame($this->byDay($query), $query->countTransactionsByDay());
     }
 
     public function testATableBeingMigratedToSchemaV2(): void
@@ -160,6 +161,7 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(Query::TRANSACTION_ID, $query->getTransactionColumn());
         $this->assertSame($expected, $this->describe($query->transactions(100)), 'A row not converted yet stands for its transaction by its hash.');
         $this->assertSame(\count($expected), $query->countTransactions());
+        $this->assertSame($this->byDay($query), $query->countTransactionsByDay(), 'A row not converted yet counts for its transaction.');
         $this->assertSame($both, $this->describe(Query::transactionsOf([$query, $comments], 100)));
         $this->assertSame(\count($both), Query::countTransactionsOf([$query, $comments]));
 
@@ -257,6 +259,31 @@ final class QueryTransactionsTest extends TestCase
         $this->assertSame(\array_slice($expected, 0, 20), $this->describe($query->transactions(20)));
     }
 
+    public function testTransactionsByDay(): void
+    {
+        // the entries of the fixtures spread over two days, every other one on the second: a transaction that writes on
+        // both days counts on each; two entries without transaction id count one each
+        $query = $this->query(Post::class);
+        $connection = $query->getConnection();
+        $connection->executeStatement(\sprintf("UPDATE %s SET created_at = '2030-01-01 23:59:59' WHERE id %% 2 = 0", $query->getTable()));
+        $connection->executeStatement(\sprintf("UPDATE %s SET created_at = '2030-01-02 00:00:01' WHERE id %% 2 = 1", $query->getTable()));
+
+        $ids = array_map(static fn (Entry $entry): int => (int) $entry->id, $query->execute());
+        \assert(\count($ids) >= 2);
+        $connection->executeStatement(\sprintf('UPDATE %s SET transaction_id = NULL WHERE id IN (%d, %d)', $query->getTable(), $ids[0], $ids[1]));
+
+        $expected = $this->byDay($query);
+        $this->assertSame(['2030-01-01', '2030-01-02'], array_keys($expected));
+        $this->assertGreaterThan(\count($this->expected([$query])), array_sum($expected), 'A transaction of the fixtures must write on both days.');
+        $this->assertSame($expected, $query->countTransactionsByDay());
+
+        $updates = $this->query(Post::class)->addFilter(new SimpleFilter(Query::TYPE, 'update'));
+        $this->assertNotSame($expected, $this->byDay($updates));
+        $this->assertSame($this->byDay($updates), $updates->countTransactionsByDay(), 'The filters of the query apply.');
+
+        $this->assertSame([], $this->query(Post::class)->addFilter(new SimpleFilter(Query::OBJECT_ID, 'none'))->countTransactionsByDay());
+    }
+
     public function testInvalidPage(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -326,6 +353,23 @@ final class QueryTransactionsTest extends TestCase
         uksort($transactions, static fn (string $a, string $b): int => $order[$b] <=> $order[$a]);
 
         return array_values($transactions);
+    }
+
+    /**
+     * Number of transactions by day computed from the entries the query reads, days in ascending order.
+     *
+     * @return array<string, int>
+     */
+    private function byDay(Query $query): array
+    {
+        $keys = [];
+        foreach ((clone $query)->resetQueryPart('limit')->execute() as $entry) {
+            $keys[$entry->createdAt->format('Y-m-d')][$entry->transactionId ?? $query->getTable().'#'.$entry->id] = true;
+        }
+
+        ksort($keys);
+
+        return array_map(\count(...), $keys);
     }
 
     /**

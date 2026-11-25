@@ -154,6 +154,21 @@ the entries the filters keep, in the database:
 On a large table without a selective filter, such a page costs a pass over the table, and so does
 `countTransactions()`.
 
+`countTransactionsByDay()` counts the transactions the query reads by day of their entries, for an activity graph:
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\DateRangeFilter;
+
+$query = $reader->createQuery(App\Entity\Post::class, ['page_size' => null])
+    ->addFilter(new DateRangeFilter(Query::CREATED_AT, new DateTimeImmutable('-29 days midnight')));
+
+$query->countTransactionsByDay();   // ['2026-11-24' => 13, '2026-11-25' => 4]
+```
+
+Days are those of the `created_at` column as stored (`DATE(created_at)`), in ascending order; days without any
+transaction are left out. A transaction whose entries span midnight counts on each of its days, as a filter on either
+day finds it.
+
 ## 🔎 Querying by Transaction
 
 Retrieve all audit entries related to the same database transaction across all configured entities:
