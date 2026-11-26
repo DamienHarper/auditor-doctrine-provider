@@ -704,6 +704,7 @@ final class MigrateSchemaCommandTest extends TestCase
         $commandTester = new CommandTester($this->createCommand());
         $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-all' => true]));
         $this->assertFalse($this->auditTable('post_audit')->hasColumn('blame_user'));
+        $this->assertSame(2, $this->schemaVersionDefault('post_audit'), 'Dropping the blame columns drops the last legacy column.');
         $blame = json_decode((string) $connection->fetchOne('SELECT blame FROM post_audit WHERE id = ?', [$id]), true);
         $this->assertIsArray($blame);
         $this->assertSame('dark.vador', $blame['username']);
@@ -822,16 +823,25 @@ final class MigrateSchemaCommandTest extends TestCase
         $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-all' => true]));
         $this->assertSame(2, $this->schemaVersionDefault('post_audit'));
 
-        // The SQL of audit:schema:update cannot tell it: SQLite rebuilds the table, listing every column. The
-        // comparison it is built from can.
         $connection = $this->auditConnection();
-        $expectedTable = new SchemaManager($this->provider)->createAuditTable(Post::class, new Schema())->getTable('post_audit');
-        $diff = $connection->createSchemaManager()->createComparator()->compareTables($this->auditTable('post_audit'), $expectedTable);
-        $changedColumns = array_map(
-            static fn (ColumnDiff $columnDiff): string => mb_strtolower($columnDiff->getOldColumn()->getObjectName()->getIdentifier()->getValue()),
-            array_values($diff->getChangedColumns()),
-        );
-        $this->assertNotContains('schema_version', $changedColumns, 'audit:schema:update must have nothing to do on schema_version.');
+        if ($connection->getDatabasePlatform() instanceof SQLitePlatform) {
+            // On SQLite, the SQL of audit:schema:update rebuilds the table and lists every column: it cannot show
+            // whether schema_version changes. Compare the introspected table with the expected one instead.
+            $expectedTable = new SchemaManager($this->provider)->createAuditTable(Post::class, new Schema())->getTable('post_audit');
+            $diff = $connection->createSchemaManager()->createComparator()->compareTables($this->auditTable('post_audit'), $expectedTable);
+            $changedColumns = array_map(
+                static fn (ColumnDiff $columnDiff): string => mb_strtolower($columnDiff->getOldColumn()->getObjectName()->getIdentifier()->getValue()),
+                array_values($diff->getChangedColumns()),
+            );
+            $this->assertNotContains('schema_version', $changedColumns, 'schema_version must match the expected audit table.');
+        } else {
+            // The ALTER statements of audit:schema:update only name the columns they change.
+            foreach (new SchemaManager($this->provider)->getUpdateAuditSchemaSql() as $sqls) {
+                foreach ($sqls as $sql) {
+                    $this->assertStringNotContainsStringIgnoringCase('schema_version', $sql, 'audit:schema:update must have nothing to do on schema_version.');
+                }
+            }
+        }
 
         $connection->insert('post_audit', [
             'type' => 'insert',

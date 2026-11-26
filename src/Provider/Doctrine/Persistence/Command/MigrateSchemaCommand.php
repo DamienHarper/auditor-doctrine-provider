@@ -45,7 +45,8 @@ use Symfony\Component\Uid\Ulid;
  *
  *   Phase 1 (additive)   — add new columns, mark rows as schema_version=1, migrate blame JSON
  *   Conversions          — --convert-transaction-hash and/or --convert-diffs (reads transaction_hash)
- *   Phase 2 (destructive)— drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …)
+ *   Phase 2 (destructive)— drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …);
+ *                          the alteration that drops the last one sets the v2 default of schema_version (2)
  *
  * Phase 2 is skipped when --limit is set so that partial runs can be resumed safely.
  *
@@ -528,7 +529,9 @@ final class MigrateSchemaCommand extends Command
      * Additive: add new columns (idempotent — skips already-present columns),
      *           existing rows get schema_version=1, migrate blame columns to JSON.
      * Destructive: drop the indexes covering legacy columns, then the legacy columns (transaction_hash, blame_user, …),
-     *              in one table alteration: SQLite rebuilds the table once instead of once per column and index.
+     *              in one table alteration: SQLite rebuilds the table once instead of once per column and index. When
+     *              no legacy column is left after it, the same alteration sets the default of schema_version to the
+     *              v2 value (2); a table that keeps transaction_hash keeps the default of 1.
      *
      * @param array<string, Connection> $tables
      * @param bool                      $dropTransactionHash Whether to include transaction_hash in the destructive phase:
@@ -616,8 +619,9 @@ final class MigrateSchemaCommand extends Command
                 }
             }
 
-            // Once the last legacy column is gone, no v1 row can be written any more: the same alteration sets the
-            // default of the v2 schema. A table that keeps transaction_hash keeps the default of 1.
+            // The alteration that drops the last legacy column sets the default of the v2 schema: the table is no
+            // longer a legacy table, and a row inserted without schema_version is a v2 row. A table that keeps
+            // transaction_hash stays a legacy table (audit:schema:update still refuses it) and keeps the default of 1.
             $isLastLegacyAlteration = [] === array_diff(array_filter(self::LEGACY_COLUMNS, $table->hasColumn(...)), $droppedColumns);
             $schemaVersionDefault = SchemaHelper::getAuditTableColumns()['schema_version']['options']['default'];
 
