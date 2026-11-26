@@ -18,6 +18,7 @@ use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
+use Doctrine\DBAL\Schema\ColumnEditor;
 use Doctrine\DBAL\Schema\ComparatorConfig;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
 use Doctrine\DBAL\Schema\Name\UnqualifiedName;
@@ -572,8 +573,8 @@ final class MigrateSchemaCommand extends Command
                     }
 
                     // Existing rows are legacy rows: adding the column with a default of 1 marks them in the
-                    // same statement, so that a run interrupted right after it cannot leave them at 2.
-                    // audit:schema:update sets the default of the v2 schema afterwards.
+                    // same statement, so that a run interrupted right after it cannot leave them at 2. The
+                    // alteration that drops the last legacy column sets the default of the v2 schema (step 3).
                     if ('schema_version' === $colName) {
                         $colOptions['default'] = 1;
                     }
@@ -615,15 +616,26 @@ final class MigrateSchemaCommand extends Command
                 }
             }
 
+            // Once the last legacy column is gone, no v1 row can be written any more: the same alteration sets the
+            // default of the v2 schema. A table that keeps transaction_hash keeps the default of 1.
+            $isLastLegacyAlteration = [] === array_diff(array_filter(self::LEGACY_COLUMNS, $table->hasColumn(...)), $droppedColumns);
+            $schemaVersionDefault = SchemaHelper::getAuditTableColumns()['schema_version']['options']['default'];
+
             $droppedColumnNames = array_map(static fn (string $colName): UnqualifiedName => $table->getColumn($colName)->getObjectName(), $droppedColumns);
             if ([] !== $droppedColumnNames) {
-                $destructive = $alter(static function (TableEditor $editor) use ($droppedIndexes, $droppedColumnNames): TableEditor {
+                $destructive = $alter(static function (TableEditor $editor) use ($droppedIndexes, $droppedColumnNames, $isLastLegacyAlteration, $schemaVersionDefault): TableEditor {
                     foreach ($droppedIndexes as $indexName) {
                         $editor->dropIndex($indexName);
                     }
 
                     foreach ($droppedColumnNames as $columnName) {
                         $editor->dropColumn($columnName);
+                    }
+
+                    if ($isLastLegacyAlteration) {
+                        $editor->modifyColumnByUnquotedName('schema_version', static function (ColumnEditor $column) use ($schemaVersionDefault): void {
+                            $column->setDefaultValue($schemaVersionDefault);
+                        });
                     }
 
                     return $editor;

@@ -22,7 +22,9 @@ use Doctrine\DBAL\Platforms\MariaDBPlatform;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
+use Doctrine\DBAL\Schema\ColumnDiff;
 use Doctrine\DBAL\Schema\Index\IndexedColumn;
+use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\Attributes\Small;
@@ -804,6 +806,89 @@ final class MigrateSchemaCommandTest extends TestCase
     }
 
     /**
+     * The run that drops the last legacy column sets the default of schema_version of the v2 schema: no v1 row can be
+     * written any more, and a row inserted without schema_version is a v2 row. audit:schema:update has nothing left
+     * to do on that column.
+     */
+    public function testCompleteMigrationSetsTheV2DefaultOfSchemaVersion(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--dump-sql' => true, '--convert-all' => true]);
+        $this->assertMatchesRegularExpression('/schema_version[^;]*DEFAULT 2\b/i', $commandTester->getDisplay(true), 'The dumped destructive statements must set the default.');
+
+        $this->assertSame(Command::SUCCESS, $commandTester->execute(['--force' => true, '--convert-all' => true]));
+        $this->assertSame(2, $this->schemaVersionDefault('post_audit'));
+
+        // The SQL of audit:schema:update cannot tell it: SQLite rebuilds the table, listing every column. The
+        // comparison it is built from can.
+        $connection = $this->auditConnection();
+        $expectedTable = new SchemaManager($this->provider)->createAuditTable(Post::class, new Schema())->getTable('post_audit');
+        $diff = $connection->createSchemaManager()->createComparator()->compareTables($this->auditTable('post_audit'), $expectedTable);
+        $changedColumns = array_map(
+            static fn (ColumnDiff $columnDiff): string => mb_strtolower($columnDiff->getOldColumn()->getObjectName()->getIdentifier()->getValue()),
+            array_values($diff->getChangedColumns()),
+        );
+        $this->assertNotContains('schema_version', $changedColumns, 'audit:schema:update must have nothing to do on schema_version.');
+
+        $connection->insert('post_audit', [
+            'type' => 'insert',
+            'object_id' => '2',
+            'diffs' => '{}',
+            'created_at' => '2024-01-01 00:00:00',
+        ]);
+        $this->assertSame(2, (int) $connection->fetchOne('SELECT schema_version FROM post_audit WHERE id = ?', [(int) $connection->lastInsertId()]));
+    }
+
+    /**
+     * A run limited by --limit keeps the legacy columns: rows written by 1.x meanwhile are v1 rows, the default stays 1.
+     */
+    public function testLimitedMigrationKeepsTheLegacyDefaultOfSchemaVersion(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+        $this->insertLegacyRow('post_audit', 'insert', '2', ['title' => ['new' => 'Second']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-all' => true, '--limit' => '1']);
+
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertSame(1, $this->schemaVersionDefault('post_audit'));
+    }
+
+    /**
+     * A table that keeps transaction_hash keeps the default 1, until the run that drops it.
+     */
+    public function testSchemaVersionDefaultIsSetByTheRunThatDropsTransactionHash(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--convert-diffs' => true]);
+        $this->assertTrue($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertSame(1, $this->schemaVersionDefault('post_audit'));
+
+        $commandTester->execute(['--force' => true, '--convert-transaction-hash' => true]);
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertSame(2, $this->schemaVersionDefault('post_audit'));
+    }
+
+    public function testDroppingTransactionHashWithoutConversionSetsTheV2DefaultOfSchemaVersion(): void
+    {
+        $this->simulateLegacySchema('post_audit');
+        $this->insertLegacyRow('post_audit', 'insert', '1', ['title' => ['new' => 'First']]);
+
+        $commandTester = new CommandTester($this->createCommand());
+        $commandTester->execute(['--force' => true, '--drop-transaction-hash' => true]);
+
+        $this->assertFalse($this->auditTable('post_audit')->hasColumn('transaction_hash'));
+        $this->assertSame(2, $this->schemaVersionDefault('post_audit'));
+    }
+
+    /**
      * Manipulates the first audit table to look like a v1 schema:
      * drops schema_version, adds transaction_hash (VARCHAR 40).
      */
@@ -986,6 +1071,14 @@ final class MigrateSchemaCommandTest extends TestCase
     private function auditTable(string $tableName): Table
     {
         return $this->auditConnection()->createSchemaManager()->introspectSchema()->getTable($tableName);
+    }
+
+    private function schemaVersionDefault(string $tableName): int
+    {
+        $default = $this->auditTable($tableName)->getColumn('schema_version')->getDefault();
+        $this->assertIsNumeric($default, 'schema_version must have a numeric default.');
+
+        return (int) $default;
     }
 
     private function auditConnection(): Connection
