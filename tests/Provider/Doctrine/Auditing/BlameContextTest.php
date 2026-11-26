@@ -76,7 +76,7 @@ final class BlameContextTest extends TestCase
         $entry = $this->entry('On behalf of Alice');
         $this->assertSame('42', $entry->userId, 'blame_id is the identifier of the user of the context.');
         $this->assertSame('alice', $entry->username, 'The user of the context is blamed.');
-        $this->assertSame(User::class, $entry->userFqdn);
+        $this->assertNull($entry->userFqdn, 'The user of the context gives no class.');
         $this->assertSame(['type' => 'messenger', 'label' => 'App\Message\ImportPosts'], $entry->via);
     }
 

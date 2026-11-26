@@ -144,10 +144,11 @@ final class TransactionProcessor implements TransactionProcessorInterface
 
     /**
      * Pre-computes blame JSON, extra data and timestamp once for the entire flush.
-     * The blame context, if any, is written in the `via` key of the blame JSON.
+     * The impersonator of the user, if any, is written in the `impersonator` key of the blame JSON, and the blame
+     * context in the `via` key.
      * Avoids repeated json_encode(), extra data provider calls and DateTimeImmutable creation per audit entry.
      *
-     * @param array{client_ip: ?string, user_firewall: ?string, user_fqdn: ?string, user_id: ?string, username: ?string} $blame
+     * @param array{client_ip: ?string, impersonator: null|array{id: ?string, username: ?string, fqdn: ?string}, user_firewall: ?string, user_fqdn: ?string, user_id: ?string, username: ?string} $blame
      */
     private function preComputeFlushContext(array $blame, ?BlameContext $blameContext = null): void
     {
@@ -160,7 +161,8 @@ final class TransactionProcessor implements TransactionProcessorInterface
             || null !== $blame['username']
             || null !== $blame['user_fqdn']
             || null !== $blame['user_firewall']
-            || null !== $blame['client_ip'];
+            || null !== $blame['client_ip']
+            || null !== $blame['impersonator'];
 
         if (!$hasBlame && !$blameContext instanceof BlameContext) {
             $this->flushBlameJson = null;
@@ -174,6 +176,10 @@ final class TransactionProcessor implements TransactionProcessorInterface
             'user_firewall' => $blame['user_firewall'],
             'ip' => $blame['client_ip'],
         ];
+
+        if (null !== $blame['impersonator']) {
+            $blameData['impersonator'] = $blame['impersonator'];
+        }
 
         if ($blameContext instanceof BlameContext) {
             $blameData['via'] = $blameContext->toArray();
