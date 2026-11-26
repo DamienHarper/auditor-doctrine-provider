@@ -58,7 +58,8 @@ final readonly class ImpersonatorFilter implements PlatformAwareFilterInterface
         $platform = $connection->getDatabasePlatform();
         [$isObject, $id] = match (true) {
             $platform instanceof PostgreSQLPlatform => ["jsonb_typeof(CAST(at.blame AS jsonb) -> 'impersonator') = 'object'", "(CAST(at.blame AS jsonb) -> 'impersonator' ->> 'id')"],
-            $platform instanceof AbstractMySQLPlatform => ["JSON_TYPE(JSON_EXTRACT(at.blame, '$.impersonator')) = 'OBJECT'", "JSON_UNQUOTE(JSON_EXTRACT(at.blame, '$.impersonator.id'))"],
+            // JSON_UNQUOTE() turns a JSON null into the string "null" (JSON_VALUE() needs MySQL 8.0.21)
+            $platform instanceof AbstractMySQLPlatform => ["JSON_TYPE(JSON_EXTRACT(at.blame, '$.impersonator')) = 'OBJECT'", "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(at.blame, '$.impersonator.id')), 'null')"],
             $platform instanceof SQLitePlatform => ["json_type(at.blame, '$.impersonator') = 'object'", "json_extract(at.blame, '$.impersonator.id')"],
             default => throw new InvalidArgumentException(\sprintf('Filtering on the impersonator is not supported on %s.', JsonPlatformHelper::getPlatformName($connection))),
         };

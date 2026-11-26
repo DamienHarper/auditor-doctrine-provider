@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing;
 
+use DH\Auditor\Blame\BlameContext;
+use DH\Auditor\History\BlameOrigin;
 use DH\Auditor\Model\Entry;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\BlameOriginFilter;
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\FilterInterface;
 use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ImpersonatorFilter;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ReaderTrait;
@@ -69,6 +73,27 @@ final class BlameUserTest extends TestCase
         $this->assertSame(['id' => '1', 'username' => 'admin'], $this->sorted($entry->impersonator), 'The blame is written for an impersonator alone.');
     }
 
+    public function testAnImpersonatorWithoutValueIsNotWritten(): void
+    {
+        $this->blame(new User('42', 'alice', 'App\Entity\Customer', new User()));
+        $this->createPost('Empty impersonator');
+
+        $entry = $this->entry('Empty impersonator');
+        $this->assertArrayNotHasKey('impersonator', $entry->blame ?? [], 'An impersonator without id, username nor class is not written.');
+        $this->assertSame([], $this->titles(new ImpersonatorFilter()));
+    }
+
+    public function testTheImpersonatorFilterWithTheBlameOriginFilter(): void
+    {
+        $this->blame(new User('42', 'alice', 'App\Entity\Customer', new User('1', 'admin', 'App\Entity\Admin')));
+        $this->createPost('Web');
+        $this->provider->getAuditor()->getConfiguration()->getBlameContextStack()->run(new BlameContext('console', 'app:sync'), fn () => $this->createPost('Console'));
+
+        $this->assertSame(['Console', 'Web'], $this->titles(new ImpersonatorFilter()));
+        $this->assertSame(['Web'], $this->titles(new ImpersonatorFilter('1'), new BlameOriginFilter(BlameOrigin::Http)), 'Both blame filters apply.');
+        $this->assertSame(['Console'], $this->titles(new BlameOriginFilter(BlameOrigin::Console), new ImpersonatorFilter()), 'Both blame filters apply, in any order.');
+    }
+
     public function testTheImpersonatorFilter(): void
     {
         $this->blame(new User('42', 'alice', 'App\Entity\Customer', new User('1', 'admin', 'App\Entity\Admin')));
@@ -91,10 +116,12 @@ final class BlameUserTest extends TestCase
     /**
      * @return list<string>
      */
-    private function titles(ImpersonatorFilter $filter): array
+    private function titles(FilterInterface ...$filters): array
     {
         $query = $this->createReader()->createQuery(Post::class, ['page_size' => null]);
-        $query->addFilter($filter);
+        foreach ($filters as $filter) {
+            $query->addFilter($filter);
+        }
 
         $titles = array_map(static fn (Entry $entry): string => (string) ($entry->getDiffs()['title']['new'] ?? ''), $query->execute());
         sort($titles);

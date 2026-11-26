@@ -580,12 +580,15 @@ trait AuditTrait
             $username = $user->username;
             $user_fqdn = $user->fqdn;
 
-            if ($user->impersonator instanceof UserInterface) {
-                $impersonator = [
-                    'id' => $user->impersonator->identifier,
-                    'username' => $user->impersonator->username,
-                    'fqdn' => $user->impersonator->fqdn,
-                ];
+            $impersonator = [
+                'id' => $user->impersonator?->identifier,
+                'username' => $user->impersonator?->username,
+                'fqdn' => $user->impersonator?->fqdn,
+            ];
+
+            // an impersonator without any value is not written
+            if ([null, null, null] === array_values($impersonator)) {
+                $impersonator = null;
             }
         }
 
