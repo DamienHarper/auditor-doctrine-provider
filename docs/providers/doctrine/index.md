@@ -40,7 +40,7 @@ For each audited entity, a corresponding audit table is created:
 | `diffs`          | `json`        | The actual changes — see [schema reference](schema.md)            |
 | `extra_data`     | `json`        | Custom extra data (populated via listener)                        |
 | `blame_id`       | `string(255)` | User identifier                                                   |
-| `blame`          | `json`        | Blame context: `username`, `user_fqdn`, `user_firewall`, `ip`     |
+| `blame`          | `json`        | Blame context: `username`, `user_fqdn`, `user_firewall`, `ip`, plus `impersonator` and `via` when set |
 | `created_at`     | `datetime`    | When the audit was created                                        |
 
 ### Action Types

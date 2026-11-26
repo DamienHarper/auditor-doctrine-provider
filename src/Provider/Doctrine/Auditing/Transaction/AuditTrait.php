@@ -554,7 +554,7 @@ trait AuditTrait
      *
      * @param null|UserInterface $user user to blame instead of the one returned by the user provider
      *
-     * @return array{client_ip: null|string, user_firewall: null|string, user_fqdn: null|string, user_id: null|string, username: null|string}
+     * @return array{client_ip: null|string, impersonator: null|array{id: null|string, username: null|string, fqdn: null|string}, user_firewall: null|string, user_fqdn: null|string, user_id: null|string, username: null|string}
      */
     private function blame(?UserInterface $user = null): array
     {
@@ -563,6 +563,7 @@ trait AuditTrait
         $client_ip = null;
         $user_fqdn = null;
         $user_firewall = null;
+        $impersonator = null;
 
         $securityProvider = $this->provider->getAuditor()->getConfiguration()->getSecurityProvider();
         if (null !== $securityProvider) {
@@ -577,11 +578,23 @@ trait AuditTrait
         if ($user instanceof UserInterface) {
             $user_id = $user->identifier;
             $username = $user->username;
-            $user_fqdn = DoctrineHelper::getRealClassName($user);
+            $user_fqdn = $user->fqdn;
+
+            $impersonator = [
+                'id' => $user->impersonator?->identifier,
+                'username' => $user->impersonator?->username,
+                'fqdn' => $user->impersonator?->fqdn,
+            ];
+
+            // an impersonator without any value is not written
+            if ([null, null, null] === array_values($impersonator)) {
+                $impersonator = null;
+            }
         }
 
         return [
             'client_ip' => $client_ip,
+            'impersonator' => $impersonator,
             'user_firewall' => $user_firewall,
             'user_fqdn' => $user_fqdn,
             'user_id' => $user_id,
