@@ -103,11 +103,11 @@ any error:
 
 | Column | What to write |
 |---|---|
-| `schema_version` | `2`, explicitly: a table whose schema was completed by other means than `audit:schema:migrate` or `audit:schema:update` may still have a default of `1`, and a row read as `1` has its diffs read as the legacy format |
+| `schema_version` | `2`, always written explicitly: do not rely on the column default, which can still be `1` on a table left half-migrated or completed by hand; a row read as `1` has its diffs read as the legacy format |
 | `type` | `insert`, `update`, `remove`, `associate` or `dissociate` |
 | `object_id`, `discriminator` | the identifier of the entity as a string; its class in `discriminator` for an entity of an inheritance hierarchy, `NULL` otherwise |
-| `transaction_id` | a ULID (26 characters, e.g. `(string) new Ulid()` with `symfony/uid`), the same for every row of one action, across tables: the viewer and `Query::transactions()` group the entries by it |
-| `diffs` | the envelope `{"source": {…}, "changes": {"field": {"old": …, "new": …}}}`, or the association structure; `source` holds `id`, `class`, `label` and `table` |
+| `transaction_id` | a ULID (26 characters, e.g. `(string) new Ulid()` with `symfony/uid`), the same for every row written by one flush (one transaction), across tables: the viewer and `Query::transactions()` group the entries by it |
+| `diffs` | the envelope `{"source": {…}, "changes": {"field": {"old": …, "new": …}}}`, or the association structure; `source` holds `id`, `class`, `label` and `table`; plus `deep_diffs` (the fields whose change is a JSON deep diff) when relevant, without which the deep diffs are inferred from their shape |
 | `blame_id`, `blame` | `NULL` and `NULL` when nobody is known; otherwise `blame` holds the four keys `username`, `user_fqdn`, `user_firewall` and `ip`, each set to `null` when unknown, plus `impersonator` and `via` when relevant |
 | `extra_data` | a JSON object, or `NULL` |
 | `created_at` | the date of the change, `Y-m-d H:i:s`, in the timezone of the configuration (`timezone`, UTC by default) |
