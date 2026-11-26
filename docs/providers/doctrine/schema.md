@@ -95,6 +95,30 @@ All entry types share a unified JSON envelope:
 
 Entries written by earlier versions of the provider carry `schema_version = 1`. The `Entry` model reads them transparently — see [Entry Reference](../../querying/entry.md).
 
+### Writing audit rows yourself
+
+The provider writes audit rows on flush only. An application that writes rows itself (for example to import the
+history kept by another tool) must follow the format above, or the `Reader` and the viewer misread the rows without
+any error:
+
+| Column | What to write |
+|---|---|
+| `schema_version` | `2`, explicitly: a table whose schema was completed by other means than `audit:schema:migrate` or `audit:schema:update` may still have a default of `1`, and a row read as `1` has its diffs read as the legacy format |
+| `type` | `insert`, `update`, `remove`, `associate` or `dissociate` |
+| `object_id`, `discriminator` | the identifier of the entity as a string; its class in `discriminator` for an entity of an inheritance hierarchy, `NULL` otherwise |
+| `transaction_id` | a ULID (26 characters, e.g. `(string) new Ulid()` with `symfony/uid`), the same for every row of one action, across tables: the viewer and `Query::transactions()` group the entries by it |
+| `diffs` | the envelope `{"source": {…}, "changes": {"field": {"old": …, "new": …}}}`, or the association structure; `source` holds `id`, `class`, `label` and `table` |
+| `blame_id`, `blame` | `NULL` and `NULL` when nobody is known; otherwise `blame` holds the four keys `username`, `user_fqdn`, `user_firewall` and `ip`, each set to `null` when unknown, plus `impersonator` and `via` when relevant |
+| `extra_data` | a JSON object, or `NULL` |
+| `created_at` | the date of the change, `Y-m-d H:i:s`, in the timezone of the configuration (`timezone`, UTC by default) |
+
+- `diffs`, `blame` and `extra_data` are `JSONB` on PostgreSQL: cast the values (`::jsonb`) in a hand-written
+  `INSERT`.
+- Rows written by hand go around the `LifecycleEvent` listeners of the application (extra data, rewriting of the
+  diffs): apply their effect yourself.
+- Rows of entities that declare an [`#[AuditRoot]`](../../querying/history.md) are not indexed in `audit_root`: run
+  [`audit:roots:rebuild`](#auditrootsrebuild) after the import, or they are missing from the histories.
+
 ## 🛠️ Using SchemaManager
 
 ### Creating the Schema Manager
