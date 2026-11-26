@@ -8,6 +8,7 @@ use DH\Auditor\Attribute\Auditable;
 use DH\Auditor\Attribute\AuditRoot;
 use DH\Auditor\Attribute\DiffLabel;
 use DH\Auditor\Attribute\Ignore;
+use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Attribute\Security;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute\AttributeLoaderTest;
@@ -82,6 +83,9 @@ final readonly class AttributeLoader
         // Are there any DiffLabel attributes?
         $diffLabelResolvers = $this->getDiffLabelResolvers($reflection);
 
+        // Are there any Mask attributes?
+        $masks = $this->getMasks($reflection);
+
         // Are there any AuditRoot attributes? (repeatable, inherited from parent classes)
         $roots = $this->getRoots($reflection);
 
@@ -91,6 +95,7 @@ final readonly class AttributeLoader
             'enabled' => $auditableAttribute->enabled,
             'roles' => $roles,
             'diff_label_resolvers' => $diffLabelResolvers,
+            'masks' => $masks,
             'max_age' => $auditableAttribute->maxAge,
             'max_entries' => $auditableAttribute->maxEntries,
         ];
@@ -173,6 +178,36 @@ final readonly class AttributeLoader
         }
 
         return $resolvers;
+    }
+
+    /**
+     * Collects the #[Mask] strategies defined on entity properties or on the class (with a field).
+     *
+     * @return array<string, string> Map of property name => strategy
+     */
+    private function getMasks(\ReflectionClass $reflection): array
+    {
+        $masks = [];
+
+        foreach ($reflection->getAttributes(Mask::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
+            $mask = $attribute->newInstance();
+            $masks[$this->classLevelField($mask->field, 'Mask', $reflection)] = $mask->strategy;
+        }
+
+        foreach ($reflection->getProperties() as $property) {
+            $attributes = $property->getAttributes(Mask::class, \ReflectionAttribute::IS_INSTANCEOF);
+            if ([] !== $attributes) {
+                $mask = $attributes[0]->newInstance();
+                $this->assertNoPropertyLevelField($mask->field, 'Mask', $property);
+                $masks[$property->getName()] = $mask->strategy;
+            }
+        }
+
+        if (false !== $reflection->getParentClass()) {
+            return array_merge($this->getMasks($reflection->getParentClass()), $masks);
+        }
+
+        return $masks;
     }
 
     private function classLevelField(?string $field, string $attribute, \ReflectionClass $reflection): string

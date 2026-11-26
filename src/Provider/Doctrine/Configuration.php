@@ -19,6 +19,11 @@ use Symfony\Component\OptionsResolver\OptionsResolver;
  */
 final class Configuration implements ConfigurationInterface
 {
+    /**
+     * Minimum length, in bytes, of the "mask_secret" option.
+     */
+    public const int MASK_SECRET_MIN_LENGTH = 32;
+
     private ?DoctrineProvider $provider = null;
 
     private readonly string $tablePrefix;
@@ -39,6 +44,8 @@ final class Configuration implements ConfigurationInterface
     private readonly bool $utf8Convert;
 
     private readonly bool $fullSnapshotOnRemove;
+
+    private readonly ?string $maskSecret;
 
     private readonly int $batchSize;
 
@@ -103,6 +110,7 @@ final class Configuration implements ConfigurationInterface
         $this->viewerPageSize = self::getViewerPageSizeFromConfig($config['viewer']);
         $this->utf8Convert = $config['utf8_convert'];
         $this->fullSnapshotOnRemove = $config['full_snapshot_on_remove'];
+        $this->maskSecret = $config['mask_secret'];
         $this->batchSize = $config['batch_size'];
         $this->skipDisabledEntities = $config['skip_disabled_entities'];
         $this->compression = $config['compression'];
@@ -219,6 +227,17 @@ final class Configuration implements ConfigurationInterface
     public function isFullSnapshotOnRemoveEnabled(): bool
     {
         return $this->fullSnapshotOnRemove;
+    }
+
+    /**
+     * Secret of the #[Mask(strategy: Mask::KEYED_HASH)] fields (null when not set).
+     *
+     * Changing it changes the hashes of the values recorded from then on: the entries recorded before cannot be
+     * matched with the new ones any more.
+     */
+    public function getMaskSecret(): ?string
+    {
+        return $this->maskSecret;
     }
 
     /**
@@ -651,6 +670,7 @@ final class Configuration implements ConfigurationInterface
                 'storage_mapper' => null,
                 'utf8_convert' => false,
                 'full_snapshot_on_remove' => false,
+                'mask_secret' => null,
                 'batch_size' => 0,
                 'skip_disabled_entities' => false,
                 'compression' => false,
@@ -669,6 +689,8 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('storage_mapper', ['null', 'string', 'callable'])
             ->setAllowedTypes('utf8_convert', 'bool')
             ->setAllowedTypes('full_snapshot_on_remove', 'bool')
+            ->setAllowedTypes('mask_secret', ['null', 'string'])
+            ->setAllowedValues('mask_secret', static fn (?string $value): bool => null === $value || mb_strlen($value) >= self::MASK_SECRET_MIN_LENGTH)
             ->setAllowedTypes('batch_size', 'int')
             ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
             ->setAllowedTypes('skip_disabled_entities', 'bool')

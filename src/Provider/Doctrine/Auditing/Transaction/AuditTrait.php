@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 
+use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Exception\MappingException;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
@@ -45,7 +46,7 @@ trait AuditTrait
      *
      * The configuration is set at bootstrap and never changes at runtime, so it is cached for the process lifetime.
      *
-     * @return array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>}
+     * @return array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>, masks: array<string, Mask>}
      */
     private function entityConfig(string $entityClass): array
     {
@@ -67,7 +68,45 @@ trait AuditTrait
             'ignored_columns' => self::columnSet($configuration->getIgnoredColumns()) + self::columnSet($entityCfg['ignored_columns'] ?? []),
             'audited_columns' => null === $auditedColumns ? null : self::columnSet($auditedColumns),
             'diff_label_resolvers' => $entityCfg['diff_label_resolvers'] ?? [],
+            'masks' => self::masks($entityCfg['masks'] ?? []),
         ];
+    }
+
+    /**
+     * Turns the #[Mask] strategies of an entity (property name => strategy) into Mask instances.
+     *
+     * @return array<string, Mask>
+     */
+    private static function masks(mixed $strategies): array
+    {
+        $masks = [];
+        if (is_iterable($strategies)) {
+            foreach ($strategies as $field => $strategy) {
+                if (\is_string($field) && \is_string($strategy)) {
+                    $masks[$field] = new Mask($strategy);
+                }
+            }
+        }
+
+        return $masks;
+    }
+
+    /**
+     * Returns what the audit stores for $value of the field of an entity: the value itself, or its masked form when
+     * the field has a #[Mask].
+     *
+     * @param array<string, Mask> $masks
+     */
+    private function maskedValue(array $masks, string $fieldName, mixed $value): mixed
+    {
+        if (!isset($masks[$fieldName])) {
+            return $value;
+        }
+
+        /** @var Configuration $configuration */
+        $configuration = $this->provider->getConfiguration();
+
+        return $masks[$fieldName]->apply($value, $configuration->getMaskSecret());
     }
 
     /**
@@ -272,6 +311,7 @@ trait AuditTrait
 
         [$ignoredColumns, $auditedColumns] = $this->columnFilter($meta->name, $entity);
         $diffLabelResolvers = $this->entityConfig($meta->name)['diff_label_resolvers'];
+        $masks = $this->entityConfig($meta->name)['masks'];
 
         foreach ($changeset as $fieldName => [$old, $new]) {
             $o = null;
@@ -296,8 +336,8 @@ trait AuditTrait
                 $o = $this->value($connection, $type, $old);
                 $n = $this->value($connection, $type, $new);
 
-                // Apply DiffLabel resolver if configured for this field
-                if ([] !== $diffLabelResolvers && isset($diffLabelResolvers[$fieldName]) && null !== $resolverLocator) {
+                // Apply DiffLabel resolver if configured for this field (a label would reveal a masked value)
+                if ([] !== $diffLabelResolvers && isset($diffLabelResolvers[$fieldName]) && !isset($masks[$fieldName]) && null !== $resolverLocator) {
                     $resolverFqcn = $diffLabelResolvers[$fieldName];
                     if ($resolverLocator->has($resolverFqcn)) {
                         $resolver = $resolverLocator->get($resolverFqcn);
@@ -326,7 +366,10 @@ trait AuditTrait
             }
 
             if ($o !== $n) {
-                if (
+                if (isset($masks[$fieldName])) {
+                    // the values are compared before being masked: two values hidden as "***" still differ
+                    $changes[$fieldName] = ['new' => $this->maskedValue($masks, $fieldName, $n), 'old' => $this->maskedValue($masks, $fieldName, $o)];
+                } elseif (
                     isset($type) && \in_array($type, $jsonTypes, true)
                     && (null === $o || \is_array($o)) && (null === $n || \is_array($n))
                 ) {
@@ -384,6 +427,7 @@ trait AuditTrait
         $changes = [];
 
         [$ignoredColumns, $auditedColumns] = $this->columnFilter($meta->name, $entity);
+        $masks = $this->entityConfig($meta->name)['masks'];
 
         foreach (array_keys($meta->fieldMappings) as $fieldName) {
             if ($meta->isIdentifier($fieldName) && !$meta->isIdentifierNatural()) {
@@ -408,7 +452,7 @@ trait AuditTrait
             }
 
             $value = DoctrineHelper::getReflectionPropertyValue($meta, $fieldName, $entity);
-            $changes[$fieldName] = ['new' => null, 'old' => $this->value($connection, $type, $value)];
+            $changes[$fieldName] = ['new' => null, 'old' => $this->maskedValue($masks, $fieldName, $this->value($connection, $type, $value))];
         }
 
         foreach ($meta->associationMappings as $fieldName => $mapping) {
@@ -425,7 +469,7 @@ trait AuditTrait
                 continue;
             }
 
-            $changes[$fieldName] = ['new' => null, 'old' => $this->summarize($entityManager, $target, [], null, $transaction?->getRemovedId($target))];
+            $changes[$fieldName] = ['new' => null, 'old' => $this->maskedValue($masks, $fieldName, $this->summarize($entityManager, $target, [], null, $transaction?->getRemovedId($target)))];
         }
 
         return [

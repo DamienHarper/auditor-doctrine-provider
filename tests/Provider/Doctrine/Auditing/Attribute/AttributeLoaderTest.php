@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute;
 
+use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\ClassLevelAttributesEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DiffLabelEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\MaskEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\AuditRoot\Document;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\ClassLevelWithoutField\ClassLevelIgnoreWithoutFieldEntity;
@@ -52,7 +54,23 @@ final class AttributeLoaderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(5, $loaded);
+        $this->assertCount(6, $loaded);
+    }
+
+    public function testMasksAreLoaded(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../Fixtures/Entity/Attribute',
+            ],
+            'default'
+        );
+
+        $loaded = new AttributeLoader($entityManager)->load();
+
+        $this->assertSame(['email' => Mask::KEYED_HASH, 'pin' => Mask::HIDDEN, 'categoryId' => Mask::HIDDEN], $loaded[MaskEntity::class]['masks']);
+        $this->assertSame([], $loaded[DiffLabelEntity::class]['masks']);
     }
 
     public function testAuditRootsAreLoaded(): void
@@ -103,7 +121,7 @@ final class AttributeLoaderTest extends TestCase
         $loaded = $attributeLoader->load();
 
         foreach ($loaded as $entityClass => $config) {
-            if (!\in_array($entityClass, [DiffLabelEntity::class, ClassLevelAttributesEntity::class], true)) {
+            if (!\in_array($entityClass, [DiffLabelEntity::class, ClassLevelAttributesEntity::class, MaskEntity::class], true)) {
                 $this->assertArrayHasKey('diff_label_resolvers', $config, $entityClass.' must have diff_label_resolvers key');
                 $this->assertSame([], $config['diff_label_resolvers'], $entityClass.' must have empty diff_label_resolvers');
             }

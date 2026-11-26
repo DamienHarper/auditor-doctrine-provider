@@ -478,7 +478,7 @@ final class DoctrineProviderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(5, $loaded);
+        $this->assertCount(6, $loaded);
 
         $auditor = $this->createAuditor();
         $provider = new DoctrineProvider($this->createProviderConfiguration(['entities' => $loaded]));
