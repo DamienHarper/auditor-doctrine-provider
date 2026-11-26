@@ -15,6 +15,7 @@ Filters allow you to restrict the results returned by a `Query`. They can be add
 | `JsonFilter`       | `JsonFilter`      | Filter by a value inside a JSON column, typically `extra_data` |
 | `ChangedFieldFilter` | `ChangedFieldFilter` | Entries whose diff touches a given field (or one of several) |
 | `BlameOriginFilter` | `BlameOriginFilter` | Entries made from some origins: web request, console, worker, system |
+| `ImpersonatorFilter` | `ImpersonatorFilter` | Entries made while a user impersonated another one, optionally by a given impersonator |
 | `RootFilter`       | `RootFilter`      | Entries indexed under an audit root (see [Histories](history.md)) |
 
 All filter classes live under:
@@ -207,6 +208,23 @@ $query->addFilter(new BlameOriginFilter([BlameOrigin::Console, BlameOrigin::Mess
 // Or through the createQuery() option
 $query = $reader->createQuery(Post::class, ['blame_origin' => 'http']);
 ```
+
+## 🎭 ImpersonatorFilter
+
+Keeps the entries made while a user impersonated another one (switch user): those whose `blame` JSON has an
+`impersonator` key, written when the user provider returns a user with an impersonator. Given an identifier, it
+keeps those of that impersonator only. It reads the `blame` JSON column, so it needs native JSON support and a
+schema v2 table.
+
+```php
+use DH\Auditor\Provider\Doctrine\Persistence\Reader\Filter\ImpersonatorFilter;
+
+$query->addFilter(new ImpersonatorFilter());     // made by impersonating someone
+$query->addFilter(new ImpersonatorFilter('1'));  // made by impersonator #1
+```
+
+Entries written before the `impersonator` key existed are not found: auditor-bundle before 8.0 appended the
+impersonator to the username instead (`alice[impersonator admin]`).
 
 ## 🌳 RootFilter
 

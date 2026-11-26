@@ -26,11 +26,12 @@ use DH\Auditor\Model\Entry;
 | `$transactionId` | `string\|null`         | ULID grouping changes from the same flush batch                      |
 | `$extraData`     | `array\|null`          | Already-decoded extra data (do **not** call `json_decode()`)         |
 | `$userId`        | `int\|string\|null`    | Identifier of the user who made the change (`blame_id`)              |
-| `$blame`         | `array\|null`          | Decoded blame context: `username`, `user_fqdn`, `user_firewall`, `ip`|
+| `$blame`         | `array\|null`          | Decoded blame context: `username`, `user_fqdn`, `user_firewall`, `ip`, plus `impersonator` and `via` when set |
 | `$username`      | `string\|null`         | Convenience shortcut for `$blame['username']`                        |
 | `$userFqdn`      | `string\|null`         | Convenience shortcut for `$blame['user_fqdn']`                       |
 | `$userFirewall`  | `string\|null`         | Convenience shortcut for `$blame['user_firewall']`                   |
 | `$ip`            | `string\|null`         | Convenience shortcut for `$blame['ip']`                              |
+| `$impersonator`  | `array\|null`          | User who impersonated the blamed one (`id`, `username`, `fqdn`), from `$blame['impersonator']` |
 | `$via`           | `array\|null`          | Blame context (`type`, `label`, `data`) the change was made in, from `$blame['via']` |
 | `$createdAt`     | `\DateTimeImmutable`   | Timestamp of when the audit entry was created                        |
 | `$entity`        | `string\|null`         | FQCN of the audited entity, set by readers that merge several audit tables (history of a root) |
