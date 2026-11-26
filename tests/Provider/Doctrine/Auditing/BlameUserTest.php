@@ -58,6 +58,17 @@ final class BlameUserTest extends TestCase
         $this->assertSame(['fqdn' => 'App\Entity\Admin', 'id' => '1', 'username' => 'admin'], $this->sorted($entry->impersonator));
     }
 
+    public function testTheImpersonatorAloneIsWritten(): void
+    {
+        $this->provider->getAuditor()->getConfiguration()->setSecurityProvider(static fn (): array => [null, null]);
+        $this->blame(new User(impersonator: new User('1', 'admin')));
+        $this->createPost('Impersonator alone');
+
+        $entry = $this->entry('Impersonator alone');
+        $this->assertNull($entry->userId);
+        $this->assertSame(['id' => '1', 'username' => 'admin'], $this->sorted($entry->impersonator), 'The blame is written for an impersonator alone.');
+    }
+
     public function testTheImpersonatorFilter(): void
     {
         $this->blame(new User('42', 'alice', 'App\Entity\Customer', new User('1', 'admin', 'App\Entity\Admin')));
