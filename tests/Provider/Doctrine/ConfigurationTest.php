@@ -162,6 +162,35 @@ final class ConfigurationTest extends TestCase
         ]);
     }
 
+    public function testMaskSecretIsNullByDefault(): void
+    {
+        $this->assertNull($this->createProviderConfiguration()->getMaskSecret());
+    }
+
+    public function testCustomMaskSecret(): void
+    {
+        $secret = str_repeat('s', 32);
+
+        $this->assertSame($secret, $this->createProviderConfiguration(['mask_secret' => $secret])->getMaskSecret());
+    }
+
+    public function testShortMaskSecretIsRejected(): void
+    {
+        $this->expectException(InvalidOptionsException::class);
+
+        $this->createProviderConfiguration([
+            'mask_secret' => str_repeat('s', 31),
+        ]);
+    }
+
+    public function testMaskSecretLengthIsCountedInBytes(): void
+    {
+        // 11 characters, 33 bytes
+        $secret = str_repeat('€', 11);
+
+        $this->assertSame($secret, $this->createProviderConfiguration(['mask_secret' => $secret])->getMaskSecret());
+    }
+
     public function testGetEntities(): void
     {
         $entities = [

@@ -12,6 +12,7 @@ Auditor uses PHP 8 attributes to configure Doctrine entity auditing. These attri
 | `#[Ignore]`     | Property or class | Excludes a property from auditing |
 | `#[Security]`   | Class    | Defines who can view entity audits        |
 | `#[DiffLabel]`  | Property or class | Attaches a human-readable label resolver to a field |
+| `#[Mask]`       | Property or class | Records the changes of a property without its values |
 | `#[AuditRoot]`  | Class (repeatable) | Indexes the entries under the history of another entity (see [Histories](../../querying/history.md)) |
 
 ## 📝 #[Auditable]
@@ -346,6 +347,63 @@ $provider->setDiffLabelResolverLocator(new ServiceLocator([
 
 `ServiceLocator` comes from `symfony/dependency-injection`, which is not a dependency of the provider; any PSR-11
 container keyed by the resolver FQCN works. When using the Symfony bundle, the locator is wired automatically — see the [Diff Label Resolvers guide](https://github.com/DamienHarper/auditor-bundle/blob/master/docs/customization/diff-label-resolvers.md).
+
+## 🎭 #[Mask]
+
+Records that a property changed without storing its values. Unlike `#[Ignore]`, the change still shows in the
+history.
+
+### Namespace
+
+```php
+use DH\Auditor\Attribute\Mask;
+use DH\Auditor\Masking\MaskStrategy;
+```
+
+### Usage
+
+```php
+#[ORM\Entity]
+#[Auditable]
+class User
+{
+    #[ORM\Column(type: 'string')]
+    #[Mask(strategy: MaskStrategy::KeyedHash)]  // HMAC-SHA256 of the email
+    private string $email = '';
+
+    #[ORM\Column(type: 'string', nullable: true)]
+    #[Mask]                                     // "***"
+    private ?string $pin = null;
+}
+```
+
+### Parameters
+
+| Parameter  | Type           | Default                | Description                                               |
+|------------|----------------|------------------------|-----------------------------------------------------------|
+| `strategy` | `MaskStrategy` | `MaskStrategy::Hidden` | `MaskStrategy::Hidden` or `MaskStrategy::KeyedHash`       |
+| `field`    | `?string`      | `null`                 | On the class only: name of the masked field (repeatable)  |
+
+### Strategies
+
+- `MaskStrategy::Hidden` stores `"***"` as `old` and `new`.
+- `MaskStrategy::KeyedHash` stores an HMAC-SHA256 of the value, keyed with the `mask_secret` option of the provider (at least
+  32 bytes, see [Configuration](configuration.md#-masked-values)). Equal values give equal hashes: the entries of one
+  value can be found by hashing it with the same secret, without storing it. A string is hashed as is, any other value
+  as its JSON encoding.
+
+In both cases a null value stays null, and the values are compared before being masked: a change from `"1234"` to
+`"5678"` is recorded as `"***"` → `"***"`. Masks apply to `insert`, `update` and, with `full_snapshot_on_remove`,
+`remove` entries, to columns and to-one associations (whose summary is masked). A masked field gets no `#[DiffLabel]`
+label, and a masked JSON field no deep diff.
+
+An identifier (written in clear in `object_id`) and a collection (recorded by `associate` / `dissociate` entries)
+cannot be masked: a `#[Mask]` on either fails when the attributes are loaded, as does a `MaskStrategy::KeyedHash`
+without `mask_secret`.
+
+> [!WARNING]
+> The label of an entity (its `__toString()` or the `entity_label_resolver`) is written in clear in the diffs:
+> keep masked values out of it.
 
 ## 📄 Complete Example
 

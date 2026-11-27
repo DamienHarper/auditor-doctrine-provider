@@ -8,6 +8,7 @@ use DH\Auditor\Attribute\Auditable;
 use DH\Auditor\Attribute\AuditRoot;
 use DH\Auditor\Attribute\DiffLabel;
 use DH\Auditor\Attribute\Ignore;
+use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Attribute\Security;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute\AttributeLoaderTest;
@@ -82,6 +83,12 @@ final readonly class AttributeLoader
         // Are there any DiffLabel attributes?
         $diffLabelResolvers = $this->getDiffLabelResolvers($reflection);
 
+        // Are there any Mask attributes?
+        $masks = $this->getMasks($reflection);
+        foreach (array_keys($masks) as $field) {
+            $this->assertMaskable($metadata, $field);
+        }
+
         // Are there any AuditRoot attributes? (repeatable, inherited from parent classes)
         $roots = $this->getRoots($reflection);
 
@@ -91,6 +98,7 @@ final readonly class AttributeLoader
             'enabled' => $auditableAttribute->enabled,
             'roles' => $roles,
             'diff_label_resolvers' => $diffLabelResolvers,
+            'masks' => $masks,
             'max_age' => $auditableAttribute->maxAge,
             'max_entries' => $auditableAttribute->maxEntries,
         ];
@@ -173,6 +181,52 @@ final readonly class AttributeLoader
         }
 
         return $resolvers;
+    }
+
+    /**
+     * Collects the #[Mask] strategies defined on entity properties or on the class (with a field).
+     *
+     * @return array<string, string> Map of property name => strategy (a MaskStrategy value)
+     */
+    private function getMasks(\ReflectionClass $reflection): array
+    {
+        $masks = [];
+
+        foreach ($reflection->getAttributes(Mask::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
+            $mask = $attribute->newInstance();
+            $masks[$this->classLevelField($mask->field, 'Mask', $reflection)] = $mask->strategy->value;
+        }
+
+        foreach ($reflection->getProperties() as $property) {
+            $attributes = $property->getAttributes(Mask::class, \ReflectionAttribute::IS_INSTANCEOF);
+            if ([] !== $attributes) {
+                $mask = $attributes[0]->newInstance();
+                $this->assertNoPropertyLevelField($mask->field, 'Mask', $property);
+                $masks[$property->getName()] = $mask->strategy->value;
+            }
+        }
+
+        if (false !== $reflection->getParentClass()) {
+            return array_merge($this->getMasks($reflection->getParentClass()), $masks);
+        }
+
+        return $masks;
+    }
+
+    /**
+     * A #[Mask] only masks the values of a field in the diffs: an identifier is also written in "object_id" and in the
+     * summaries of the entity, and a collection is recorded by "associate" / "dissociate" entries, so neither can be
+     * masked.
+     */
+    private function assertMaskable(ClassMetadata $metadata, string $field): void
+    {
+        if ($metadata->isIdentifier($field)) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[Mask] attribute on "%s": "%s" is an identifier, which is recorded in clear in "object_id".', $metadata->getName(), $field));
+        }
+
+        if ($metadata->hasAssociation($field) && $metadata->isCollectionValuedAssociation($field)) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[Mask] attribute on "%s": "%s" is a collection, whose changes are recorded by "associate" and "dissociate" entries that cannot be masked.', $metadata->getName(), $field));
+        }
     }
 
     private function classLevelField(?string $field, string $attribute, \ReflectionClass $reflection): string

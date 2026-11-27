@@ -8,6 +8,7 @@ use DH\Auditor\Auditor;
 use DH\Auditor\Event\LifecycleEvent;
 use DH\Auditor\Exception\InvalidArgumentException;
 use DH\Auditor\Exception\ProviderException;
+use DH\Auditor\Masking\MaskStrategy;
 use DH\Auditor\Provider\AbstractProvider;
 use DH\Auditor\Provider\ConfigurationInterface;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
@@ -568,6 +569,17 @@ final class DoctrineProvider extends AbstractProvider implements LoggerAwareInte
             // The allowlist only exists in the configuration.
             if (\array_key_exists('audited_columns', $entities[$entity])) {
                 $merged[$entity]['audited_columns'] = $entities[$entity]['audited_columns'];
+            }
+        }
+
+        // A keyed hash without its secret would only fail at the first flush of the entity: fail when the entities are
+        // loaded instead.
+        if (null === $this->configuration->getMaskSecret()) {
+            foreach ($attributeEntities as $entity => $options) {
+                $masks = \is_array($options) ? ($options['masks'] ?? []) : [];
+                if (\is_array($masks) && \in_array(MaskStrategy::KeyedHash->value, $masks, true)) {
+                    throw new InvalidArgumentException(\sprintf('"%s" has a #[Mask] field with the "keyed_hash" strategy, which needs the "mask_secret" option of the provider.', $entity));
+                }
             }
         }
 
