@@ -23,7 +23,7 @@ configuration. Read the bundle docs; this skill then still applies to attributes
 | Provider | auditor (core) | PHP | doctrine/dbal | doctrine/orm | Symfony components |
 |---|---|---|---|---|---|
 | 2.x (current) | ^5.0 | >= 8.4 | ^4.6 | ^3.7 | ^8.1 (`symfony/cache`, `symfony/lock`) |
-| 1.x (bug and security fixes) | ^4.1 | >= 8.4 | >= 4.3 | >= 3.2 | |
+| 1.x (bug and security fixes) | ^4.1 | >= 8.4 | ^4.3 | ^3.2 | ^8.1 (`symfony/cache`, `symfony/lock`) |
 
 2.x writes **schema v2** audit tables; tables created by 1.x must be migrated (see "Migrating from 1.x").
 The console commands extend `Symfony\Component\Console\Command\Command`: outside Symfony, `composer require
@@ -54,7 +54,7 @@ $connection = DriverManager::getConnection($connectionParams, $dbalConfiguration
 
 // 2. Core auditor: blame (user, IP, firewall) comes from callables
 $auditorConfiguration = new AuditorConfiguration(['timezone' => 'UTC']);
-$auditorConfiguration->setUserProvider(fn (): ?User => new User('42', 'alice'));          // id, username
+$auditorConfiguration->setUserProvider(fn (): ?User => new User('42', 'alice', App\Entity\User::class)); // id, username, class (user_fqdn); 4th: impersonator
 $auditorConfiguration->setSecurityProvider(fn (): array => [$clientIp, $firewallName]);   // [ip, firewall]
 $auditor = new Auditor($auditorConfiguration, new EventDispatcher());
 
@@ -67,14 +67,16 @@ $provider->registerAuditingService(new AuditingService('default', $entityManager
 $provider->registerStorageService(new StorageService('default', $entityManager));   // where audit rows are written
 $auditor->registerProvider($provider);
 
-// 4. Create / update the audit tables
+// 4. Create / update the audit tables (NEW install only: on 1.x tables it drops the legacy columns unconverted;
+//    migrate them with audit:schema:migrate first, see "Migrating from 1.x")
 (new SchemaManager($provider))->updateAuditSchema();
 ```
 
 - Same entity manager for both services = single database. A different `StorageService` entity manager = audits in
   another database (see "Several databases").
 - `registerAuditingService()` attaches the listeners immediately; a DI container can call
-  `$provider->disableListenerAttachment()` first and declare `$provider->getDoctrineSubscriber()` (onFlush, postFlush)
+  `$provider->disableListenerAttachment()` first and declare `$provider->getDoctrineSubscriber()` (onFlush, postFlush,
+  and Gedmo's postSoftDelete when soft-deleteable is used)
   and `new CreateSchemaListener($provider)` (postGenerateSchemaTable) itself.
 - Long-running workers (Messenger): call `$provider->reset()` between messages (it implements `ResetInterface`).
 
@@ -108,7 +110,7 @@ use DH\Auditor\Masking\MaskStrategy;
 
 #[ORM\Entity]
 #[Auditable]                               // enabled: true, maxAge: 'P7Y', maxEntries: 10_000 optional
-#[Security(view: ['ROLE_ADMIN'])]          // roles checked by the core role_checker when reading
+#[Security(view: ['ROLE_ADMIN'])]          // only declares roles: your core role_checker must enforce them (null = everyone reads)
 #[Ignore(field: 'inheritedSecret')]        // class-level form needs field:
 class Post
 {
@@ -143,21 +145,24 @@ One table per audited entity (single table inheritance: one table for the hierar
 | `type` | `insert`, `update`, `remove`, `associate`, `dissociate` |
 | `object_id` | identifier of the audited entity (string) |
 | `discriminator` | entity class in inheritance hierarchies |
-| `transaction_id` | ULID (CHAR 26) shared by the entries of one flush |
+| `transaction_id` | ULID (CHAR 26) shared by the entries of one database transaction (all its flushes) |
 | `diffs` | JSON: `{"source": {...}, "changes": {"field": {"old": ..., "new": ...}}}`; associations: `source`, `target`, `is_owning_side`, `join_table` |
 | `extra_data` | JSON, custom data (`extra_data_provider` or a `LifecycleEvent` listener) |
 | `blame_id` | user id |
-| `blame` | JSON: `username`, `user_fqdn`, `user_firewall`, `ip` (+ `via` with a blame context) |
+| `blame` | JSON: `username`, `user_fqdn`, `user_firewall`, `ip` (+ `impersonator` `{id, username, fqdn}` on switch user, + `via` with a blame context) |
 | `created_at` | datetime |
 
 JSON columns are native JSON on MySQL/MariaDB, JSONB on PostgreSQL, TEXT on SQLite. When an entity has roots, one
 `{table_prefix}audit_root` table per storage indexes entries under their roots.
 
 Create/update tables with **one** of:
-- `(new SchemaManager($provider))->updateAuditSchema()`, or `getUpdateAuditSchemaSql()` to get the SQL;
+- `(new SchemaManager($provider))->updateAuditSchema()`, or `getUpdateAuditSchemaSql()` to get the SQL (no v1 guard,
+  unlike the command);
 - `audit:schema:update --dump-sql` / `--force`;
 - `doctrine:schema:update` / Doctrine Migrations: the provider adds the audit tables to the Doctrine schema
-  (`postGenerateSchemaTable`), so `doctrine:migrations:diff` generates them.
+  (`postGenerateSchemaTable`), so `doctrine:migrations:diff` generates them. When upgrading 1.x tables managed this
+  way, follow "Audit tables managed by Doctrine Migrations" in the upgrade guide (replayable migration, deployment
+  order).
 
 Adding or removing entity fields needs no audit schema change (diffs are JSON). Removing an entity from auditing does
 not drop its audit table.
@@ -174,7 +179,10 @@ not drop its audit table.
 | `audit:roots:rebuild` | `RebuildRootsCommand` | Rebuild the `audit_root` index (`--entity`, `--dry-run`) |
 
 Standalone: `$application->addCommand((new UpdateSchemaCommand())->setAuditor($auditor));` for each command.
-They hold a host-local lock (Symfony Lock): a concurrent run fails with "already running in another process".
+They hold a host-local lock (Symfony Lock). A concurrent run prints "already running in another process": the schema
+and roots commands exit with a failure, `audit:clean`, `audit:export` and `audit:snapshot` with 0 (watch the output
+in cron jobs). `audit:export` takes an optional `entity` argument and `--format` (`ndjson` default, `json`, `csv`);
+`audit:snapshot` takes entities as arguments or `--all`; `audit:clean` also has `--dump-sql`.
 
 ## Migrating from 1.x (schema v1 → v2)
 
@@ -224,9 +232,18 @@ $byEntity = $reader->getAuditsByTransactionId($ulid);   // [FQCN => list<Entry>]
 
 - Filters: `SimpleFilter` (= / IN), `DateRangeFilter`, `RangeFilter`, `NullFilter` (IS NULL only),
   `JsonFilter($column, $path, $value, $operator, $strict)` (`=`, `!=`, `<>`, `LIKE`, `NOT LIKE`, `IN`, `NOT IN`,
-  `IS NULL`, `IS NOT NULL`), `ChangedFieldFilter`, `BlameOriginFilter`, `RootFilter`. Filters are ANDed.
+  `IS NULL`, `IS NOT NULL`), `ChangedFieldFilter`, `BlameOriginFilter`, `RootFilter`,
+  `ImpersonatorFilter(?string $impersonatorId = null)` (native JSON). Filters are ANDed, except the `SimpleFilter`s of
+  one column (including the `object_id` / `type` options), merged into one `IN` (ORed).
+- `page_size` defaults to 50: `createQuery(X)->execute()` returns the 50 most recent entries only; pass
+  `'page_size' => null` or use `iterate()` to read everything (`count()` ignores the limit).
+- `DateRangeFilter` bounds are formatted in their own timezone while `created_at` is stored in the auditor timezone:
+  build the bounds in the auditor timezone.
 - Column constants: `Query::ID`, `TYPE`, `OBJECT_ID`, `DISCRIMINATOR`, `TRANSACTION_ID`, `USER_ID` (= `blame_id`),
-  `CREATED_AT`. Order: `addOrderBy(Query::CREATED_AT, 'ASC')`; raw paging: `limit($limit, $offset)`.
+  `CREATED_AT`. The default order is `created_at DESC, id DESC`: for oldest first, `resetOrderBy()` then
+  `addOrderBy(Query::CREATED_AT, 'ASC')->addOrderBy(Query::ID, 'ASC')`. Raw paging: `limit($limit, $offset)`.
+- `count()` throws on database errors (1.x returned 0); `getAuditsByTransactionId()` silently skips the entities
+  the role checker denies.
 - `Query::JSON` is the filter slot name of `JsonFilter`, **not a column**: `new NullFilter(Query::JSON)` produces
   `json IS NULL` and fails. Test JSON content with `JsonFilter('extra_data', 'key', null, 'IS NULL')`, or check
   `$entry->extraData === null` in PHP.
@@ -267,15 +284,23 @@ $entries = $query->transactionEntries($ids);                    // same filters,
 ### `Entry` (`DH\Auditor\Model\Entry`)
 
 Virtual properties: `id`, `schemaVersion`, `type` (plain string), `objectId`, `discriminator`, `transactionId`,
-`userId`, `blame` (array), `username`, `userFqdn`, `userFirewall`, `ip`, `via`, `extraData` (**already decoded
-`?array`: never `json_decode()` it**), `createdAt` (`DateTimeImmutable` in the auditor timezone).
+`userId`, `blame` (array), `username`, `userFqdn`, `userFirewall`, `ip`, `impersonator`, `via`, `extraData`
+(**already decoded `?array`: never `json_decode()` it**), `createdAt` (`DateTimeImmutable` in the auditor timezone),
+`entity` and `rootPath` (set by root queries).
 Methods: `getDiffs()` (the `changes` of a v2 diff, the whole diff for associations, raw diff for v1),
 `getDiffSource()`, `getDiffTarget()`, `isDeepDiff($field)`, `isSnapshot()`.
 
 ### Histories
 
 `$reader->createRootQuery(Property::class, 42)->fetch(20)` returns a `RootPage` (cursor pagination: `after:`,
-`since:`) merging the root's entries and those of entities declaring it with `#[AuditRoot]` / `roots`.
+`since:`) merging the root's entries and those of entities declaring it with `#[AuditRoot]` / `roots`. By default a
+page goes past its size to finish the transaction of its last entry (`groupKey: false` cuts it exactly); an invalid
+cursor throws `InvalidArgumentException` (check with `RootQuery::isCursor()`); `iterate()` and `count()` also exist.
+
+Blame contexts (`via`, `DH\Auditor\Blame\BlameContext`): wrap the work in `$auditorConfiguration->getBlameContextStack()->run(new BlameContext('import',
+'Batch #42'), fn () => $em->flush())`; the context is captured at flush time, and a context carrying a user blames
+that user. A custom DBAL type whose value needs converting implements
+`DH\Auditor\Provider\Doctrine\Transaction\NeedsConversionToAuditableType` (moved from the core).
 `$reader->getLastChanges(Post::class, 42, ['title'])` gives the last `Change` per field;
 `$reader->getFieldHistory(Post::class, 42, 'title')` returns a `Query`.
 
