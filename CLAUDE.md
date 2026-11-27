@@ -128,7 +128,7 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 
 ### Audit tables (schema v2)
 
-- `transaction_id` (ULID), `blame` (JSON: `username`, `user_fqdn`, `user_firewall`, `ip`), `diffs` and `extra_data` (JSON), `schema_version` (`1` legacy, `2` current). `audit:schema:migrate` upgrades v1 tables (`--convert-diffs` rewrites legacy diffs); `audit:schema:update` refuses v1 tables.
+- `transaction_id` (ULID), `blame` (JSON: `username`, `user_fqdn` from `UserInterface::$fqdn`, `user_firewall`, `ip`, plus `impersonator` `{id, username, fqdn}` and `via` when set), `diffs` and `extra_data` (JSON), `schema_version` (`1` legacy, `2` current). `audit:schema:migrate` upgrades v1 tables (`--convert-diffs` rewrites legacy diffs); `audit:schema:update` refuses v1 tables.
 - JSON columns: native JSON on MySQL/MariaDB, JSONB on PostgreSQL (inserts need the `::jsonb` cast), TEXT where the platform has no JSON support. JSON search and `ChangedFieldFilter` need native JSON and a v2 table.
 - Charset/collation column options are applied on MySQL/MariaDB only: on PostgreSQL they cause false schema diffs.
 - `{table_prefix}audit_root` (one per storage, created when an entity has roots) indexes entries under their roots: `root_class` (root entity name), `root_id`, `root_path`, `audit_table`, `object_id`, `transaction_id`, `created_at`. Written by `DoctrineProvider::persist()` (buffered with `batch_size`), read through `RootFilter` (an `EXISTS` subquery, needs `Query::setRootIndexTable()`).
@@ -153,7 +153,7 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 - `phpunit.xml` fails on deprecations triggered by `src/`.
 
 ### `LifecycleEvent` payload and `Entry`
-Payload keys: `entity`, `table`, `schema_version`, `type` (string operation, no `action` key), `object_id`, `discriminator`, `transaction_id`, `diffs` (JSON string), `extra_data`, `blame_id`, `blame` (JSON string), `created_at`. On an `Entry`, `$entry->type` is a plain string, `$entry->extraData` is already decoded, `$entry->blame` is the decoded array with the `username`, `userFqdn`, `userFirewall` and `ip` shortcuts. See the core `CLAUDE.md` for details.
+Payload keys: `entity`, `table`, `schema_version`, `type` (string operation, no `action` key), `object_id`, `discriminator`, `transaction_id`, `diffs` (JSON string), `extra_data`, `blame_id`, `blame` (JSON string), `created_at`. On an `Entry`, `$entry->type` is a plain string, `$entry->extraData` is already decoded, `$entry->blame` is the decoded array with the `username`, `userFqdn`, `userFirewall`, `ip`, `impersonator` and `via` shortcuts. See the core `CLAUDE.md` for details.
 
 ## Tooling details
 

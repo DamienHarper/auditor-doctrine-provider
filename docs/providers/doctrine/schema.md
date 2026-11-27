@@ -56,7 +56,7 @@ TEXT on SQLite).
 | `diffs`          | JSON                | JSON-encoded change data (see format below)                       |
 | `extra_data`     | JSON                | Custom extra data (populated via `LifecycleEvent` listener)       |
 | `blame_id`       | VARCHAR(255)        | User identifier who made the change                               |
-| `blame`          | JSON                | Blame: `username`, `user_fqdn`, `user_firewall`, `ip`, and `via` when a blame context is set |
+| `blame`          | JSON                | Blame: `username`, `user_fqdn`, `user_firewall`, `ip`, `impersonator` when the user is impersonated, and `via` when a blame context is set |
 | `created_at`     | DATETIME            | When the audit entry was created                                  |
 
 ### Diffs Format (schema version 2)
@@ -94,6 +94,30 @@ All entry types share a unified JSON envelope:
 ### Legacy Diffs Format (schema version 1)
 
 Entries written by earlier versions of the provider carry `schema_version = 1`. The `Entry` model reads them transparently — see [Entry Reference](../../querying/entry.md).
+
+### Writing audit rows yourself
+
+The provider writes audit rows on flush only. An application that writes rows itself (for example to import the
+history kept by another tool) must follow the format above, or the `Reader` and the viewer misread the rows without
+any error:
+
+| Column | What to write |
+|---|---|
+| `schema_version` | `2`, always written explicitly: do not rely on the column default, which can still be `1` on a table left half-migrated or completed by hand; a row read as `1` has its diffs read as the legacy format |
+| `type` | `insert`, `update`, `remove`, `associate` or `dissociate` |
+| `object_id`, `discriminator` | the identifier of the entity as a string; its class in `discriminator` for an entity of an inheritance hierarchy, `NULL` otherwise |
+| `transaction_id` | a ULID (26 characters, e.g. `(string) new Ulid()` with `symfony/uid`), the same for every row written by one flush (one transaction), across tables: the viewer and `Query::transactions()` group the entries by it |
+| `diffs` | the envelope `{"source": {…}, "changes": {"field": {"old": …, "new": …}}}`, or the association structure; `source` holds `id`, `class`, `label` and `table`; plus `deep_diffs` (the fields whose change is a JSON deep diff) when relevant, without which the deep diffs are inferred from their shape |
+| `blame_id`, `blame` | `NULL` and `NULL` when nobody is known; otherwise `blame` holds the four keys `username`, `user_fqdn`, `user_firewall` and `ip`, each set to `null` when unknown, plus `impersonator` and `via` when relevant |
+| `extra_data` | a JSON object, or `NULL` |
+| `created_at` | the date of the change, `Y-m-d H:i:s`, in the timezone of the configuration (`timezone`, UTC by default) |
+
+- `diffs`, `blame` and `extra_data` are `JSONB` on PostgreSQL: cast the values (`::jsonb`) in a hand-written
+  `INSERT`.
+- Rows written by hand go around the `LifecycleEvent` listeners of the application (extra data, rewriting of the
+  diffs): apply their effect yourself.
+- Rows of entities that declare an [`#[AuditRoot]`](../../querying/history.md) are not indexed in `audit_root`: run
+  [`audit:roots:rebuild`](#auditrootsrebuild) after the import, or they are missing from the histories.
 
 ## 🛠️ Using SchemaManager
 
