@@ -20,7 +20,7 @@
   "prefer-stable": true,
   "require": {
     "php": ">=8.4",
-    "damienharper/auditor": "^5.0@dev",
+    "damienharper/auditor": "^5.0",
     "doctrine/dbal": "^4.6",
     "doctrine/orm": "^3.7",
     "psr/log": "^1.1 || ^2.0 || ^3.0",
