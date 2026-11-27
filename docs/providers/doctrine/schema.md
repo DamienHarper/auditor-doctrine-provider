@@ -1,3 +1,7 @@
+---
+description: "Audit table structure, diffs format and writing audit rows yourself; create and update audit tables with SchemaManager and the audit:schema:update, audit:schema:migrate, audit:clean, audit:export and audit:snapshot commands."
+---
+
 # Schema Management
 
 > **Create and manage audit tables in your database**

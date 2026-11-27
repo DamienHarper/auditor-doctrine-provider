@@ -1,3 +1,7 @@
+---
+description: "Read the history of a business object across audit tables with #[AuditRoot], the audit_root index and createRootQuery(), and the last change of each field."
+---
+
 # Histories
 
 > **Read the history of a business object across several audit tables, and the last change of each field**

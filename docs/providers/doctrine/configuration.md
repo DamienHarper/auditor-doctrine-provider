@@ -1,3 +1,7 @@
+---
+description: "All DoctrineProvider options: audit table prefix and suffix, ignored and audited columns, entity options, batch INSERT, compression, mask secret, storage mapper."
+---
+
 # DoctrineProvider Configuration
 
 > **All configuration options for the DoctrineProvider**

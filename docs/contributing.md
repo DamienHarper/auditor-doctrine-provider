@@ -1,3 +1,7 @@
+---
+description: "Contribute to auditor-doctrine-provider: development setup, running the tests locally or in Docker on each database, QA tools, benchmarks and pull requests."
+---
+
 # Contributing
 
 > **Thank you for your interest in contributing to auditor-doctrine-provider!**

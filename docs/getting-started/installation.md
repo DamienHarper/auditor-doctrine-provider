@@ -1,3 +1,7 @@
+---
+description: "Install auditor-doctrine-provider with Composer: PHP, Doctrine DBAL/ORM and auditor requirements of the 2.x and 1.x lines, and when to use auditor-bundle."
+---
+
 # Installation
 
 > **Install auditor-doctrine-provider using Composer**

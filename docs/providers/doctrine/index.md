@@ -1,3 +1,7 @@
+---
+description: "Overview of the DoctrineProvider: what it tracks on flush, the audit table columns and action types, its architecture, and limitations such as DQL and raw SQL."
+---
+
 # DoctrineProvider
 
 > **The Doctrine ORM provider for the auditor library**

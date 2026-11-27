@@ -1,3 +1,7 @@
+---
+description: Measured cost of auditing a Doctrine flush in 1.x and 2.0, with and without batch INSERT, on SQLite, MySQL and PostgreSQL, and duration of the v2 migration.
+---
+
 # Performance
 
 > **Cost of auditing a flush, and duration of the schema v2 migration**

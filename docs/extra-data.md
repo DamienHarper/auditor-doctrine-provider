@@ -1,3 +1,7 @@
+---
+description: Attach custom JSON to Doctrine audit entries in extra_data, with an extra_data_provider or a LifecycleEvent listener, then filter and index it with JsonFilter.
+---
+
 # Extra Data
 
 > **Attach custom contextual information to audit entries**

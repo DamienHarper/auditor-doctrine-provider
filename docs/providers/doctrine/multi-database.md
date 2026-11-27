@@ -1,3 +1,7 @@
+---
+description: Store Doctrine audit entries in a separate database with one or more StorageServices and a storage_mapper, and how rollbacks are handled across connections.
+---
+
 # Multi-Database Setup
 
 > **Store audit entries in a separate database**

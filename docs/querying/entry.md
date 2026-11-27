@@ -1,3 +1,7 @@
+---
+description: "Reference of the Entry model returned by audit queries: virtual properties, blame fields, getDiffs() on schema v1 and v2 diffs, snapshots and timezone."
+---
+
 # Entry Reference
 
 > **The audit log entry model**

@@ -10,9 +10,29 @@
 
 `auditor-doctrine-provider` brings the auditing features of [`auditor`](https://github.com/DamienHarper/auditor) to applications using [Doctrine ORM](https://www.doctrine-project.org/projects/orm.html).
 
+It records every insert, update, removal and many-to-many change of the audited entities in audit
+tables, within the same database transaction, and provides a reader to query them. It supports
+MySQL, MariaDB, PostgreSQL and SQLite.
+
+- **Symfony application?** Install [`auditor-bundle`](https://github.com/DamienHarper/auditor-bundle) instead:
+  it requires this package and wires everything (configuration, services, viewer).
+- **Coming from auditor 4.x?** The built-in `DH\Auditor\Provider\Doctrine` namespace moved to this package,
+  unchanged: see the [upgrade guides](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade).
+
+
+## Using an AI coding agent?
+This package ships an [Agent Skill](https://agentskills.io) in [`skills/auditor-doctrine-provider/`](skills/auditor-doctrine-provider/SKILL.md)
+(`vendor/damienharper/auditor-doctrine-provider/skills/` once installed) describing the provider. The copy in `vendor/` matches your installed version; the marketplace serves the current major.
+With Claude Code:
+```
+/plugin marketplace add DamienHarper/auditor
+/plugin install auditor-doctrine-provider@auditor
+```
+The documentation is also available as [llms.txt](https://damienharper.github.io/auditor-docs/llms.txt).
+
 
 ## Official Documentation
-`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/) or locally in the [docs/](docs/) folder.
+`auditor-doctrine-provider` documentation can be found [here](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider) or locally in the [docs/](docs/) folder.
 
 
 ## Version Information
@@ -21,7 +41,7 @@
 | 2.x     | Active development :rocket: | PHP >= 8.4, Doctrine DBAL >= 4.6, Doctrine ORM >= 3.7, auditor >= 5.0                 |
 | 1.x     | Bug and security fixes      | PHP >= 8.4, Doctrine DBAL >= 4.3, Doctrine ORM >= 3.2, auditor >= 4.1                 |
 
-Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade/).
+Changelog is available in the [releases](https://github.com/DamienHarper/auditor-doctrine-provider/releases), and the upgrade guides in the [documentation](https://damienharper.github.io/auditor-docs/auditor-doctrine-provider/upgrade).
 
 
 ## Contributing
