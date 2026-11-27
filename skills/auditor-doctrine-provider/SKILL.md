@@ -1,6 +1,6 @@
 ---
 name: auditor-doctrine-provider
-description: "Use when auditing Doctrine ORM entities with damienharper/auditor-doctrine-provider 2.x (the Doctrine provider of the auditor audit-log library): standalone setup and configuration, #[Auditable]/#[Ignore]/#[Security] attributes, audit tables and their schema, migrating audit tables from schema v1 to v2, and reading audits with the Reader, Query and filters. Targets the 2.x line (auditor 5.x); 1.x differs."
+description: "Use when auditing Doctrine ORM entities with damienharper/auditor-doctrine-provider 2.x (the Doctrine provider of the auditor audit-log library): standalone setup and configuration, #[Auditable]/#[Ignore]/#[Mask]/#[Security] attributes, audit tables and their schema, migrating audit tables from schema v1 to v2, and reading audits with the Reader, Query and filters. Targets the 2.x line (auditor 5.x); 1.x differs."
 ---
 
 # auditor-doctrine-provider (2.x)
@@ -91,6 +91,7 @@ $auditor->registerProvider($provider);
 | `skip_disabled_entities` | `false` | No audit table for entities disabled by configuration |
 | `compression` | `false` | `JSON COMPRESSED` diffs/extra_data on MariaDB only |
 | `utf8_convert` | `false` | Convert strings to UTF-8 before storing |
+| `mask_secret` | `null` | Key of the `#[Mask(strategy: MaskStrategy::KeyedHash)]` HMACs, 32 bytes min.; changing it changes later hashes |
 | `ignored_columns_resolver`, `root_resolver`, `entity_label_resolver`, `read_scope` | `null` | Callables, see docs |
 | `viewer` | `true` | Used by the bundle viewer (`page_size` also defaults `paginate()`); auditor-bundle defaults it to `false` |
 
@@ -102,7 +103,8 @@ Checks: `$provider->isAuditable($e)`, `isAudited($e)`, `isAuditedField($e, 'titl
 ## Entity attributes (from the core, `DH\Auditor\Attribute`)
 
 ```php
-use DH\Auditor\Attribute\{Auditable, Ignore, Security, DiffLabel, AuditRoot};
+use DH\Auditor\Attribute\{Auditable, Ignore, Mask, Security, DiffLabel, AuditRoot};
+use DH\Auditor\Masking\MaskStrategy;
 
 #[ORM\Entity]
 #[Auditable]                               // enabled: true, maxAge: 'P7Y', maxEntries: 10_000 optional
@@ -111,6 +113,8 @@ use DH\Auditor\Attribute\{Auditable, Ignore, Security, DiffLabel, AuditRoot};
 class Post
 {
     #[ORM\Column] #[Ignore] private string $password;                          // never in diffs
+    #[ORM\Column] #[Mask(strategy: MaskStrategy::KeyedHash)] private string $email; // change kept, value = HMAC
+    #[ORM\Column(nullable: true)] #[Mask] private ?string $pin = null;          // change kept, value = "***"
     #[ORM\Column] #[DiffLabel(resolver: CategoryLabel::class)] private int $categoryId;
 }
 ```
@@ -122,6 +126,10 @@ class Post
   config `ignored_columns` / `roots` are added. Ignoring always beats `audited_columns`.
 - `#[DiffLabel]` resolvers implement `DH\Auditor\Contract\DiffLabelResolverInterface` and are fetched from a PSR-11
   container set with `$provider->setDiffLabelResolverLocator($container)`.
+- `#[Mask]`: values compared first, then masked (`"1234"` → `"5678"` is recorded `"***"` → `"***"`); applies to
+  `insert`, `update` and (with `full_snapshot_on_remove`) `remove` entries, columns and to-one associations. A masked
+  field gets no `#[DiffLabel]` label and a masked JSON field no deep diff. `#[Mask]` on an identifier or a
+  collection, or `KeyedHash` without `mask_secret`, throws when the attributes are loaded. The label of the entity (its `__toString()` or a label resolver) is written in clear in the `source` of every entry: never build it from a masked field.
 - `#[AuditRoot('visit.property')]` (repeatable) indexes entries under another entity's history (see Histories).
 
 ## Audit tables (schema v2)

@@ -1,5 +1,5 @@
 ---
-description: "Reference of the #[Auditable], #[Ignore], #[Security], #[DiffLabel] and #[AuditRoot] PHP attributes that configure the auditing of Doctrine ORM entities."
+description: "Reference of the #[Auditable], #[Ignore], #[Mask], #[Security], #[DiffLabel] and #[AuditRoot] PHP attributes that configure the auditing of Doctrine ORM entities."
 ---
 
 # Attributes Reference
