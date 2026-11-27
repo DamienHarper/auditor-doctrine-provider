@@ -183,6 +183,14 @@ final class ConfigurationTest extends TestCase
         ]);
     }
 
+    public function testMaskSecretLengthIsCountedInBytes(): void
+    {
+        // 11 characters, 33 bytes
+        $secret = str_repeat('€', 11);
+
+        $this->assertSame($secret, $this->createProviderConfiguration(['mask_secret' => $secret])->getMaskSecret());
+    }
+
     public function testGetEntities(): void
     {
         $entities = [

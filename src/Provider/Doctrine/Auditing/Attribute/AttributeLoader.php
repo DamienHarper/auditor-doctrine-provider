@@ -85,6 +85,9 @@ final readonly class AttributeLoader
 
         // Are there any Mask attributes?
         $masks = $this->getMasks($reflection);
+        foreach (array_keys($masks) as $field) {
+            $this->assertMaskable($metadata, $field);
+        }
 
         // Are there any AuditRoot attributes? (repeatable, inherited from parent classes)
         $roots = $this->getRoots($reflection);
@@ -183,7 +186,7 @@ final readonly class AttributeLoader
     /**
      * Collects the #[Mask] strategies defined on entity properties or on the class (with a field).
      *
-     * @return array<string, string> Map of property name => strategy
+     * @return array<string, string> Map of property name => strategy (a MaskStrategy value)
      */
     private function getMasks(\ReflectionClass $reflection): array
     {
@@ -191,7 +194,7 @@ final readonly class AttributeLoader
 
         foreach ($reflection->getAttributes(Mask::class, \ReflectionAttribute::IS_INSTANCEOF) as $attribute) {
             $mask = $attribute->newInstance();
-            $masks[$this->classLevelField($mask->field, 'Mask', $reflection)] = $mask->strategy;
+            $masks[$this->classLevelField($mask->field, 'Mask', $reflection)] = $mask->strategy->value;
         }
 
         foreach ($reflection->getProperties() as $property) {
@@ -199,7 +202,7 @@ final readonly class AttributeLoader
             if ([] !== $attributes) {
                 $mask = $attributes[0]->newInstance();
                 $this->assertNoPropertyLevelField($mask->field, 'Mask', $property);
-                $masks[$property->getName()] = $mask->strategy;
+                $masks[$property->getName()] = $mask->strategy->value;
             }
         }
 
@@ -208,6 +211,22 @@ final readonly class AttributeLoader
         }
 
         return $masks;
+    }
+
+    /**
+     * A #[Mask] only masks the values of a field in the diffs: an identifier is also written in "object_id" and in the
+     * summaries of the entity, and a collection is recorded by "associate" / "dissociate" entries, so neither can be
+     * masked.
+     */
+    private function assertMaskable(ClassMetadata $metadata, string $field): void
+    {
+        if ($metadata->isIdentifier($field)) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[Mask] attribute on "%s": "%s" is an identifier, which is recorded in clear in "object_id".', $metadata->getName(), $field));
+        }
+
+        if ($metadata->hasAssociation($field) && $metadata->isCollectionValuedAssociation($field)) {
+            throw new InvalidArgumentException(\sprintf('Invalid #[Mask] attribute on "%s": "%s" is a collection, whose changes are recorded by "associate" and "dissociate" entries that cannot be masked.', $metadata->getName(), $field));
+        }
     }
 
     private function classLevelField(?string $field, string $attribute, \ReflectionClass $reflection): string

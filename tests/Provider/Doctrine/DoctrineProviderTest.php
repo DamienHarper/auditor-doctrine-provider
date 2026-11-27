@@ -20,6 +20,7 @@ use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditableButUna
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\AuditedEntity as AuditedEntityWithAttribute;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\ClassLevelAttributesEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Mask\MaskEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Comment;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Post;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Standard\Blog\Tag;
@@ -478,7 +479,7 @@ final class DoctrineProviderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(6, $loaded);
+        $this->assertCount(5, $loaded);
 
         $auditor = $this->createAuditor();
         $provider = new DoctrineProvider($this->createProviderConfiguration(['entities' => $loaded]));
@@ -863,6 +864,49 @@ final class DoctrineProviderTest extends TestCase
         $provider = $this->createDoctrineProvider();
 
         $this->assertInstanceOf(ResetInterface::class, $provider);
+    }
+
+    public function testKeyedHashMaskWithoutSecretFailsWhenTheAttributesAreLoaded(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Mask',
+            ],
+            'default'
+        );
+
+        $provider = new DoctrineProvider($this->createProviderConfiguration());
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+        $this->createAuditor()->registerProvider($provider);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(\sprintf('"%s" has a #[Mask] field with the "keyed_hash" strategy, which needs the "mask_secret" option of the provider.', MaskEntity::class));
+
+        $provider->loadAttributes($entityManager, []);
+    }
+
+    public function testKeyedHashMaskWithASecretLoads(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/Fixtures/Entity/Mask',
+            ],
+            'default'
+        );
+
+        $provider = new DoctrineProvider($this->createProviderConfiguration(['mask_secret' => str_repeat('s', 32)]));
+        $provider->registerStorageService(new StorageService('default', $entityManager));
+        $provider->registerAuditingService(new AuditingService('default', $entityManager));
+        $this->createAuditor()->registerProvider($provider);
+
+        $provider->loadAttributes($entityManager, []);
+
+        $configuration = $provider->getConfiguration();
+        $this->assertInstanceOf(Configuration::class, $configuration);
+        $this->assertArrayHasKey(MaskEntity::class, $configuration->getEntities());
     }
 
     private function createEntityManagerWith(EventManager $eventManager): EntityManager

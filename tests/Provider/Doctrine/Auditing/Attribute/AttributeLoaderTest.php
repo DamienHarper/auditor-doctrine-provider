@@ -4,16 +4,18 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing\Attribute;
 
-use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Exception\InvalidArgumentException;
+use DH\Auditor\Masking\MaskStrategy;
 use DH\Auditor\Provider\Doctrine\Auditing\Attribute\AttributeLoader;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\ClassLevelAttributesEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DiffLabelEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
-use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\MaskEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\RetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\AuditRoot\Document;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Mask\MaskEntity;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\ClassLevelWithoutField\ClassLevelIgnoreWithoutFieldEntity;
+use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\MaskedCollection\MaskedCollectionEntity;
+use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\MaskedIdentifier\MaskedIdentifierEntity;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\PropertyLevelWithField\PropertyLevelDiffLabelWithFieldEntity;
 use DH\Auditor\Tests\Provider\Doctrine\InvalidFixtures\Retention\InvalidRetentionEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\EntityManagerInterfaceTrait;
@@ -54,7 +56,7 @@ final class AttributeLoaderTest extends TestCase
         );
         $attributeLoader = new AttributeLoader($entityManager);
         $loaded = $attributeLoader->load();
-        $this->assertCount(6, $loaded);
+        $this->assertCount(5, $loaded);
     }
 
     public function testMasksAreLoaded(): void
@@ -62,15 +64,14 @@ final class AttributeLoaderTest extends TestCase
         $entityManager = $this->createEntityManager(
             [
                 __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
-                __DIR__.'/../../Fixtures/Entity/Attribute',
+                __DIR__.'/../../Fixtures/Entity/Mask',
             ],
             'default'
         );
 
         $loaded = new AttributeLoader($entityManager)->load();
 
-        $this->assertSame(['email' => Mask::KEYED_HASH, 'pin' => Mask::HIDDEN, 'categoryId' => Mask::HIDDEN], $loaded[MaskEntity::class]['masks']);
-        $this->assertSame([], $loaded[DiffLabelEntity::class]['masks']);
+        $this->assertSame(['email' => MaskStrategy::KeyedHash->value, 'pin' => MaskStrategy::Hidden->value, 'categoryId' => MaskStrategy::Hidden->value], $loaded[MaskEntity::class]['masks']);
     }
 
     public function testAuditRootsAreLoaded(): void
@@ -121,7 +122,7 @@ final class AttributeLoaderTest extends TestCase
         $loaded = $attributeLoader->load();
 
         foreach ($loaded as $entityClass => $config) {
-            if (!\in_array($entityClass, [DiffLabelEntity::class, ClassLevelAttributesEntity::class, MaskEntity::class], true)) {
+            if (!\in_array($entityClass, [DiffLabelEntity::class, ClassLevelAttributesEntity::class], true)) {
                 $this->assertArrayHasKey('diff_label_resolvers', $config, $entityClass.' must have diff_label_resolvers key');
                 $this->assertSame([], $config['diff_label_resolvers'], $entityClass.' must have empty diff_label_resolvers');
             }
@@ -228,6 +229,38 @@ final class AttributeLoaderTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage(\sprintf('Invalid #[DiffLabel] attribute on "%s::$categoryId": leave "field" out on a property, the property is the field.', PropertyLevelDiffLabelWithFieldEntity::class));
+
+        new AttributeLoader($entityManager)->load();
+    }
+
+    public function testMaskOnAnIdentifierFails(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../InvalidFixtures/MaskedIdentifier',
+            ],
+            'default'
+        );
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(\sprintf('Invalid #[Mask] attribute on "%s": "id" is an identifier', MaskedIdentifierEntity::class));
+
+        new AttributeLoader($entityManager)->load();
+    }
+
+    public function testMaskOnACollectionFails(): void
+    {
+        $entityManager = $this->createEntityManager(
+            [
+                __DIR__.'/../../../../../src/Provider/Doctrine/Auditing/Attribute',
+                __DIR__.'/../../InvalidFixtures/MaskedCollection',
+            ],
+            'default'
+        );
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(\sprintf('Invalid #[Mask] attribute on "%s": "children" is a collection', MaskedCollectionEntity::class));
 
         new AttributeLoader($entityManager)->load();
     }

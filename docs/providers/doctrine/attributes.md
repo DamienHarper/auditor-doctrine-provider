@@ -357,6 +357,7 @@ history.
 
 ```php
 use DH\Auditor\Attribute\Mask;
+use DH\Auditor\Masking\MaskStrategy;
 ```
 
 ### Usage
@@ -367,33 +368,38 @@ use DH\Auditor\Attribute\Mask;
 class User
 {
     #[ORM\Column(type: 'string')]
-    #[Mask(strategy: Mask::KEYED_HASH)]  // HMAC-SHA256 of the email
+    #[Mask(strategy: MaskStrategy::KeyedHash)]  // HMAC-SHA256 of the email
     private string $email = '';
 
     #[ORM\Column(type: 'string', nullable: true)]
-    #[Mask]                              // "***"
+    #[Mask]                                     // "***"
     private ?string $pin = null;
 }
 ```
 
 ### Parameters
 
-| Parameter  | Type      | Default        | Description                                               |
-|------------|-----------|----------------|-----------------------------------------------------------|
-| `strategy` | `string`  | `Mask::HIDDEN` | `Mask::HIDDEN` or `Mask::KEYED_HASH`                      |
-| `field`    | `?string` | `null`         | On the class only: name of the masked field (repeatable) |
+| Parameter  | Type           | Default                | Description                                               |
+|------------|----------------|------------------------|-----------------------------------------------------------|
+| `strategy` | `MaskStrategy` | `MaskStrategy::Hidden` | `MaskStrategy::Hidden` or `MaskStrategy::KeyedHash`       |
+| `field`    | `?string`      | `null`                 | On the class only: name of the masked field (repeatable)  |
 
 ### Strategies
 
-- `Mask::HIDDEN` stores `"***"` as `old` and `new`.
-- `Mask::KEYED_HASH` stores an HMAC-SHA256 of the value, keyed with the `mask_secret` option of the provider (at least
+- `MaskStrategy::Hidden` stores `"***"` as `old` and `new`.
+- `MaskStrategy::KeyedHash` stores an HMAC-SHA256 of the value, keyed with the `mask_secret` option of the provider (at least
   32 bytes, see [Configuration](configuration.md#-masked-values)). Equal values give equal hashes: the entries of one
   value can be found by hashing it with the same secret, without storing it. A string is hashed as is, any other value
   as its JSON encoding.
 
 In both cases a null value stays null, and the values are compared before being masked: a change from `"1234"` to
 `"5678"` is recorded as `"***"` → `"***"`. Masks apply to `insert`, `update` and, with `full_snapshot_on_remove`,
-`remove` entries. A masked field gets no `#[DiffLabel]` label, and a masked JSON field no deep diff.
+`remove` entries, to columns and to-one associations (whose summary is masked). A masked field gets no `#[DiffLabel]`
+label, and a masked JSON field no deep diff.
+
+An identifier (written in clear in `object_id`) and a collection (recorded by `associate` / `dissociate` entries)
+cannot be masked: a `#[Mask]` on either fails when the attributes are loaded, as does a `MaskStrategy::KeyedHash`
+without `mask_secret`.
 
 > [!WARNING]
 > The label of an entity (its `__toString()` or the `entity_label_resolver`) is written in clear in the diffs:

@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace DH\Auditor\Tests\Provider\Doctrine\Auditing;
 
 use DH\Auditor\Attribute\Mask;
+use DH\Auditor\Masking\Masker;
 use DH\Auditor\Provider\Doctrine\DoctrineProvider;
 use DH\Auditor\Provider\Doctrine\Service\AuditingService;
 use DH\Auditor\Provider\Doctrine\Service\StorageService;
 use DH\Auditor\Tests\Fixtures\SimpleServiceLocator;
 use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\DummyCategoryResolver;
-use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Attribute\MaskEntity;
+use DH\Auditor\Tests\Provider\Doctrine\Fixtures\Entity\Mask\MaskEntity;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\ReaderTrait;
 use DH\Auditor\Tests\Provider\Doctrine\Traits\Schema\SchemaSetupTrait;
 use PHPUnit\Framework\Attributes\Small;
@@ -37,7 +38,7 @@ final class MaskTest extends TestCase
 
         $this->assertSame(['new' => 'John', 'old' => null], $diffs['name']);
         $this->assertSame(['new' => hash_hmac('sha256', 'john@example.com', self::SECRET), 'old' => null], $diffs['email']);
-        $this->assertSame(['new' => Mask::HIDDEN_VALUE, 'old' => null], $diffs['pin']);
+        $this->assertSame(['new' => Masker::HIDDEN_VALUE, 'old' => null], $diffs['pin']);
     }
 
     public function testUpdateRecordsAChangeOfHiddenValues(): void
@@ -51,7 +52,7 @@ final class MaskTest extends TestCase
 
         $diffs = $this->createReader()->createQuery(MaskEntity::class)->execute()[0]->getDiffs();
 
-        $this->assertSame(['new' => Mask::HIDDEN_VALUE, 'old' => Mask::HIDDEN_VALUE], $diffs['pin']);
+        $this->assertSame(['new' => Masker::HIDDEN_VALUE, 'old' => Masker::HIDDEN_VALUE], $diffs['pin']);
         $this->assertSame(['new' => null, 'old' => hash_hmac('sha256', 'john@example.com', self::SECRET)], $diffs['email']);
         $this->assertArrayNotHasKey('name', $diffs);
     }
@@ -66,7 +67,7 @@ final class MaskTest extends TestCase
 
         $diffs = $this->createReader()->createQuery(MaskEntity::class)->execute()[0]->getDiffs();
 
-        $this->assertSame(['new' => Mask::HIDDEN_VALUE, 'old' => null], $diffs['categoryId']);
+        $this->assertSame(['new' => Masker::HIDDEN_VALUE, 'old' => null], $diffs['categoryId']);
     }
 
     public function testRemovalSnapshotMasksTheValues(): void
@@ -82,7 +83,7 @@ final class MaskTest extends TestCase
 
         $this->assertSame(['new' => null, 'old' => 'John'], $diffs['name']);
         $this->assertSame(['new' => null, 'old' => hash_hmac('sha256', 'john@example.com', self::SECRET)], $diffs['email']);
-        $this->assertSame(['new' => null, 'old' => Mask::HIDDEN_VALUE], $diffs['pin']);
+        $this->assertSame(['new' => null, 'old' => Masker::HIDDEN_VALUE], $diffs['pin']);
     }
 
     private function createEntity(): MaskEntity
@@ -114,7 +115,7 @@ final class MaskTest extends TestCase
 
         $entityManager = $this->createEntityManager([
             __DIR__.'/../../../../src/Provider/Doctrine/Auditing/Attribute',
-            __DIR__.'/../Fixtures/Entity/Attribute',
+            __DIR__.'/../Fixtures/Entity/Mask',
         ]);
         $this->provider->registerStorageService(new StorageService('default', $entityManager));
         $this->provider->registerAuditingService(new AuditingService('default', $entityManager));

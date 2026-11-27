@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace DH\Auditor\Provider\Doctrine\Auditing\Transaction;
 
-use DH\Auditor\Attribute\Mask;
 use DH\Auditor\Exception\MappingException;
+use DH\Auditor\Masking\Masker;
+use DH\Auditor\Masking\MaskStrategy;
 use DH\Auditor\Provider\Doctrine\Configuration;
 use DH\Auditor\Provider\Doctrine\Model\Transaction;
 use DH\Auditor\Provider\Doctrine\Persistence\Helper\DoctrineHelper;
@@ -46,7 +47,7 @@ trait AuditTrait
      *
      * The configuration is set at bootstrap and never changes at runtime, so it is cached for the process lifetime.
      *
-     * @return array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>, masks: array<string, Mask>}
+     * @return array{computed_audit_table_name: string, ignored_columns: array<string, true>, audited_columns: null|array<string, true>, diff_label_resolvers: array<string, string>, masks: array<string, MaskStrategy>}
      */
     private function entityConfig(string $entityClass): array
     {
@@ -73,9 +74,9 @@ trait AuditTrait
     }
 
     /**
-     * Turns the #[Mask] strategies of an entity (property name => strategy) into Mask instances.
+     * Turns the #[Mask] strategies of an entity (property name => MaskStrategy value) into MaskStrategy cases.
      *
-     * @return array<string, Mask>
+     * @return array<string, MaskStrategy>
      */
     private static function masks(mixed $strategies): array
     {
@@ -83,7 +84,7 @@ trait AuditTrait
         if (is_iterable($strategies)) {
             foreach ($strategies as $field => $strategy) {
                 if (\is_string($field) && \is_string($strategy)) {
-                    $masks[$field] = new Mask($strategy);
+                    $masks[$field] = MaskStrategy::from($strategy);
                 }
             }
         }
@@ -95,7 +96,7 @@ trait AuditTrait
      * Returns what the audit stores for $value of the field of an entity: the value itself, or its masked form when
      * the field has a #[Mask].
      *
-     * @param array<string, Mask> $masks
+     * @param array<string, MaskStrategy> $masks
      */
     private function maskedValue(array $masks, string $fieldName, mixed $value): mixed
     {
@@ -106,7 +107,7 @@ trait AuditTrait
         /** @var Configuration $configuration */
         $configuration = $this->provider->getConfiguration();
 
-        return $masks[$fieldName]->apply($value, $configuration->getMaskSecret());
+        return new Masker($configuration->getMaskSecret())->mask($masks[$fieldName], $value);
     }
 
     /**

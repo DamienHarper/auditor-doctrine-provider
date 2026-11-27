@@ -230,7 +230,7 @@ final class Configuration implements ConfigurationInterface
     }
 
     /**
-     * Secret of the #[Mask(strategy: Mask::KEYED_HASH)] fields (null when not set).
+     * Secret of the #[Mask(strategy: MaskStrategy::KeyedHash)] fields (null when not set).
      *
      * Changing it changes the hashes of the values recorded from then on: the entries recorded before cannot be
      * matched with the new ones any more.
@@ -690,7 +690,7 @@ final class Configuration implements ConfigurationInterface
             ->setAllowedTypes('utf8_convert', 'bool')
             ->setAllowedTypes('full_snapshot_on_remove', 'bool')
             ->setAllowedTypes('mask_secret', ['null', 'string'])
-            ->setAllowedValues('mask_secret', static fn (?string $value): bool => null === $value || mb_strlen($value) >= self::MASK_SECRET_MIN_LENGTH)
+            ->setAllowedValues('mask_secret', static fn (?string $value): bool => null === $value || mb_strlen($value, '8bit') >= self::MASK_SECRET_MIN_LENGTH)
             ->setAllowedTypes('batch_size', 'int')
             ->setAllowedValues('batch_size', static fn (int $value): bool => $value >= 0)
             ->setAllowedTypes('skip_disabled_entities', 'bool')

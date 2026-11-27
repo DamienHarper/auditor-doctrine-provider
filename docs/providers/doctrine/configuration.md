@@ -43,7 +43,7 @@ $configuration = new Configuration([
 | `storage_mapper` | `callable\|class-string\|null` | `null` | Callback, or class name of an invokable class without constructor arguments, routing audits to storage services |
 | `utf8_convert`   | `bool`            | `false`    | Convert string values to UTF-8 before storing   |
 | `full_snapshot_on_remove` | `bool`   | `false`    | Record every audited field of a removed entity (see below) |
-| `mask_secret`    | `string\|null`    | `null`     | Secret of the `#[Mask(strategy: Mask::KEYED_HASH)]` fields, at least 32 bytes (see below) |
+| `mask_secret`    | `string\|null`    | `null`     | Secret of the `#[Mask(strategy: MaskStrategy::KeyedHash)]` fields, at least 32 bytes (see below) |
 | `batch_size`     | `int` (≥ 0)       | `0`        | Write audit entries with multi-row INSERTs (see Batch INSERT below) |
 | `skip_disabled_entities` | `bool`    | `false`    | No audit table for entities disabled by their configuration (see below) |
 | `compression`    | `bool`            | `false`    | Store `diffs`/`extra_data` compressed (MariaDB)  |
@@ -293,9 +293,9 @@ The snapshot makes `remove` entries larger, and lets `ChangedFieldFilter` match 
 
 ## 🎭 Masked Values
 
-`mask_secret` keys the HMAC-SHA256 that `#[Mask(strategy: Mask::KEYED_HASH)]` stores instead of a value
-(see [Attributes](attributes.md#-mask)). It must be at least 32 bytes long; a flush that writes a keyed hash without
-it throws.
+`mask_secret` keys the HMAC-SHA256 that `#[Mask(strategy: MaskStrategy::KeyedHash)]` stores instead of a value
+(see [Attributes](attributes.md#-mask)). It must be at least 32 bytes long. Without it, an entity with a keyed hash
+mask fails when the attributes are loaded.
 
 ```php
 $configuration = new Configuration([
