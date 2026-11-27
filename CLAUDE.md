@@ -118,7 +118,7 @@ The DBAL `AuditorMiddleware` must be configured on the connection, otherwise not
 | `DoctrineSubscriber` | `Auditing/Event/DoctrineSubscriber.php` | `onFlush` / `postFlush` entry point |
 | `TransactionHydrator` / `TransactionProcessor` | `Auditing/Transaction/` | Changesets → entries → audit rows |
 | `AuditorMiddleware` / `AuditorDriver` / `AuditorConnection` | `Auditing/DBAL/Middleware/` | Write the audits at commit |
-| `AttributeLoader` | `Auditing/Attribute/AttributeLoader.php` | Reads `#[Auditable]`, `#[Ignore]`, `#[Security]` |
+| `AttributeLoader` | `Auditing/Attribute/AttributeLoader.php` | Reads `#[Auditable]`, `#[Ignore]`, `#[Security]`, `#[DiffLabel]`, `#[Mask]` (not on identifiers nor collections; applied by `AuditTrait` through the core `Masker`, keyed with `mask_secret`) |
 | `SchemaManager` | `Persistence/Schema/SchemaManager.php` | Creates and updates the audit tables |
 | `Reader` / `Query` / `Filter\*` | `Persistence/Reader/` | Read model: queries, filters, pagination (of entries, or of transactions with `transactions()` / `TransactionSummary`) |
 | `RootResolver` / `ObjectIdentifier` / `RootIndexRebuilder` | `Auditing/Root/` | Audit roots (`#[AuditRoot]`, `roots`, `root_resolver`) resolved at onFlush, root ids written like `object_id`; `audit:roots:rebuild` |
